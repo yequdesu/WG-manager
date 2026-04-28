@@ -106,6 +106,42 @@ detect_public_ip() {
 collect_info() {
     header "Configuration"
 
+    # ── Load existing config if available ──
+    local existing_ip="" existing_wg_port=51820 existing_subnet="10.0.0.0/24"
+    local existing_mgmt_port=58880 existing_dns="1.1.1.1,8.8.8.8"
+    local skip_config=false
+
+    if [[ -f "$CONFIG_FILE" ]]; then
+        existing_ip=$(grep SERVER_PUBLIC_IP "$CONFIG_FILE" 2>/dev/null | cut -d= -f2 || echo "")
+        existing_wg_port=$(grep WG_PORT "$CONFIG_FILE" 2>/dev/null | cut -d= -f2 || echo "51820")
+        existing_subnet=$(grep WG_SUBNET "$CONFIG_FILE" 2>/dev/null | cut -d= -f2 || echo "10.0.0.0/24")
+        existing_mgmt_port=$(grep MGMT_LISTEN "$CONFIG_FILE" 2>/dev/null | cut -d: -f3 || echo "58880")
+        existing_dns=$(grep DEFAULT_DNS "$CONFIG_FILE" 2>/dev/null | cut -d= -f2 || echo "1.1.1.1,8.8.8.8")
+
+        if [[ -n "$existing_ip" ]]; then
+            warn "Existing configuration found:"
+            info "  Public IP: $existing_ip"
+            info "  WG Port:   $existing_wg_port"
+            info "  Subnet:    $existing_subnet"
+            info "  MGMT Port: $existing_mgmt_port"
+            info "  DNS:       $existing_dns"
+            echo ""
+            read -p "$(echo -e "${BOLD}Use existing configuration? [Y/n]: ")" USE_EXISTING
+            if [[ ! "$USE_EXISTING" =~ ^[Nn] ]]; then
+                SERVER_PUBLIC_IP="$existing_ip"
+                WG_PORT="$existing_wg_port"
+                WG_SUBNET="$existing_subnet"
+                MGMT_PORT="$existing_mgmt_port"
+                DEFAULT_DNS="$existing_dns"
+                skip_config=true
+            fi
+        fi
+    fi
+
+    if $skip_config; then
+        return
+    fi
+
     local detected_ip
     detected_ip=$(detect_public_ip)
 
@@ -238,8 +274,6 @@ deploy_daemon() {
     header "Deploying Management Daemon"
 
     local bin_dst="/usr/local/bin/wg-mgmt-daemon"
-    local bin_src="$PROJECT_DIR/bin/wg-mgmt-daemon"
-    local needs_rebuild=false
     local daemon_was_running=false
 
     # ── 1. Check if daemon is currently running ──
@@ -250,43 +284,39 @@ deploy_daemon() {
     fi
 
     # ── 2. Determine if rebuild is needed ──
-    if command -v go &>/dev/null; then
-        if [[ ! -f "$bin_dst" ]]; then
-            needs_rebuild=true
-            log "No existing binary found, building from source..."
-        elif [[ "$PROJECT_DIR/cmd/mgmt-daemon/main.go" -nt "$bin_dst" ]]; then
-            needs_rebuild=true
-            log "Source code is newer than binary, rebuilding..."
-        elif [[ -f "$bin_src" ]] && [[ "$bin_src" -nt "$bin_dst" ]]; then
-            log "Pre-compiled binary is newer, using it..."
-            cp "$bin_src" "$bin_dst"
-            chmod +x "$bin_dst"
-        else
-            log "Binary is up to date"
-        fi
+    local needs_rebuild=false
 
-        if $needs_rebuild; then
-            cd "$PROJECT_DIR"
-            log "Building from source..."
-            go build -ldflags="-s -w" -o "$bin_dst" ./cmd/mgmt-daemon/
-            chmod +x "$bin_dst"
-            rm -f "$bin_src"
-            cp "$bin_dst" "$bin_src"
-            log "Build complete"
+    if ! command -v go &>/dev/null; then
+        error "Go is not installed. Please install golang-go: sudo apt install golang-go"
+        exit 1
+    fi
+
+    local src_hash=""
+    if [[ -d "$PROJECT_DIR/cmd" ]] && command -v git &>/dev/null; then
+        cd "$PROJECT_DIR"
+        src_hash=$(git log -1 --format=%H -- cmd/ internal/ 2>/dev/null || echo "")
+    fi
+
+    local installed_hash=""
+    if [[ -f "$bin_dst" ]]; then
+        installed_hash=$(cat "${bin_dst}.version" 2>/dev/null || echo "")
+    fi
+
+    if [[ -z "$src_hash" ]] || [[ -z "$installed_hash" ]] || [[ "$src_hash" != "$installed_hash" ]]; then
+        needs_rebuild=true
+    fi
+
+    if $needs_rebuild; then
+        cd "$PROJECT_DIR"
+        log "Rebuilding from source (code has changed)..."
+        go build -ldflags="-s -w" -o "$bin_dst" ./cmd/mgmt-daemon/
+        chmod +x "$bin_dst"
+        if [[ -n "$src_hash" ]]; then
+            echo "$src_hash" > "${bin_dst}.version"
         fi
+        log "Build complete"
     else
-        if [[ -f "$bin_src" ]]; then
-            log "Using pre-compiled binary (Go not available for rebuild)"
-            cp "$bin_src" "$bin_dst"
-            chmod +x "$bin_dst"
-        elif [[ -f "$bin_dst" ]]; then
-            log "Using existing binary (Go not available for rebuild)"
-        else
-            error "Go is not installed and no binary found."
-            error "Install Go or compile on your dev machine: make build"
-            error "Then copy bin/wg-mgmt-daemon to this server and re-run."
-            exit 1
-        fi
+        log "Binary is up to date (commit $installed_hash)"
     fi
 
     # ── 3. Write / update systemd unit ──
