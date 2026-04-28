@@ -61,18 +61,22 @@ func authOrLocalMiddleware(apiKey string) func(http.HandlerFunc) http.HandlerFun
 				return
 			}
 
-			auth := r.Header.Get("Authorization")
-			if auth == "" {
-				writeJSON(w, http.StatusUnauthorized, map[string]string{
-					"error": "missing Authorization header",
-				})
-				return
+			keyOK := false
+
+			if auth := r.Header.Get("Authorization"); auth != "" {
+				parts := strings.SplitN(auth, " ", 2)
+				if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") && parts[1] == apiKey {
+					keyOK = true
+				}
 			}
 
-			parts := strings.SplitN(auth, " ", 2)
-			if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || parts[1] != apiKey {
+			if !keyOK && r.URL.Query().Get("key") == apiKey {
+				keyOK = true
+			}
+
+			if !keyOK {
 				writeJSON(w, http.StatusUnauthorized, map[string]string{
-					"error": "invalid API key",
+					"error": "invalid or missing API key",
 				})
 				return
 			}
