@@ -238,31 +238,59 @@ deploy_daemon() {
     header "Deploying Management Daemon"
 
     local bin_dst="/usr/local/bin/wg-mgmt-daemon"
+    local bin_src="$PROJECT_DIR/bin/wg-mgmt-daemon"
+    local needs_rebuild=false
+    local daemon_was_running=false
 
-    if [[ -f "$PROJECT_DIR/bin/wg-mgmt-daemon" ]]; then
-        log "Using pre-compiled binary"
-        cp "$PROJECT_DIR/bin/wg-mgmt-daemon" "$bin_dst"
-        chmod +x "$bin_dst"
-    elif [[ -f "$PROJECT_DIR/wg-mgmt-daemon" ]]; then
-        log "Using pre-compiled binary"
-        cp "$PROJECT_DIR/wg-mgmt-daemon" "$bin_dst"
-        chmod +x "$bin_dst"
-    else
-        warn "No pre-compiled binary found. Attempting to build..."
-        if command -v go &>/dev/null; then
+    # ── 1. Check if daemon is currently running ──
+    if systemctl is-active --quiet wg-mgmt 2>/dev/null; then
+        daemon_was_running=true
+        log "Stopping existing daemon for update..."
+        systemctl stop wg-mgmt
+    fi
+
+    # ── 2. Determine if rebuild is needed ──
+    if command -v go &>/dev/null; then
+        if [[ ! -f "$bin_dst" ]]; then
+            needs_rebuild=true
+            log "No existing binary found, building from source..."
+        elif [[ "$PROJECT_DIR/cmd/mgmt-daemon/main.go" -nt "$bin_dst" ]]; then
+            needs_rebuild=true
+            log "Source code is newer than binary, rebuilding..."
+        elif [[ -f "$bin_src" ]] && [[ "$bin_src" -nt "$bin_dst" ]]; then
+            log "Pre-compiled binary is newer, using it..."
+            cp "$bin_src" "$bin_dst"
+            chmod +x "$bin_dst"
+        else
+            log "Binary is up to date"
+        fi
+
+        if $needs_rebuild; then
             cd "$PROJECT_DIR"
+            log "Building from source..."
             go build -ldflags="-s -w" -o "$bin_dst" ./cmd/mgmt-daemon/
             chmod +x "$bin_dst"
-            log "Built successfully"
+            rm -f "$bin_src"
+            cp "$bin_dst" "$bin_src"
+            log "Build complete"
+        fi
+    else
+        if [[ -f "$bin_src" ]]; then
+            log "Using pre-compiled binary (Go not available for rebuild)"
+            cp "$bin_src" "$bin_dst"
+            chmod +x "$bin_dst"
+        elif [[ -f "$bin_dst" ]]; then
+            log "Using existing binary (Go not available for rebuild)"
         else
-            error "Go is not installed and no pre-compiled binary found."
-            error "Please compile on your dev machine with: make build"
+            error "Go is not installed and no binary found."
+            error "Install Go or compile on your dev machine: make build"
             error "Then copy bin/wg-mgmt-daemon to this server and re-run."
             exit 1
         fi
     fi
 
-    log "Creating systemd service..."
+    # ── 3. Write / update systemd unit ──
+    log "Writing systemd service..."
     cat > /etc/systemd/system/wg-mgmt.service << SYSTEMD
 [Unit]
 Description=WireGuard Management Daemon
@@ -282,11 +310,22 @@ SYSTEMD
 
     systemctl daemon-reload
     systemctl enable wg-mgmt --quiet
+
+    # ── 4. Start (or restart) daemon ──
+    if $daemon_was_running; then
+        log "Restarting daemon with updated binary..."
+    else
+        log "Starting daemon..."
+    fi
+
     systemctl restart wg-mgmt
 
     sleep 2
     if systemctl is-active --quiet wg-mgmt; then
         log "Management daemon is running"
+        if $daemon_was_running; then
+            log "Update complete — existing WireGuard connections were not interrupted"
+        fi
     else
         error "Management daemon failed to start"
         journalctl -u wg-mgmt --no-pager -n 20
