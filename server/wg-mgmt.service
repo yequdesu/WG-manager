@@ -10,11 +10,5 @@ ExecStart=/usr/local/bin/wg-mgmt-daemon --config=__CONFIG_PATH__
 Restart=always
 RestartSec=5
 
-ProtectSystem=strict
-ProtectHome=yes
-NoNewPrivileges=yes
-ReadWritePaths=__PROJECT_DIR__/server /etc/wireguard
-PrivateTmp=yes
-
 [Install]
 WantedBy=multi-user.target

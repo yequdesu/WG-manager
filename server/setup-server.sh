@@ -276,12 +276,6 @@ ExecStart=$bin_dst --config=$CONFIG_FILE
 Restart=always
 RestartSec=5
 
-ProtectSystem=strict
-ProtectHome=yes
-NoNewPrivileges=yes
-ReadWritePaths=$PROJECT_DIR/server /etc/wireguard
-PrivateTmp=yes
-
 [Install]
 WantedBy=multi-user.target
 SYSTEMD
