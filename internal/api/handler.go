@@ -139,6 +139,89 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) WindowsConfig(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	name := strings.TrimSpace(q.Get("name"))
+	if name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name query parameter is required"})
+		return
+	}
+
+	dns := strings.TrimSpace(q.Get("dns"))
+	if dns == "" {
+		dns = h.config.DefaultDNS
+	}
+
+	var privateKey, publicKey, ip string
+
+	if existing, ok := h.store.GetPeer(name); ok {
+		privateKey = existing.PrivateKey
+		publicKey = existing.PublicKey
+		ip = existing.Address
+	} else {
+		var err error
+		privateKey, publicKey, err = h.wgMgr.GenKeyPair()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate keys"})
+			return
+		}
+
+		ip, err = h.store.NextAvailableIP(h.config.WGSubnet)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "no available IP addresses"})
+			return
+		}
+
+		peer := store.Peer{
+			Name:       name,
+			PublicKey:  publicKey,
+			PrivateKey: privateKey,
+			Address:    ip,
+			DNS:        dns,
+			Keepalive:  h.config.PeerKeepalive,
+			CreatedAt:  time.Now().UTC().Format(time.RFC3339),
+		}
+
+		if err := h.store.AddPeer(peer); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save peer"})
+			return
+		}
+
+		allowedIP := fmt.Sprintf("%s/32", ip)
+		if err := h.wgMgr.AddPeerLive(h.config.WGInterface, publicKey, allowedIP, h.config.PeerKeepalive); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to add peer to wireguard"})
+			return
+		}
+
+		if err := h.writeConfigToDisk(); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to write config"})
+			return
+		}
+
+		if err := h.store.Save(); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist state"})
+			return
+		}
+	}
+
+	conf := fmt.Sprintf(`[Interface]
+Address = %s/24
+PrivateKey = %s
+DNS = %s
+
+[Peer]
+PublicKey = %s
+Endpoint = %s
+AllowedIPs = %s
+PersistentKeepalive = %d
+`, ip, privateKey, dns, h.store.Server().PublicKey, h.config.ServerEndpoint(), h.config.WGSubnet, h.config.PeerKeepalive)
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s.conf", name))
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(conf))
+}
+
 func (h *Handler) ListPeers(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})

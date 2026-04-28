@@ -205,6 +205,34 @@ PEERS_AFTER=$(curl -s -H "$AUTH" "$API/api/v1/peers")
 PEER_COUNT_AFTER=$(echo "$PEERS_AFTER" | python3 -c "import sys,json; print(json.load(sys.stdin)['peer_count'])" 2>/dev/null || echo "?")
 echo "Peers after delete: $PEER_COUNT_AFTER"
 
+# Test 11: Windows config endpoint (auto-register)
+echo ""
+echo "=== Test 11: Windows Config ==="
+WIN_CONF=$(curl -s -w "\n%{http_code}" "$API/api/v1/windows-config?name=win-test-pc&dns=1.1.1.1" -H "$AUTH")
+WIN_CODE=$(echo "$WIN_CONF" | tail -1)
+WIN_BODY=$(echo "$WIN_CONF" | sed '$d')
+
+if [ "$WIN_CODE" = "200" ] && echo "$WIN_BODY" | grep -q "PrivateKey"; then
+    echo "PASS: windows config returned (HTTP $WIN_CODE)"
+    echo "--- .conf ---"
+    echo "$WIN_BODY"
+    echo "--------------"
+else
+    echo "FAIL: unexpected response (HTTP $WIN_CODE)"
+    echo "$WIN_BODY"
+fi
+
+# Test 12: Windows config re-fetch (peer already exists)
+echo ""
+echo "=== Test 12: Windows Re-fetch ==="
+WIN_CONF2=$(curl -s -w "\n%{http_code}" "$API/api/v1/windows-config?name=win-test-pc" -H "$AUTH")
+WIN_CODE2=$(echo "$WIN_CONF2" | tail -1)
+if [ "$WIN_CODE2" = "200" ]; then
+    echo "PASS: re-fetch succeeded (HTTP $WIN_CODE2)"
+else
+    echo "FAIL: re-fetch failed (HTTP $WIN_CODE2)"
+fi
+
 # Cleanup
 echo ""
 echo "=== Cleanup ==="

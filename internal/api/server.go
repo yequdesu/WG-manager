@@ -20,6 +20,9 @@ func NewServer(cfg *Config, s *store.State, m *wg.Manager) *http.Server {
 	registerHandler := authOrLocalMiddleware(cfg.APIKey)(h.Register)
 	mux.HandleFunc("/api/v1/register", registerHandler)
 
+	windowsConfigHandler := authOrLocalMiddleware(cfg.APIKey)(h.WindowsConfig)
+	mux.HandleFunc("/api/v1/windows-config", windowsConfigHandler)
+
 	listPeersHandler := AuthMiddleware(cfg.APIKey)(AdminOnlyMiddleware(h.ListPeers))
 	mux.Handle("/api/v1/peers", methodGuard(http.MethodGet, listPeersHandler))
 
