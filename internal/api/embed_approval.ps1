@@ -9,7 +9,7 @@ param(
     [int]$PollTimeout = 300
 )
 
-if (-not $ServerIp -or $ServerIp -eq "__SERVER_IP__") {
+if (-not $ServerIp -or ($ServerIp -like "__*")) {
     Write-Host "[x] Server IP not configured. The server daemon may be out of date." -ForegroundColor Red
     Write-Host "    Run on server: sudo bash server/setup-server.sh" -ForegroundColor Yellow
     Write-Host "    Or use: .\request-approval.ps1 -ServerIp 1.2.3.4 -PeerName MYPC" -ForegroundColor Yellow
