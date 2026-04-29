@@ -264,7 +264,7 @@ func (s *State) AddRequest(r Request) error {
 	}
 
 	for _, existing := range s.Requests {
-		if existing.Hostname == r.Hostname {
+		if existing.Hostname == r.Hostname && (existing.Status == "" || existing.Status == "pending") {
 			return fmt.Errorf("a pending request for %q already exists", r.Hostname)
 		}
 	}
@@ -315,6 +315,7 @@ func (s *State) ApproveRequest(id string) (Peer, error) {
 
 	s.Peers[r.Hostname] = peer
 	r.Status = "approved"
+	r.ExpiresAt = time.Now().UTC().Add(5 * time.Minute).Format(time.RFC3339)
 	s.Requests[id] = r
 	return peer, nil
 }
@@ -329,6 +330,7 @@ func (s *State) RejectRequest(id string) (Request, error) {
 	}
 
 	r.Status = "rejected"
+	r.ExpiresAt = time.Now().UTC().Add(5 * time.Minute).Format(time.RFC3339)
 	s.Requests[id] = r
 	return r, nil
 }
