@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -183,11 +182,7 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) serveDirectBash(w http.ResponseWriter, r *http.Request, name string) {
-	script, err := ReadScript(h.config.ClientScriptTemplate)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "template not found"})
-		return
-	}
+	script := embedConnectSh
 	script = strings.ReplaceAll(script, "__SERVER_PUBLIC_IP__", h.config.ServerPublicIP)
 	script = strings.ReplaceAll(script, "__MGMT_PORT__", portStr(h.config.MgmtListen))
 	script = strings.ReplaceAll(script, "__API_KEY__", h.config.APIKey)
@@ -202,14 +197,7 @@ func (h *Handler) serveDirectBash(w http.ResponseWriter, r *http.Request, name s
 }
 
 func (h *Handler) serveApprovalBash(w http.ResponseWriter, r *http.Request, name string) {
-	script, err := ReadScript(h.config.ClientScriptTemplate + ".approval")
-	if err != nil {
-		script, err = ReadScript("client/request-approval.sh")
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "approval template not found"})
-			return
-		}
-	}
+	script := embedApprovalSh
 	script = strings.ReplaceAll(script, "__SERVER_IP__", h.config.ServerPublicIP)
 	script = strings.ReplaceAll(script, "__MGMT_PORT__", portStr(h.config.MgmtListen))
 	if name != "" {
@@ -294,14 +282,9 @@ PersistentKeepalive = %d
 }
 
 func (h *Handler) serveApprovalPS1(w http.ResponseWriter, r *http.Request) {
-	script, err := os.ReadFile("client/request-approval.ps1")
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "ps1 template not found"})
-		return
-	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	w.Write(script)
+	w.Write([]byte(embedApprovalPs1))
 }
 
 func (h *Handler) serveHTML(w http.ResponseWriter, r *http.Request) {
