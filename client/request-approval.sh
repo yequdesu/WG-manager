@@ -61,12 +61,13 @@ wg_service() {
 # ── Parse args ─────────────────────────────────────
 for arg in "$@"; do case "$arg" in
     --name=*) PEER_NAME="${arg#*=}" ;;
-    --name)   shift; PEER_NAME="$1" ;;
+    --name)   shift; PEER_NAME="${1:-}" ;;
 esac; done
 
-[[ -n "$1" ]] && [[ "$1" != "${1#--}" ]] && SERVER_IP="$1"
-[[ -n "${2:-}" ]] && [[ "$2" != "${2#--}" ]] && MGMT_PORT="$2"
-[[ -n "${3:-}" ]] && [[ "$3" != "${3#--}" ]] && PEER_NAME="$3"
+arg1="${1:-}"; arg2="${2:-}"; arg3="${3:-}"
+if [[ -n "$arg1" ]] && [[ "$arg1" != "${arg1#--}" ]]; then SERVER_IP="$arg1"; fi
+if [[ -n "$arg2" ]] && [[ "$arg2" != "${arg2#--}" ]]; then MGMT_PORT="$arg2"; fi
+if [[ -n "$arg3" ]] && [[ "$arg3" != "${arg3#--}" ]]; then PEER_NAME="$arg3"; fi
 [[ -z "$PEER_NAME" ]] && [[ -t 0 ]] && read -r -p "$(echo -e "${BOLD}Enter peer name${NC}: ")" PEER_NAME
 [[ -z "$PEER_NAME" ]] && PEER_NAME="$(hostname 2>/dev/null || echo "client")"
 

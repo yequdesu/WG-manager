@@ -64,7 +64,7 @@ ensure_wireguard
 # Parse --name arg
 for arg in "$@"; do case "$arg" in
     --name=*) PEER_NAME="${arg#*=}" ;;
-    --name)   shift; PEER_NAME="$1" ;;
+    --name)   shift; PEER_NAME="${1:-}" ;;
 esac; done
 [[ -z "$PEER_NAME" ]] && PEER_NAME="$(hostname 2>/dev/null || echo "client")"
 
