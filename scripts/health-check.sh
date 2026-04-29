@@ -1,6 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 
+# Auto-sudo if not root
+if [[ "$(id -u)" -ne 0 ]]; then
+    exec sudo bash "$0" "$@"
+fi
+
 # Health check script for WireGuard Management Layer
 # Can be run manually or added to cron
 

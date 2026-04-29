@@ -1,8 +1,10 @@
-.PHONY: build clean run dev help
+.PHONY: build build-tui build-all clean run dev help
 
 BINARY_NAME := wg-mgmt-daemon
+TUI_NAME    := wg-mgmt-tui
 OUTPUT_DIR  := bin
 CMD_DIR     := ./cmd/mgmt-daemon
+TUI_DIR     := ./cmd/mgmt-tui
 
 GOOS        ?= linux
 GOARCH      ?= amd64
@@ -13,11 +15,12 @@ help:
 	@echo "WireGuard Management Layer"
 	@echo ""
 	@echo "Usage:"
-	@echo "  make build     Cross-compile for Linux amd64"
-	@echo "  make build-win Cross-compile for Windows amd64 (testing)"
-	@echo "  make run       Run locally (for testing, requires wg tools)"
-	@echo "  make clean     Remove build artifacts"
-	@echo "  make vet       Run go vet"
+	@echo "  make build      Build daemon for Linux amd64"
+	@echo "  make build-tui  Build TUI for Linux amd64"
+	@echo "  make build-all  Build both binaries"
+	@echo "  make build-win  Build daemon for Windows (testing)"
+	@echo "  make clean      Remove build artifacts"
+	@echo "  make vet        Run go vet"
 	@echo ""
 
 build:
@@ -27,6 +30,16 @@ build:
 		go build -ldflags="$(LDFLAGS)" -o $(OUTPUT_DIR)/$(BINARY_NAME) $(CMD_DIR)
 	@echo "Done: $(OUTPUT_DIR)/$(BINARY_NAME)"
 	@ls -lh $(OUTPUT_DIR)/$(BINARY_NAME)
+
+build-tui:
+	@echo "Building $(TUI_NAME) for $(GOOS)/$(GOARCH)..."
+	@mkdir -p $(OUTPUT_DIR)
+	GOOS=$(GOOS) GOARCH=$(GOARCH) CGO_ENABLED=$(CGO_ENABLED) \
+		go build -ldflags="$(LDFLAGS)" -o $(OUTPUT_DIR)/$(TUI_NAME) $(TUI_DIR)
+	@echo "Done: $(OUTPUT_DIR)/$(TUI_NAME)"
+	@ls -lh $(OUTPUT_DIR)/$(TUI_NAME)
+
+build-all: build build-tui
 
 build-win:
 	@echo "Building $(BINARY_NAME) for windows/amd64..."

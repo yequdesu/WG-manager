@@ -359,6 +359,35 @@ deploy_daemon() {
         log "Binary is up to date (commit $installed_hash)"
     fi
 
+    # ── 2b. Build and deploy TUI ──
+    local tui_dst="/usr/local/bin/wg-mgmt-tui"
+    local tui_src_hash=""
+    local tui_installed_hash=""
+
+    if command -v git &>/dev/null; then
+        cd "$PROJECT_DIR"
+        tui_src_hash=$(git log -1 --format=%H -- cmd/mgmt-tui/ 2>/dev/null || echo "")
+    fi
+    if [[ -f "$tui_dst" ]]; then
+        tui_installed_hash=$(cat "${tui_dst}.version" 2>/dev/null || echo "")
+    fi
+
+    if [[ -n "$tui_src_hash" ]] && { [[ -z "$tui_installed_hash" ]] || [[ "$tui_src_hash" != "$tui_installed_hash" ]]; }; then
+        cd "$PROJECT_DIR"
+        log "Rebuilding TUI..."
+        go build -ldflags="-s -w" -o "$tui_dst" ./cmd/mgmt-tui/
+        chmod +x "$tui_dst"
+        echo "$tui_src_hash" > "${tui_dst}.version"
+        log "TUI build complete"
+    elif $needs_rebuild && [[ ! -f "$tui_dst" ]]; then
+        cd "$PROJECT_DIR"
+        log "Building TUI (first time)..."
+        go build -ldflags="-s -w" -o "$tui_dst" ./cmd/mgmt-tui/
+        chmod +x "$tui_dst"
+        [[ -n "$tui_src_hash" ]] && echo "$tui_src_hash" > "${tui_dst}.version"
+        log "TUI build complete"
+    fi
+
     # ── 3. Write / update systemd unit ──
     log "Writing systemd service..."
     cat > /etc/systemd/system/wg-mgmt.service << SYSTEMD
