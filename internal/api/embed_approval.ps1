@@ -48,9 +48,10 @@ Write-Host ""
 # ── Phase 2: Poll for approval ───────────────────────
 $elapsed = 0
 $approved = $false
+$result = "pending"
 $peerConf = $null
 
-while ($elapsed -lt $PollTimeout) {
+:poll while ($elapsed -lt $PollTimeout) {
     Start-Sleep -Seconds $PollInterval
     $elapsed += $PollInterval
 
@@ -61,7 +62,8 @@ while ($elapsed -lt $PollTimeout) {
         continue
     }
 
-    switch ($statusResp.status) {
+    $result = $statusResp.status
+    switch ($result) {
         "pending" {
             Write-Host "[${elapsed}s] Still waiting..." -ForegroundColor DarkGray
         }
@@ -77,27 +79,29 @@ while ($elapsed -lt $PollTimeout) {
                 "AllowedIPs = 10.0.0.0/24`n" +
                 "PersistentKeepalive = $($statusResp.peer.keepalive)"
             Write-Host "[+] Request APPROVED!" -ForegroundColor Green
-            break
+            break poll
         }
         "rejected" {
             Write-Host "[x] Request was REJECTED by admin." -ForegroundColor Red
-            exit 1
+            break poll
         }
         "expired" {
             Write-Host "[x] Request has EXPIRED. Please submit a new one." -ForegroundColor Red
-            exit 1
+            break poll
         }
         "not_found" {
             Write-Host "[x] Request not found. It may have been processed already." -ForegroundColor Red
-            exit 1
+            break poll
         }
         default {
-            Write-Host "[${elapsed}s] Status: $($statusResp.status)" -ForegroundColor Yellow
+            Write-Host "[${elapsed}s] Status: $result" -ForegroundColor Yellow
             Write-Host "    Raw response: $statusResp" -ForegroundColor DarkGray
         }
     }
+}
 
-    if ($approved) { break }
+if ($result -eq "rejected" -or $result -eq "expired" -or $result -eq "not_found") {
+    exit 1
 }
 
 if (-not $approved) {
