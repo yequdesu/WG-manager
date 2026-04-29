@@ -360,101 +360,100 @@ func doDeny() {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  Render engine
+//  Render
 // ═══════════════════════════════════════════════════════════
 
 type frame struct {
-	bw, bh, bx, by int   // box width, height, x-offset, y-start
-	cw              int   // content width (inside box)
-	cs, ce          int   // content start/end row
+	bw, bx, by int
+	cw         int // space between left-║ and right-║
+	cs, ce     int
 }
 
-func (f *frame) left() int  { return f.bx + 1 }
-func (f *frame) right() int { return f.bx + f.bw - 1 }
+func (f frame) leftCol() int  { return f.bx }
+func (f frame) rightCol() int { return f.bx + f.bw - 1 }
+func (f frame) innerCol() int { return f.bx + 1 }
 
 func calcFrame() frame {
 	f := frame{}
 	f.bw = termW - 2
-	if f.bw < 56 {
-		f.bw = 56
+	if f.bw < 50 {
+		f.bw = 50
 	}
 	if f.bw > 110 {
 		f.bw = 110
 	}
-	f.bh = termH
 	f.by = 1
 	f.bx = (termW - f.bw) / 2
 	if f.bx < 0 {
 		f.bx = 0
 	}
-	f.cw = f.bw - 4
+	f.cw = f.bw - 2
 	f.cs = 4
-	f.ce = f.by + f.bh - 2
+	f.ce = termH - 2
 	return f
 }
 
 func render() {
 	f := calcFrame()
 
-	nPeers := len(peers.Peers)
-	nReqs := len(reqs.Requests)
-
 	var b strings.Builder
 	b.Grow(termW * termH * 4)
 
 	// Row 1: top border + title
-	title := fmt.Sprintf(" WG-Manager  │ %d peers  │ %d pending  │ online %d/%d",
-		nPeers, nReqs, status.Online, nPeers)
-	b.WriteString(fmt.Sprintf("\033[%d;%dH\033[7m╔%s%s╗\033[0m",
-		f.by, f.bx, title, repeat("═", f.bw-2-lenAnsi(0, title))))
+	title := fmt.Sprintf(" WG-Manager  %d peers  %d pending  online %d/%d ",
+		len(peers.Peers), len(reqs.Requests), status.Online, len(peers.Peers))
+	b.WriteString(fmt.Sprintf("\033[%d;%dH╔%s%s╗",
+		f.by, f.leftCol(), title, fill("═", f.cw-len(title))))
 
 	// Row 2: tab bar
-	b.WriteString(fmt.Sprintf("\033[%d;%dH║\033[0m", f.by+1, f.bx))
+	b.WriteString(fmt.Sprintf("\033[%d;%dH║", f.by+1, f.leftCol()))
+	index := f.innerCol()
 	tabs := []string{" Peers ", " Requests ", " Status ", " Log "}
-	pos := f.left()
 	for i, t := range tabs {
-		b.WriteString(fmt.Sprintf("\033[%d;%dH", f.by+1, pos))
+		b.WriteString(fmt.Sprintf("\033[%d;%dH", f.by+1, index))
 		if i == tab {
 			b.WriteString(fmt.Sprintf("\033[7m%s\033[0m", t))
 		} else {
 			b.WriteString(t)
 		}
-		pos += len(t)
+		index += len(t)
 	}
-	b.WriteString(fmt.Sprintf("\033[%d;%dH║\033[0m", f.by+1, f.right()))
+	b.WriteString(fmt.Sprintf("\033[%d;%dH║", f.by+1, f.rightCol()))
 
 	// Row 3: separator
-	b.WriteString(fmt.Sprintf("\033[%d;%dH╟%s╢\033[0m",
-		f.by+2, f.bx, repeat("─", f.bw-2)))
+	b.WriteString(fmt.Sprintf("\033[%d;%dH╟%s╢",
+		f.by+2, f.leftCol(), fill("─", f.cw)))
 
-	// ── Clear all content rows ──
+	// Clear all content rows (║ + spaces + ║)
 	for r := f.cs; r <= f.ce; r++ {
-		b.WriteString(fmt.Sprintf("\033[%d;%dH║\033[%d;%dH║",
-			r, f.bx, r, f.right()))
+		b.WriteString(fmt.Sprintf("\033[%d;%dH║%s║", r, f.leftCol(), fill(" ", f.cw)))
 	}
 
 	// Cap selection
 	switch tab {
 	case 0:
-		if nPeers > 0 {
+		n := len(peers.Peers)
+		if n > 0 {
 			if sel < 0 {
 				sel = 0
 			}
-			if sel >= nPeers {
-				sel = nPeers - 1
+			if sel >= n {
+				sel = n - 1
 			}
 		}
 	case 1:
-		if nReqs > 0 {
+		n := len(reqs.Requests)
+		if n > 0 {
 			if sel < 0 {
 				sel = 0
 			}
-			if sel >= nReqs {
-				sel = nReqs - 1
+			if sel >= n {
+				sel = n - 1
 			}
 		}
 	case 3:
-		if n := len(logs); n > 0 {
+		n := len(logs)
+		if n > 0 {
 			if sel < 0 {
 				sel = 0
 			}
@@ -464,7 +463,6 @@ func render() {
 		}
 	}
 
-	// Render tab content
 	switch tab {
 	case 0:
 		renderPeers(&b, f)
@@ -476,8 +474,8 @@ func render() {
 		renderLog(&b, f)
 	}
 
-	// Bottom border
-	bottom := f.by + f.bh - 1
+	// Bottom bar
+	bottom := f.by + termH - 1
 	help := " Tab:Switch  ↑↓:Select "
 	switch tab {
 	case 1:
@@ -488,56 +486,56 @@ func render() {
 		help += " j/k:Scroll "
 	}
 	help += " r:Refresh  q:Quit "
-	remain := f.bw - 2 - len(help)
-	if remain < 0 {
-		remain = 0
+	rem := f.cw - len(help)
+	if rem < 0 {
+		rem = 0
 	}
-	b.WriteString(fmt.Sprintf("\033[%d;%dH╚%s%s╝\033[0m",
-		bottom, f.bx, help, repeat("═", remain)))
+	b.WriteString(fmt.Sprintf("\033[%d;%dH╚%s%s╝",
+		bottom, f.leftCol(), help, fill("═", rem)))
 
-	// Message
 	if msg != "" {
-		b.WriteString(fmt.Sprintf("\033[%d;%dH\033[33m%s\033[0m", bottom-1, f.left(), msg))
+		b.WriteString(fmt.Sprintf("\033[%d;%dH\033[33m%s\033[0m", bottom-1, f.innerCol(), msg))
 	}
 
 	fmt.Print(b.String())
 	needRedraw = false
 }
 
+// writeRow emits: ║ <content padded to cw> ║
+// Right border uses absolute cursor position (never drifts).
+func writeRow(b *strings.Builder, f frame, row int, content string, selected bool) {
+	l := f.leftCol()
+	r := f.rightCol()
+	if selected {
+		// Invert whole row, right border separately for safety
+		b.WriteString(fmt.Sprintf("\033[%d;%dH\033[7m║ %s \033[0m", row, l, padRight(content, f.cw-2)))
+	} else {
+		b.WriteString(fmt.Sprintf("\033[%d;%dH║ %s ", row, l, padRight(content, f.cw-2)))
+	}
+	b.WriteString(fmt.Sprintf("\033[%d;%dH║", row, r))
+}
+
 func renderPeers(b *strings.Builder, f frame) {
 	row := f.cs
-	// Clamp selection
 	n := len(peers.Peers)
 	if n > 0 {
-		if sel >= n {
-			sel = n - 1
-		}
-		if sel < 0 {
-			sel = 0
-		}
+		if sel < 0 { sel = 0 }
+		if sel >= n { sel = n - 1 }
 	}
-
-	// Header
-	b.WriteString(fmt.Sprintf("\033[%d;%dH║ %-4s %-20s %-14s %-5s %-8s ║",
-		row, f.bx, "#", "Name", "IP", "On", "HS"))
+	writeRow(b, f, row, fmt.Sprintf("%-4s %-20s %-14s %-7s %-5s",
+		"#", "Name", "IP", "Status", "HS"), false)
 	row++
-
 	for i, p := range peers.Peers {
-		if row > f.ce {
-			break
-		}
+		if row > f.ce { break }
 		ind := "  "
-		if i == sel {
-			ind = "▶ "
-		}
-		on := " "
-		if p.Online {
-			on = "\033[32m✓\033[0m"
-		}
+		if i == sel { ind = "> " }
+		on := "OFFLINE"
+		if p.Online { on = "ONLINE" }
 		hs := handshakeAgo(p.LatestHandshake)
-		line := fmt.Sprintf("%s%-4d %-20s %-14s %-5s %-8s",
-			ind, i+1, trunc(sanitize(p.Name), 20), p.Address, on, hs)
-		b.WriteString(fmt.Sprintf("\033[%d;%dH║ %s ║", row, f.bx, padRightAnsi(line, f.cw-2)))
+		writeRow(b, f, row,
+			fmt.Sprintf("%s%-4d %-20s %-14s %-7s %-5s",
+				ind, i+1, trunc(sanitize(p.Name), 20), p.Address, on, hs),
+			i == sel)
 		row++
 	}
 }
@@ -546,67 +544,51 @@ func renderRequests(b *strings.Builder, f frame) {
 	row := f.cs
 	n := len(reqs.Requests)
 	if n > 0 {
-		if sel >= n {
-			sel = n - 1
-		}
-		if sel < 0 {
-			sel = 0
-		}
+		if sel < 0 { sel = 0 }
+		if sel >= n { sel = n - 1 }
 	}
-
-	b.WriteString(fmt.Sprintf("\033[%d;%dH║ %-4s %-22s %-14s %-12s %-10s ║",
-		row, f.bx, "#", "Hostname", "IP", "Source", "Age"))
+	writeRow(b, f, row, fmt.Sprintf("%-4s %-22s %-14s %-12s %-8s",
+		"#", "Hostname", "IP", "Source", "Age"), false)
 	row++
-
 	for i, r := range reqs.Requests {
-		if row > f.ce {
-			break
-		}
+		if row > f.ce { break }
 		ind := "  "
-		if i == sel {
-			ind = "▶ "
-		}
+		if i == sel { ind = "> " }
 		age := timeAgo(r.CreatedAt)
-		line := fmt.Sprintf("%s%-4d %-22s %-14s %-12s %-10s",
-			ind, i+1, trunc(sanitize(r.Hostname), 22), r.Address, trunc(sanitize(r.SourceIP), 12), age)
-		b.WriteString(fmt.Sprintf("\033[%d;%dH║ %s ║", row, f.bx, padRightAnsi(line, f.cw-2)))
+		writeRow(b, f, row,
+			fmt.Sprintf("%s%-4d %-22s %-14s %-12s %-8s",
+				ind, i+1, trunc(sanitize(r.Hostname), 22), r.Address, trunc(sanitize(r.SourceIP), 12), age),
+			i == sel)
 		row++
 	}
 	if n == 0 {
-		b.WriteString(fmt.Sprintf("\033[%d;%dH║   (no pending requests) ║", row, f.bx))
+		writeRow(b, f, row, "  (no pending requests)", false)
 	}
 }
 
 func renderStatus(b *strings.Builder, f frame) {
 	row := f.cs
-	items := []string{
-		fmt.Sprintf("║   Daemon:       %s", colorOK(status.Daemon == "running")),
-		fmt.Sprintf("║   WireGuard:    %s", colorOK(status.Wireguard == "ok")),
-		fmt.Sprintf("║   Interface:    %s  port %s", status.Interface, status.Port),
-		fmt.Sprintf("║   Peers online: %d / %d", status.Online, status.Total),
-		"║",
-		"║   Peers:",
-	}
-	for _, it := range items {
-		if row > f.ce {
-			break
-		}
-		b.WriteString(fmt.Sprintf("\033[%d;%dH%s ║", row, f.bx, padRightAnsi(it, f.cw-1)))
+	for _, line := range []string{
+		fmt.Sprintf("  Daemon:       %s", onOff(status.Daemon == "running")),
+		fmt.Sprintf("  WireGuard:    %s", onOff(status.Wireguard == "ok")),
+		fmt.Sprintf("  Interface:    %s  port %s", status.Interface, status.Port),
+		fmt.Sprintf("  Peers online: %d / %d", status.Online, status.Total),
+		"",
+		"  Peers:",
+	} {
+		if row > f.ce { break }
+		writeRow(b, f, row, line, false)
 		row++
 	}
 	for _, p := range peers.Peers {
-		if row > f.ce {
-			break
-		}
-		dot := "\033[31m●\033[0m"
-		if p.Online {
-			dot = "\033[32m●\033[0m"
-		}
+		if row > f.ce { break }
+		dot := "x"
+		if p.Online { dot = "o" }
 		rx := formatBytes(p.TransferRx)
 		tx := formatBytes(p.TransferTx)
-		line := fmt.Sprintf("║     %s %-20s %s  rx:%s tx:%s",
-			dot, trunc(sanitize(p.Name), 20), p.Address, rx, tx)
-		b.WriteString(fmt.Sprintf("\033[%d;%dH%s ║", row, f.bx, padRightAnsi(line, f.cw-1)))
+		writeRow(b, f, row,
+			fmt.Sprintf("    %s %-20s %s  rx:%s tx:%s",
+				dot, trunc(sanitize(p.Name), 20), p.Address, rx, tx), false)
 		row++
 	}
 }
@@ -614,165 +596,84 @@ func renderStatus(b *strings.Builder, f frame) {
 func renderLog(b *strings.Builder, f frame) {
 	n := len(logs)
 	max := f.ce - f.cs
-	if max < 0 {
-		max = 0
-	}
-	if sel < 0 {
-		sel = 0
-	}
-	if sel > n-1 {
-		sel = n - 1
-	}
+	if max < 0 { max = 0 }
+	if sel < 0 { sel = 0 }
+	if sel >= n { sel = n - 1 }
 	start := sel - max/2
-	if start < 0 {
-		start = 0
-	}
+	if start < 0 { start = 0 }
+	if start > n-max && n > max { start = n - max }
 	row := f.cs
 	for i := start; i < n && row <= f.ce; i++ {
-		line := logs[i]
-		color := ""
-		if strings.Contains(line, "approved") {
-			color = "\033[32m"
-		} else if strings.Contains(line, "rejected") || strings.Contains(line, "deleted") || strings.Contains(line, "expired") {
-			color = "\033[31m"
-		} else if strings.Contains(line, "submitted") {
-			color = "\033[33m"
-		}
 		prefix := "  "
-		if i == sel {
-			prefix = "▶ "
-		}
-		b.WriteString(fmt.Sprintf("\033[%d;%dH║ %s%s%s\033[0m ║",
-			row, f.bx, prefix, color, padRight(line, f.cw-len(prefix)-4)))
+		if i == sel { prefix = "> " }
+		writeRow(b, f, row,
+			fmt.Sprintf("%s%s", prefix, logs[i]),
+			i == sel)
 		row++
 	}
 }
 
 // ═══════════════════════════════════════════════════════════
-//  Helpers
+//  Pure-text helpers (no inline ANSI in content)
 // ═══════════════════════════════════════════════════════════
 
-func repeat(s string, n int) string {
-	if n <= 0 {
-		return ""
-	}
-	return strings.Repeat(s, n)
+func padRight(s string, w int) string {
+	for len(s) < w { s += " " }
+	if len(s) > w { s = s[:w] }
+	return s
 }
 
-func padRight(s string, width int) string {
-	r := []rune(s)
-	if len(r) >= width {
-		return string(r[:width])
-	}
-	return s + strings.Repeat(" ", width-len(r))
-}
-
-func padRightAnsi(s string, width int) string {
-	visible := stripAnsi(s)
-	if len(visible) >= width {
-		return s[:len(s)-(len(visible)-width)]
-	}
-	return s + strings.Repeat(" ", width-len(visible))
-}
-
-func stripAnsi(s string) string {
-	var b strings.Builder
-	inEscape := false
-	for _, r := range s {
-		if r == '\033' {
-			inEscape = true
-			continue
-		}
-		if inEscape {
-			if r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' {
-				inEscape = false
-			}
-			continue
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
-}
-
-func lenAnsi(code int, s string) int {
-	return len(stripAnsi(s)) + code
+func fill(ch string, n int) string {
+	if n <= 0 { return "" }
+	return strings.Repeat(ch, n)
 }
 
 func handshakeAgo(s string) string {
-	if s == "0" {
-		return "-"
-	}
+	if s == "0" { return "-" }
 	n, err := strconv.Atoi(s)
-	if err != nil {
-		return "?"
-	}
+	if err != nil { return "?" }
 	sec := int(time.Now().Unix()) - n
-	if sec < 0 {
-		return "now"
-	}
-	if sec < 60 {
-		return fmt.Sprintf("%ds", sec)
-	}
-	if sec < 3600 {
-		return fmt.Sprintf("%dm", sec/60)
-	}
-	if sec < 86400 {
-		return fmt.Sprintf("%dh", sec/3600)
-	}
+	if sec < 0 { return "now" }
+	if sec < 60 { return fmt.Sprintf("%ds", sec) }
+	if sec < 3600 { return fmt.Sprintf("%dm", sec/60) }
+	if sec < 86400 { return fmt.Sprintf("%dh", sec/3600) }
 	return fmt.Sprintf("%dd", sec/86400)
 }
 
 func timeAgo(t string) string {
 	parsed, err := time.Parse(time.RFC3339, t)
-	if err != nil {
-		return "?"
-	}
+	if err != nil { return "?" }
 	d := time.Since(parsed)
-	if d < time.Minute {
-		return fmt.Sprintf("%ds", int(d.Seconds()))
-	}
-	if d < time.Hour {
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	}
+	if d < time.Minute { return fmt.Sprintf("%ds", int(d.Seconds())) }
+	if d < time.Hour { return fmt.Sprintf("%dm", int(d.Minutes())) }
 	return fmt.Sprintf("%dh", int(d.Hours()))
 }
 
 func formatBytes(s string) string {
 	n, err := strconv.Atoi(s)
-	if err != nil || n == 0 {
-		return "0"
-	}
+	if err != nil || n == 0 { return "0" }
 	switch {
-	case n >= 1<<30:
-		return fmt.Sprintf("%.1fG", float64(n)/(1<<30))
-	case n >= 1<<20:
-		return fmt.Sprintf("%.1fM", float64(n)/(1<<20))
-	case n >= 1<<10:
-		return fmt.Sprintf("%.1fK", float64(n)/(1<<10))
+	case n >= 1<<30: return fmt.Sprintf("%.1fG", float64(n)/(1<<30))
+	case n >= 1<<20: return fmt.Sprintf("%.1fM", float64(n)/(1<<20))
+	case n >= 1<<10: return fmt.Sprintf("%.1fK", float64(n)/(1<<10))
 	}
 	return fmt.Sprintf("%dB", n)
 }
 
+func onOff(ok bool) string {
+	if ok { return "OK" }
+	return "ERROR"
+}
+
 func trunc(s string, max int) string {
 	r := []rune(s)
-	if len(r) <= max {
-		return s
-	}
+	if len(r) <= max { return s }
 	return string(r[:max-1]) + "\u2026"
 }
 
 func sanitize(s string) string {
 	return strings.Map(func(r rune) rune {
-		if r == '\\' || r == '\r' || r == '\n' || r < ' ' {
-			return -1
-		}
+		if r == '\\' || r == '\r' || r == '\n' || r < ' ' { return -1 }
 		return r
 	}, s)
-}
-
-func colorOK(ok bool) string {
-	if ok {
-		return "\033[32mok\033[0m"
-	}
-	return "\033[31merror\033[0m"
 }
