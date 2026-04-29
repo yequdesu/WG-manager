@@ -10,8 +10,13 @@ param(
 )
 
 if (-not $ServerIp -or $ServerIp -eq "__SERVER_IP__") {
-    $ServerIp = Read-Host "Server IP"
+    Write-Host "[x] Server IP not configured. The server daemon may be out of date." -ForegroundColor Red
+    Write-Host "    Run on server: sudo bash server/setup-server.sh" -ForegroundColor Yellow
+    Write-Host "    Or use: .\request-approval.ps1 -ServerIp 1.2.3.4 -PeerName MYPC" -ForegroundColor Yellow
+    exit 1
 }
+if (-not $PeerName) { $PeerName = Read-Host "Enter peer name" }
+if (-not $PeerName) { Write-Host "Peer name is required." -ForegroundColor Red; exit 1 }
 if (-not $ServerIp) { Write-Host "Server IP is required." -ForegroundColor Red; exit 1 }
 if ($MgmtPort -le 0) { $MgmtPort = Read-Host "Port [58880]"; if (-not $MgmtPort) { $MgmtPort = 58880 } }
 if (-not $PeerName) {
