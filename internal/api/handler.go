@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -142,21 +143,97 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (h *Handler) WindowsConfig(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	name := strings.TrimSpace(q.Get("name"))
-	if name == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name query parameter is required"})
+func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
+	ua := r.Header.Get("User-Agent")
+	mode := r.URL.Query().Get("mode")
+	name := r.URL.Query().Get("name")
+	platform := r.URL.Query().Get("platform")
+
+	isPS := platform == "windows" || strings.Contains(ua, "PowerShell") || strings.Contains(ua, "WindowsPowerShell")
+	isShell := platform == "linux" || platform == "wsl" || platform == "macos" ||
+		strings.Contains(ua, "curl") || strings.Contains(ua, "Wget") || strings.Contains(ua, "bash") || strings.Contains(ua, "libcurl")
+	isBrowser := (strings.Contains(ua, "Mozilla") || strings.Contains(ua, "Chrome")) &&
+		!strings.Contains(ua, "curl") && !strings.Contains(ua, "PowerShell") && !strings.Contains(ua, "Wget")
+
+	if !isPS && !isShell && !isBrowser {
+		isShell = true
+	}
+
+	isDirect := mode == "direct"
+
+	if isBrowser {
+		h.serveHTML(w, r)
 		return
 	}
 
+	if isPS {
+		if isDirect {
+			h.serveDirectWin(w, r, name)
+		} else {
+			h.serveApprovalPS1(w, r)
+		}
+		return
+	}
+
+	if isDirect {
+		h.serveDirectBash(w, r, name)
+	} else {
+		h.serveApprovalBash(w, r, name)
+	}
+}
+
+func (h *Handler) serveDirectBash(w http.ResponseWriter, r *http.Request, name string) {
+	script, err := ReadScript(h.config.ClientScriptTemplate)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "template not found"})
+		return
+	}
+	script = strings.ReplaceAll(script, "__SERVER_PUBLIC_IP__", h.config.ServerPublicIP)
+	script = strings.ReplaceAll(script, "__MGMT_PORT__", portStr(h.config.MgmtListen))
+	script = strings.ReplaceAll(script, "__API_KEY__", h.config.APIKey)
+	script = strings.ReplaceAll(script, "__DEFAULT_DNS__", h.config.DefaultDNS)
+	script = strings.ReplaceAll(script, "__WG_ALLOWED_IPS__", h.config.WGSubnet)
+	if name != "" {
+		script = strings.ReplaceAll(script, "__PEER_NAME__", name)
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(script))
+}
+
+func (h *Handler) serveApprovalBash(w http.ResponseWriter, r *http.Request, name string) {
+	script, err := ReadScript(h.config.ClientScriptTemplate + ".approval")
+	if err != nil {
+		script, err = ReadScript("client/request-approval.sh")
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "approval template not found"})
+			return
+		}
+	}
+	script = strings.ReplaceAll(script, "__SERVER_IP__", h.config.ServerPublicIP)
+	script = strings.ReplaceAll(script, "__MGMT_PORT__", portStr(h.config.MgmtListen))
+	if name != "" {
+		script = strings.ReplaceAll(script, "__PEER_NAME__", name)
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(script))
+}
+
+func (h *Handler) serveDirectWin(w http.ResponseWriter, r *http.Request, name string) {
+	q := r.URL.Query()
+	if name == "" {
+		name = strings.TrimSpace(q.Get("name"))
+	}
+	if name == "" {
+		name = "client"
+	}
 	dns := strings.TrimSpace(q.Get("dns"))
 	if dns == "" {
 		dns = h.config.DefaultDNS
 	}
 
 	var privateKey, publicKey, ip string
-
 	if existing, ok := h.store.GetPeer(name); ok {
 		privateKey = existing.PrivateKey
 		publicKey = existing.PublicKey
@@ -168,46 +245,35 @@ func (h *Handler) WindowsConfig(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate keys"})
 			return
 		}
-
 		ip, err = h.store.NextAvailableIP(h.config.WGSubnet)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "no available IP addresses"})
 			return
 		}
-
 		peer := store.Peer{
-			Name:       name,
-			PublicKey:  publicKey,
-			PrivateKey: privateKey,
-			Address:    ip,
-			DNS:        dns,
-			Keepalive:  h.config.PeerKeepalive,
-			CreatedAt:  time.Now().UTC().Format(time.RFC3339),
+			Name: name, PublicKey: publicKey, PrivateKey: privateKey,
+			Address: ip, DNS: dns, Keepalive: h.config.PeerKeepalive,
+			CreatedAt: time.Now().UTC().Format(time.RFC3339),
 		}
-
 		if err := h.store.AddPeer(peer); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save peer"})
 			return
 		}
-
 		allowedIP := fmt.Sprintf("%s/32", ip)
 		if err := h.wgMgr.AddPeerLive(h.config.WGInterface, publicKey, allowedIP, h.config.PeerKeepalive); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to add peer to wireguard"})
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to add peer"})
 			return
 		}
-
 		if err := h.writeConfigToDisk(); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to write config"})
 			return
 		}
-
 		if err := h.store.Save(); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist state"})
 			return
 		}
+		audit.Log("peer_registered", auditFields("name", name, "ip", ip, "source", remoteIP(r)))
 	}
-
-	audit.Log("config_fetched", auditFields("name", name, "ip", ip, "source", remoteIP(r)))
 
 	conf := fmt.Sprintf(`[Interface]
 Address = %s/24
@@ -227,7 +293,38 @@ PersistentKeepalive = %d
 	w.Write([]byte(conf))
 }
 
-// ── Request / Approval handlers ──────────────────
+func (h *Handler) serveApprovalPS1(w http.ResponseWriter, r *http.Request) {
+	script, err := os.ReadFile("client/request-approval.ps1")
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "ps1 template not found"})
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write(script)
+}
+
+func (h *Handler) serveHTML(w http.ResponseWriter, r *http.Request) {
+	ip := h.config.ServerPublicIP
+	html := `<!DOCTYPE html><html><head><meta charset="utf-8"><title>WG-Manager Connect</title>
+<style>body{font:14px/1.5 monospace;max-width:680px;margin:40px auto;background:#111;color:#eee}
+h1{color:#5af} .box{background:#222;padding:12px;margin:8px 0;border-radius:4px;border:1px solid #444}
+pre{margin:0;white-space:pre-wrap;word-break:break-all;color:#afa} .cmd{color:#ff8}
+label{display:inline-block;min-width:80px}.tab{display:inline-block;padding:4px 12px;cursor:pointer;border:1px solid #555;border-bottom:none;margin-right:4px;border-radius:4px 4px 0 0}.tab.active{background:#333;color:#5af;font-weight:bold}
+.platform{display:none}.platform.active{display:block}a{color:#5af}
+</style></head><body>
+<h1>WG-Manager Connect</h1>
+<p>Server: ` + ip + `</p>
+<div><span class="tab active" onclick="show('linux')">Linux / macOS / WSL</span><span class="tab" onclick="show('windows')">Windows</span><span class="tab" onclick="show('browser')">Browser</span></div>
+<div id="linux" class="platform active"><div class="box"><p>Approval (default):</p><pre>curl -sSf http://` + ip + `:` + portStr(h.config.MgmtListen) + `/connect | sudo bash</pre></div><div class="box"><p>Direct (admin link):</p><pre>curl -sSf "http://` + ip + `:` + portStr(h.config.MgmtListen) + `/connect?mode=direct&name=my-device" | sudo bash</pre></div></div>
+<div id="windows" class="platform"><div class="box"><p>Approval — PowerShell:</p><pre>Invoke-WebRequest http://` + ip + `:` + portStr(h.config.MgmtListen) + `/connect -OutFile t.ps1; .\t.ps1</pre></div><div class="box"><p>Direct — CMD:</p><pre>curl -o wg0.conf "http://` + ip + `:` + portStr(h.config.MgmtListen) + `/connect?mode=direct&name=my-pc"</pre></div></div>
+<div id="browser" class="platform"><p>You are already here. Choose a platform tab above to see commands.</p></div>
+<script>function show(id){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));document.querySelectorAll('.platform').forEach(p=>p.classList.remove('active'));document.getElementById(id).classList.add('active');event.target.classList.add('active')}</script>
+</body></html>`
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(html))
+}
 
 func (h *Handler) SubmitRequest(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -682,31 +779,6 @@ func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(`{"status":"ok"}`))
 }
 
-func (h *Handler) ClientScript(w http.ResponseWriter, r *http.Request) {
-	script, err := ReadClientScript(h.config.ClientScriptTemplate)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load client script template"})
-		return
-	}
-
-	_, portStr, _ := net.SplitHostPort(h.config.MgmtListen)
-	mgmtPort, _ := strconv.Atoi(portStr)
-	if mgmtPort == 0 {
-		mgmtPort = 58880
-	}
-
-	script = strings.ReplaceAll(script, "__SERVER_PUBLIC_IP__", h.config.ServerPublicIP)
-	script = strings.ReplaceAll(script, "__MGMT_PORT__", strconv.Itoa(mgmtPort))
-	script = strings.ReplaceAll(script, "__API_KEY__", h.config.APIKey)
-	script = strings.ReplaceAll(script, "__DEFAULT_DNS__", h.config.DefaultDNS)
-	script = strings.ReplaceAll(script, "__WG_ALLOWED_IPS__", h.config.WGSubnet)
-
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Header().Set("Content-Disposition", "attachment; filename=connect.sh")
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(script))
-}
-
 func (h *Handler) writeConfigToDisk() error {
 	peers := h.store.AllPeers()
 	peerMap := make(map[string]wg.PeerInfo)
@@ -726,6 +798,13 @@ func (h *Handler) writeConfigToDisk() error {
 		h.store.Server().PrivateKey,
 		peerMap,
 	)
+}
+
+func portStr(addr string) string {
+	_, p, err := net.SplitHostPort(addr)
+	if err != nil { return "58880" }
+	if n, _ := strconv.Atoi(p); n > 0 { return p }
+	return "58880"
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {

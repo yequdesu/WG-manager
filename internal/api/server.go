@@ -15,13 +15,10 @@ func NewServer(cfg *Config, s *store.State, m *wg.Manager) *http.Server {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/api/v1/health", h.Health)
-	mux.HandleFunc("/api/v1/client-script", h.ClientScript)
+	mux.HandleFunc("/connect", h.Connect)
 
 	registerHandler := authOrLocalMiddleware(cfg.APIKey)(h.Register)
 	mux.HandleFunc("/api/v1/register", registerHandler)
-
-	windowsConfigHandler := authOrLocalMiddleware(cfg.APIKey)(h.WindowsConfig)
-	mux.HandleFunc("/api/v1/windows-config", windowsConfigHandler)
 
 	// Request / Approval (no auth, rate limited)
 	rateLimit := RateLimitMiddleware(3)

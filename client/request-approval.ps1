@@ -108,37 +108,19 @@ if (-not $approved) {
     exit 1
 }
 
-# ── Phase 3: Save config ──────────────────────────────
+# ── Phase 3: Save config + manual import instructions ──
 $confPath = "$env:TEMP\wg0.conf"
 $peerConf | Out-File -Encoding ascii $confPath
-Write-Host "[+] Config saved to: $confPath" -ForegroundColor Green
+Write-Host "[+] Config saved: $confPath" -ForegroundColor Green
 Write-Host ""
-
-# ── Phase 4: Try auto-import into WireGuard ───────────
-$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-
-$wgPath = "$env:ProgramFiles\WireGuard\wireguard.exe"
-if (-not (Test-Path $wgPath)) {
-    Write-Host "[!] WireGuard not installed." -ForegroundColor Yellow
-    Write-Host "    Download: https://download.wireguard.com/windows-client/" -ForegroundColor Yellow
-    Write-Host "    Then: Import Tunnel(s) -> $confPath" -ForegroundColor Yellow
-} elseif (-not $isAdmin) {
-    Write-Host "[!] Administrator privileges required for auto-import." -ForegroundColor Yellow
-    Write-Host "    Re-run as administrator:" -ForegroundColor Yellow
-    Write-Host "      Start-Process powershell -Verb RunAs -ArgumentList '-ExecutionPolicy Bypass -File request-approval.ps1 -ServerIp $ServerIp -PeerName $PeerName'" -ForegroundColor Yellow
-    Write-Host "    Or import manually: Open WireGuard -> Import Tunnel(s) -> $confPath" -ForegroundColor Yellow
-} else {
-    Write-Host "[+] Importing tunnel into WireGuard..." -ForegroundColor Green
-    & $wgPath /installtunnelservice $confPath 2>&1 | Out-Null
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "[+] Tunnel installed and started!" -ForegroundColor Green
-    } else {
-        Write-Host "[!] Auto-import failed. Import manually:" -ForegroundColor Yellow
-        Write-Host "    Open WireGuard -> Import Tunnel(s) -> $confPath" -ForegroundColor Yellow
-    }
-}
-
+Write-Host "To connect:" -ForegroundColor Cyan
+Write-Host "  1. Download WireGuard: https://download.wireguard.com/windows-client/" -ForegroundColor White
+Write-Host "  2. Install and open WireGuard" -ForegroundColor White
+Write-Host "  3. Click 'Import Tunnel(s) from file'" -ForegroundColor White
+Write-Host "  4. Select: $confPath" -ForegroundColor White
+Write-Host "  5. Click 'Activate'" -ForegroundColor White
 Write-Host ""
-Write-Host "[+] Configuration:" -ForegroundColor Cyan
+Write-Host "Configuration preview:" -ForegroundColor Cyan
 Write-Host $peerConf
+Write-Host ""
 Write-Host "[+] Done." -ForegroundColor Green
