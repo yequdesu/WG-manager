@@ -9,14 +9,16 @@ param(
     [int]$PollTimeout = 300
 )
 
-if (-not $ServerIp) {
-    Write-Host "Usage: .\request-approval.ps1 -ServerIp <IP> -PeerName <NAME> [-MgmtPort 58880] [-Dns 1.1.1.1]" -ForegroundColor Red
+if (-not $ServerIp -or $ServerIp -eq "__SERVER_IP__") {
+    Write-Host "Usage: .\request-approval.ps1 -ServerIp <IP> -PeerName <NAME>" -ForegroundColor Red
     exit 1
 }
 if (-not $PeerName) {
-    Write-Host "Usage: .\request-approval.ps1 -ServerIp <IP> -PeerName <NAME>" -ForegroundColor Red
-    Write-Host "  Peer name is required to identify your device." -ForegroundColor Yellow
-    exit 1
+    $PeerName = Read-Host "Enter peer name"
+    if (-not $PeerName) {
+        Write-Host "Peer name is required." -ForegroundColor Red
+        exit 1
+    }
 }
 
 $ErrorActionPreference = "Stop"
