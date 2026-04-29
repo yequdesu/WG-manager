@@ -68,8 +68,8 @@ arg1="${1:-}"; arg2="${2:-}"; arg3="${3:-}"
 if [[ -n "$arg1" ]] && [[ "$arg1" != "${arg1#--}" ]]; then SERVER_IP="$arg1"; fi
 if [[ -n "$arg2" ]] && [[ "$arg2" != "${arg2#--}" ]]; then MGMT_PORT="$arg2"; fi
 if [[ -n "$arg3" ]] && [[ "$arg3" != "${arg3#--}" ]]; then PEER_NAME="$arg3"; fi
-if [[ -z "$PEER_NAME" ]]; then
-    read -r -p "$(echo -e "${BOLD}Enter peer name${NC}: ")" PEER_NAME </dev/tty 2>/dev/null || true
+if [[ -z "$PEER_NAME" ]] && [[ -t 0 ]]; then
+    read -r -p "$(echo -e "${BOLD}Enter peer name${NC}: ")" PEER_NAME
 fi
 [[ -z "$PEER_NAME" ]] && PEER_NAME="$(hostname 2>/dev/null || echo "client")"
 

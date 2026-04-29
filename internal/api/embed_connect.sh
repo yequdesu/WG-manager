@@ -66,8 +66,8 @@ for arg in "$@"; do case "$arg" in
     --name=*) PEER_NAME="${arg#*=}" ;;
     --name)   shift; PEER_NAME="${1:-}" ;;
 esac; done
-if [[ -z "$PEER_NAME" ]]; then
-    read -r -p "$(echo -e "${BOLD}Enter peer name${NC}: ")" PEER_NAME </dev/tty 2>/dev/null || true
+if [[ -z "$PEER_NAME" ]] && [[ -t 0 ]]; then
+    read -r -p "$(echo -e "${BOLD}Enter peer name${NC}: ")" PEER_NAME
 fi
 [[ -z "$PEER_NAME" ]] && PEER_NAME="$(hostname 2>/dev/null || echo "client")"
 
