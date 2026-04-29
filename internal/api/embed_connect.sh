@@ -66,11 +66,14 @@ for arg in "$@"; do case "$arg" in
     --name=*) PEER_NAME="${arg#*=}" ;;
     --name)   shift; PEER_NAME="${1:-}" ;;
 esac; done
+if [[ -z "$PEER_NAME" ]]; then
+    read -r -p "$(echo -e "${BOLD}Enter peer name${NC}: ")" PEER_NAME </dev/tty 2>/dev/null || true
+fi
 [[ -z "$PEER_NAME" ]] && PEER_NAME="$(hostname 2>/dev/null || echo "client")"
 
 # ── Phase 2: Register ──────────────────────────────
 log "Registering as '$PEER_NAME'..."
-RESP=$(curl -sSf -X POST "http://${SERVER_IP}:${MGMT_PORT}/api/v1/register" \
+RESP=$(curl --connect-timeout 5 --max-time 10 -sSf -X POST "http://${SERVER_IP}:${MGMT_PORT}/api/v1/register" \
     -H "Authorization: Bearer ${API_KEY}" \
     -H "Content-Type: application/json" \
     -d "{\"hostname\":\"${PEER_NAME}\",\"dns\":\"${DEFAULT_DNS}\"}" 2>&1) || {

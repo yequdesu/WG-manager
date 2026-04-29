@@ -68,7 +68,9 @@ arg1="${1:-}"; arg2="${2:-}"; arg3="${3:-}"
 if [[ -n "$arg1" ]] && [[ "$arg1" != "${arg1#--}" ]]; then SERVER_IP="$arg1"; fi
 if [[ -n "$arg2" ]] && [[ "$arg2" != "${arg2#--}" ]]; then MGMT_PORT="$arg2"; fi
 if [[ -n "$arg3" ]] && [[ "$arg3" != "${arg3#--}" ]]; then PEER_NAME="$arg3"; fi
-[[ -z "$PEER_NAME" ]] && [[ -t 0 ]] && read -r -p "$(echo -e "${BOLD}Enter peer name${NC}: ")" PEER_NAME
+if [[ -z "$PEER_NAME" ]]; then
+    read -r -p "$(echo -e "${BOLD}Enter peer name${NC}: ")" PEER_NAME </dev/tty 2>/dev/null || true
+fi
 [[ -z "$PEER_NAME" ]] && PEER_NAME="$(hostname 2>/dev/null || echo "client")"
 
 # ── Phase 1: Setup ─────────────────────────────────
@@ -77,7 +79,7 @@ ensure_wireguard
 
 # ── Phase 2: Submit request ────────────────────────
 log "Submitting access request as '$PEER_NAME'..."
-RESP=$(curl -sSf -X POST "http://${SERVER_IP}:${MGMT_PORT}/api/v1/request" \
+RESP=$(curl --connect-timeout 5 --max-time 10 -sSf -X POST "http://${SERVER_IP}:${MGMT_PORT}/api/v1/request" \
     -H "Content-Type: application/json" \
     -d "{\"hostname\":\"${PEER_NAME}\",\"dns\":\"${DEFAULT_DNS}\"}" 2>&1) || {
     err "Failed to submit: $RESP"; exit 1
@@ -91,7 +93,7 @@ warn "Waiting for admin approval..."
 ELAPSED=0; APPROVED=false; PEER_CONFIG=""
 while [[ $ELAPSED -lt $POLL_TIMEOUT ]]; do
     sleep $POLL_INTERVAL; ELAPSED=$((ELAPSED + POLL_INTERVAL))
-    SR=$(curl -s "http://${SERVER_IP}:${MGMT_PORT}/api/v1/request/${REQ_ID}" 2>/dev/null || echo '{"status":"error"}')
+    SR=$(curl -s --connect-timeout 5 --max-time 10 "http://${SERVER_IP}:${MGMT_PORT}/api/v1/request/${REQ_ID}" 2>/dev/null || echo '{"status":"error"}')
     ST=$(echo "$SR" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','error'))" 2>/dev/null || echo "error")
     case "$ST" in
         pending) echo -e "${CYAN}[${ELAPSED}s]${NC} waiting..." ;;
