@@ -5,7 +5,7 @@ param(
     [int]$MgmtPort = __MGMT_PORT__,
     [string]$PeerName = "",
     [string]$Dns = "1.1.1.1,8.8.8.8",
-    [int]$PollInterval = 10,
+    [int]$PollInterval = 3,
     [int]$PollTimeout = 300
 )
 
