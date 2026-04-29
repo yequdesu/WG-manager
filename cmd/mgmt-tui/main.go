@@ -12,7 +12,10 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unsafe"
 )
+
+type termios syscall.Termios
 
 type Config struct {
 	APIURL   string
@@ -71,27 +74,31 @@ var (
 	status StatusResp
 	logs   []string
 
-	tab       = 0
-	sel       = 0
-	running   = true
-	msg       = ""
+	tab        = 0
+	sel        = 0
+	running    = true
+	msg        = ""
 	needRedraw = true
 
 	termW, termH = 80, 24
+
+	boxW = 80
+	ox   = 0
+	oy   = 0
+
+	oldTerm *termios
 )
 
 func main() {
 	loadConfig()
+	getTermSize()
 	enterAltScreen()
 	defer exitAltScreen()
-	enableRawMode()
-	defer disableRawMode()
-
-	getTermSize()
-	refresh()
+	makeRaw()
 
 	go keyboardLoop()
 	go autoRefresh()
+	refresh()
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
@@ -103,9 +110,13 @@ func main() {
 		time.Sleep(50 * time.Millisecond)
 	}
 
+	shutdown()
+}
+
+func shutdown() {
 	exitAltScreen()
-	disableRawMode()
-	fmt.Print("\033[?1049l\033[?25h\033[H\033[J")
+	restoreRaw()
+	fmt.Print("\033[?25h\033[H\033[J")
 	fmt.Println("Goodbye.")
 }
 
@@ -137,70 +148,13 @@ func loadConfig() {
 	}
 }
 
-func apiGet(path string) ([]byte, error) {
-	client := &http.Client{Timeout: 5 * time.Second}
-	req, err := http.NewRequest("GET", cfg.APIURL+path, nil)
-	if err != nil {
-		return nil, err
-	}
-	if cfg.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	return io.ReadAll(resp.Body)
-}
-
-func apiPost(path string) ([]byte, error) {
-	client := &http.Client{Timeout: 5 * time.Second}
-	req, err := http.NewRequest("POST", cfg.APIURL+path, nil)
-	if err != nil {
-		return nil, err
-	}
-	if cfg.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	return io.ReadAll(resp.Body)
-}
-
-func apiDelete(path string) ([]byte, error) {
-	client := &http.Client{Timeout: 5 * time.Second}
-	req, err := http.NewRequest("DELETE", cfg.APIURL+path, nil)
-	if err != nil {
-		return nil, err
-	}
-	if cfg.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	return io.ReadAll(resp.Body)
-}
-
 func refresh() {
-	body, err := apiGet("/api/v1/peers")
-	if err == nil {
-		json.Unmarshal(body, &peers)
-	}
-	body, err = apiGet("/api/v1/requests")
-	if err == nil {
-		json.Unmarshal(body, &reqs)
-	}
-	body, err = apiGet("/api/v1/status")
-	if err == nil {
-		json.Unmarshal(body, &status)
-	}
+	apiPeers, _ := apiGet("/api/v1/peers")
+	json.Unmarshal(apiPeers, &peers)
+	apiReqs, _ := apiGet("/api/v1/requests")
+	json.Unmarshal(apiReqs, &reqs)
+	apiSt, _ := apiGet("/api/v1/status")
+	json.Unmarshal(apiSt, &status)
 	if cfg.AuditLog != "" {
 		data, err := os.ReadFile(cfg.AuditLog)
 		if err == nil {
@@ -212,6 +166,14 @@ func refresh() {
 		}
 	}
 	getTermSize()
+	boxW = termW - 4
+	if boxW < 50 {
+		boxW = 50
+	}
+	if boxW > 100 {
+		boxW = 100
+	}
+	ox = (termW - boxW) / 2
 }
 
 func getTermSize() {
@@ -221,30 +183,83 @@ func getTermSize() {
 	if err == nil {
 		fmt.Sscanf(string(out), "%d %d", &termH, &termW)
 	}
-	if termH < 10 {
+	if termH < 16 {
 		termH = 24
 	}
-	if termW < 40 {
+	if termW < 50 {
 		termW = 80
 	}
 }
 
-func enterAltScreen() {
-	fmt.Print("\033[?1049h\033[H\033[J")
+func enterAltScreen()    { fmt.Print("\033[?1049h\033[H\033[J") }
+func exitAltScreen()     { fmt.Print("\033[?1049l") }
+func hideCursor()        { fmt.Print("\033[?25l") }
+
+func makeRaw() {
+	fd := int(os.Stdin.Fd())
+	var t termios
+	_, _, err := syscall.Syscall6(syscall.SYS_IOCTL, uintptr(fd), syscall.TCGETS, uintptr(unsafe.Pointer(&t)), 0, 0, 0)
+	if err != 0 {
+		return
+	}
+	oldTerm = new(termios)
+	*oldTerm = t
+	t.Iflag &^= syscall.IGNBRK | syscall.BRKINT | syscall.PARMRK | syscall.ISTRIP | syscall.INLCR | syscall.IGNCR | syscall.ICRNL | syscall.IXON
+	t.Oflag &^= syscall.OPOST
+	t.Lflag &^= syscall.ECHO | syscall.ECHONL | syscall.ICANON | syscall.ISIG | syscall.IEXTEN
+	t.Cflag &^= syscall.CSIZE | syscall.PARENB
+	t.Cflag |= syscall.CS8
+	t.Cc[syscall.VMIN] = 1
+	t.Cc[syscall.VTIME] = 0
+	syscall.Syscall6(syscall.SYS_IOCTL, uintptr(fd), syscall.TCSETS, uintptr(unsafe.Pointer(&t)), 0, 0, 0)
+	hideCursor()
 }
 
-func exitAltScreen() {
-	fmt.Print("\033[?1049l")
+func restoreRaw() {
+	if oldTerm == nil {
+		return
+	}
+	fd := int(os.Stdin.Fd())
+	syscall.Syscall6(syscall.SYS_IOCTL, uintptr(fd), syscall.TCSETS, uintptr(unsafe.Pointer(oldTerm)), 0, 0, 0)
 }
 
-func enableRawMode() {
-	exec.Command("stty", "raw", "-echo").Run()
-	fmt.Print("\033[?25l")
+func apiGet(path string) ([]byte, error) {
+	req, _ := http.NewRequest("GET", cfg.APIURL+path, nil)
+	if cfg.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+	}
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	return io.ReadAll(resp.Body)
 }
 
-func disableRawMode() {
-	exec.Command("stty", "sane").Run()
-	fmt.Print("\033[?25h")
+func apiPost(path string) ([]byte, error) {
+	req, _ := http.NewRequest("POST", cfg.APIURL+path, nil)
+	if cfg.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+	}
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	return io.ReadAll(resp.Body)
+}
+
+func apiDelete(path string) ([]byte, error) {
+	req, _ := http.NewRequest("DELETE", cfg.APIURL+path, nil)
+	if cfg.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+	}
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	return io.ReadAll(resp.Body)
 }
 
 func keyboardLoop() {
@@ -257,17 +272,17 @@ func keyboardLoop() {
 		}
 		b := buf[:n]
 		switch {
-		case b[0] == 'q' || b[0] == 3:
+		case b[0] == 'q' || b[0] == 'Q':
 			running = false
 		case b[0] == '\t':
 			tab = (tab + 1) % 4
 			sel = 0
 			needRedraw = true
-		case b[0] == 'r':
+		case b[0] == 'r' || b[0] == 'R':
 			msg = "Refreshed"
 			refresh()
 			needRedraw = true
-		case len(b) >= 3 && b[0] == 27 && b[1] == 91:
+		case n >= 3 && b[0] == 27 && b[1] == 91:
 			switch b[2] {
 			case 'A':
 				sel--
@@ -277,13 +292,6 @@ func keyboardLoop() {
 				needRedraw = true
 			case 'B':
 				sel++
-				needRedraw = true
-			case 'C':
-				if tab == 0 && sel >= len(peers.Peers) {
-					sel = 0
-				}
-				needRedraw = true
-			case 'D':
 				needRedraw = true
 			}
 		case b[0] == 'd' || b[0] == 'D':
@@ -297,15 +305,21 @@ func keyboardLoop() {
 			if tab == 1 && sel < len(reqs.Requests) {
 				approveRequest(reqs.Requests[sel].ID)
 			}
-		case b[0] == 'j' && tab == 3:
-			sel++
-			needRedraw = true
-		case b[0] == 'k' && tab == 3:
-			sel--
-			if sel < 0 {
-				sel = 0
+		case b[0] == 'j' || b[0] == 'J':
+			if tab == 3 {
+				sel++
+				needRedraw = true
 			}
-			needRedraw = true
+		case b[0] == 'k' || b[0] == 'K':
+			if tab == 3 {
+				sel--
+				if sel < 0 {
+					sel = 0
+				}
+				needRedraw = true
+			}
+		case b[0] == 3: // Ctrl+C
+			running = false
 		}
 	}
 }
@@ -321,55 +335,39 @@ func autoRefresh() {
 }
 
 func deletePeer(name string) {
-	body, err := apiDelete("/api/v1/peers/" + name)
-	if err != nil {
-		msg = fmt.Sprintf("Delete failed: %v", err)
-		needRedraw = true
-		return
-	}
+	body, _ := apiDelete("/api/v1/peers/" + name)
 	var r struct {
 		Success bool   `json:"success"`
-		Message string `json:"message"`
 		Error   string `json:"error"`
 	}
 	json.Unmarshal(body, &r)
 	if r.Success {
-		msg = fmt.Sprintf("Deleted: %s", name)
+		msg = "Deleted: " + name
 	} else {
-		msg = fmt.Sprintf("Error: %s", r.Error)
+		msg = "Error: " + r.Error
 	}
 	refresh()
 	needRedraw = true
 }
 
 func approveRequest(id string) {
-	body, err := apiPost("/api/v1/requests/" + id + "/approve")
-	if err != nil {
-		msg = fmt.Sprintf("Approve failed: %v", err)
-		needRedraw = true
-		return
-	}
+	body, _ := apiPost("/api/v1/requests/" + id + "/approve")
 	var r struct {
 		Success bool   `json:"success"`
 		Error   string `json:"error"`
 	}
 	json.Unmarshal(body, &r)
 	if r.Success {
-		msg = "Approved!"
+		msg = "Approved"
 	} else {
-		msg = fmt.Sprintf("Error: %s", r.Error)
+		msg = "Error: " + r.Error
 	}
 	refresh()
 	needRedraw = true
 }
 
 func denyRequest(id string) {
-	body, err := apiDelete("/api/v1/requests/" + id)
-	if err != nil {
-		msg = fmt.Sprintf("Deny failed: %v", err)
-		needRedraw = true
-		return
-	}
+	body, _ := apiDelete("/api/v1/requests/" + id)
 	var r struct {
 		Success bool   `json:"success"`
 		Error   string `json:"error"`
@@ -378,7 +376,7 @@ func denyRequest(id string) {
 	if r.Success {
 		msg = "Denied"
 	} else {
-		msg = fmt.Sprintf("Error: %s", r.Error)
+		msg = "Error: " + r.Error
 	}
 	refresh()
 	needRedraw = true
@@ -386,96 +384,180 @@ func denyRequest(id string) {
 
 func render() {
 	var b strings.Builder
-	b.Grow(termW * termH * 2)
+	b.Grow(termW * termH * 4)
 
-	// Row 0: header
-	b.WriteString(fmt.Sprintf("\033[1;1H\033[7m WG-Manager TUI \033[0m %d peers  %d pending  online: %d/%d",
+	innerW := boxW - 4
+
+	// ── Top border ──
+	b.WriteString(fmt.Sprintf("\033[%d;%dH", 1, ox))
+	b.WriteString("╔══ WG-Manager ")
+	b.WriteString(fmt.Sprintf(" ═ %d peers │ %d pending │ online %d/%d ",
 		len(peers.Peers), len(reqs.Requests), status.Online, len(peers.Peers)))
-	b.WriteString(clearToEOL())
+	remain := boxW - 2 - 15 - len(fmt.Sprintf(" %d peers │ %d pending │ online %d/%d ",
+		len(peers.Peers), len(reqs.Requests), status.Online, len(peers.Peers)))
+	if remain < 2 {
+		remain = 2
+	}
+	for i := 0; i < remain; i++ {
+		b.WriteString("═")
+	}
+	b.WriteString("╗")
 
-	// Row 1: tab bar
-	b.WriteString(fmt.Sprintf("\033[2;1H"))
+	// ── Tab bar ──
+	b.WriteString(fmt.Sprintf("\033[%d;%dH║", 2, ox))
+	tabLeft := ox + 1
 	tabs := []string{" Peers ", " Requests ", " Status ", " Log "}
 	for i, t := range tabs {
+		b.WriteString(fmt.Sprintf("\033[%d;%dH", 2, tabLeft))
 		if i == tab {
 			b.WriteString(fmt.Sprintf("\033[7m%s\033[0m", t))
 		} else {
 			b.WriteString(t)
 		}
+		tabLeft += len(t)
 	}
-	b.WriteString(clearToEOL())
+	b.WriteString(fmt.Sprintf("\033[%d;%dH║", 2, ox+boxW-1))
 
-	// Rows 2..h-2: content
-	contentH := termH - 3
+	// ── Line after tabs ──
+	b.WriteString(fmt.Sprintf("\033[%d;%dH╟", 3, ox))
+	for i := 0; i < boxW-2; i++ {
+		b.WriteString("─")
+	}
+	b.WriteString(fmt.Sprintf("\033[%d;%dH╢", 3, ox+boxW-1))
+
+	// ── Content ──
+	contentStartRow := 4
+	contentEndRow := termH - 2
+	contentH := contentEndRow - contentStartRow
 	if contentH < 4 {
 		contentH = 4
 	}
 
+	// Cap selection
 	switch tab {
 	case 0:
-		renderPeers(&b, contentH)
+		if n := len(peers.Peers); n > 0 {
+			if sel < 0 {
+				sel = 0
+			}
+			if sel >= n {
+				sel = n - 1
+			}
+		}
 	case 1:
-		renderRequests(&b, contentH)
-	case 2:
-		renderStatus(&b, contentH)
+		if n := len(reqs.Requests); n > 0 {
+			if sel < 0 {
+				sel = 0
+			}
+			if sel >= n {
+				sel = n - 1
+			}
+		}
 	case 3:
-		renderLog(&b, contentH)
+		if n := len(logs); n > 0 {
+			if sel < 0 {
+				sel = 0
+			}
+			if sel >= n {
+				sel = n - 1
+			}
+		}
 	}
 
-	// Fill remaining content rows
-	for row := 3 + contentH; row <= termH-1; row++ {
-		b.WriteString(fmt.Sprintf("\033[%d;1H%s", row, clearToEOL()))
+	switch tab {
+	case 0:
+		renderPeers(&b, contentStartRow, contentH, ox+1, innerW)
+	case 1:
+		renderRequests(&b, contentStartRow, contentH, ox+1, innerW)
+	case 2:
+		renderStatus(&b, contentStartRow, contentH, ox+1, innerW)
+	case 3:
+		renderLog(&b, contentStartRow, contentH, ox+1, innerW)
 	}
 
-	// Last row: help bar
-	help := " ↑↓:Select  d:Delete  r:Refresh  Tab:Switch  q:Quit"
+	// ── Fill remaining lines with side borders ──
+	usedRow := contentStartRow
+	switch tab {
+	case 0:
+		if len(peers.Peers) > 0 {
+			usedRow = contentStartRow + len(peers.Peers)
+		}
+		if usedRow >= contentEndRow {
+			usedRow = contentStartRow + 1
+		}
+	case 1:
+		if len(reqs.Requests) > 0 {
+			usedRow = contentStartRow + len(reqs.Requests)
+		}
+		if usedRow >= contentEndRow {
+			usedRow = contentStartRow + 1
+		}
+	case 2:
+		usedRow = contentStartRow + 6
+		if len(peers.Peers) > 0 {
+			usedRow += len(peers.Peers) + 1
+		}
+	case 3:
+		if len(logs) > 0 {
+			usedRow = contentStartRow + len(logs)
+		}
+		if usedRow >= contentEndRow {
+			usedRow = contentStartRow + 1
+		}
+	}
+	for r := usedRow; r <= contentEndRow; r++ {
+		b.WriteString(fmt.Sprintf("\033[%d;%dH║", r, ox))
+		b.WriteString(fmt.Sprintf("\033[%d;%dH║", r, ox+boxW-1))
+	}
+	// Also fill rows that were NOT used by content
+	// Already handled by the border fill above
+
+	// ── Bottom border ──
+	bottomRow := termH - 1
+	b.WriteString(fmt.Sprintf("\033[%d;%dH╚", bottomRow, ox))
+	help := " Tab:Switch  ↑↓:Select "
 	switch tab {
 	case 1:
-		help = " ↑↓:Select  a:Approve  d:Deny  r:Refresh  Tab:Switch  q:Quit"
+		help += " a:Approve  d:Deny "
+	case 0:
+		help += " d:Delete "
 	case 2:
-		help = " r:Refresh  Tab:Switch  q:Quit"
+		help += " "
 	case 3:
-		help = " j/k:Scroll  Tab:Switch  q:Quit"
+		help += " j/k:Scroll "
 	}
-	b.WriteString(fmt.Sprintf("\033[%d;1H\033[7m%s\033[0m%s",
-		termH, help, clearToEOL()))
+	help += " r:Refresh  q:Quit "
+	helpText := help
+	b.WriteString(helpText)
+	remainHelp := boxW - 2 - len(helpText)
+	if remainHelp < 2 {
+		remainHelp = 2
+	}
+	for i := 0; i < remainHelp; i++ {
+		b.WriteString("═")
+	}
+	b.WriteString(fmt.Sprintf("\033[%d;%dH╝", bottomRow, ox+boxW-1))
 
-	// Flash message
+	// ── Message ──
 	if msg != "" {
-		b.WriteString(fmt.Sprintf("\033[%d;1H\033[33m%s\033[0m", termH-1, msg))
+		b.WriteString(fmt.Sprintf("\033[%d;%dH\033[33m%s\033[0m", bottomRow-1, ox+1, msg))
 	}
 
 	fmt.Print(b.String())
 	needRedraw = false
 }
 
-func renderPeers(b *strings.Builder, maxLines int) {
-	row := 3
-	b.WriteString(fmt.Sprintf("\033[%d;1H%-4s %-20s %-14s %-6s %-8s %s",
-		row, "#", "Name", "IP", "Online", "HS", clearToEOL()))
+func renderPeers(b *strings.Builder, startRow, maxLines, left, width int) {
+	row := startRow
+	b.WriteString(fmt.Sprintf("\033[%d;%dH║ %-4s %-22s %-14s %-5s %-8s %s",
+		row, left, "#", "Name", "IP", "On", "HS", ""))
+	padEnd(b, row, left+width-2, width)
 	row++
 
-	// Cap selection
-	n := len(peers.Peers)
-	if n > 0 {
-		if sel < 0 {
-			sel = 0
+	for i, p := range peers.Peers {
+		if row >= startRow+maxLines {
+			break
 		}
-		if sel >= n {
-			sel = n - 1
-		}
-	}
-
-	start := 0
-	if sel >= maxLines-1 {
-		start = sel - (maxLines - 2)
-	}
-	if start < 0 {
-		start = 0
-	}
-
-	for i := start; i < n && row < 3+maxLines; i++ {
-		p := peers.Peers[i]
 		indicator := "  "
 		if i == sel {
 			indicator = "▶ "
@@ -485,70 +567,69 @@ func renderPeers(b *strings.Builder, maxLines int) {
 			online = "✓"
 		}
 		hs := handshakeAgo(p.LatestHandshake)
-		name := sanitize(p.Name)
-		b.WriteString(fmt.Sprintf("\033[%d;1H%s%-4d %-20s %-14s %-6s %-8s %s",
-			row, indicator, i+1, trunc(name, 20), p.Address, online, hs, clearToEOL()))
+		b.WriteString(fmt.Sprintf("\033[%d;%dH║ %s%-4d %-22s %-14s %-5s %-8s",
+			row, left, indicator, i+1, trunc(sanitize(p.Name), 22), p.Address, online, hs))
+		padEnd(b, row, left+width-2, width)
 		row++
 	}
-	for ; row < 3+maxLines; row++ {
-		b.WriteString(fmt.Sprintf("\033[%d;1H%s", row, clearToEOL()))
+	for ; row < startRow+maxLines; row++ {
+		b.WriteString(fmt.Sprintf("\033[%d;%dH║", row, left))
+		padEnd(b, row, left+width-2, width)
 	}
 }
 
-func renderRequests(b *strings.Builder, maxLines int) {
-	row := 3
-	b.WriteString(fmt.Sprintf("\033[%d;1H%-4s %-20s %-14s %-12s %-10s %s",
-		row, "#", "Hostname", "IP", "Source", "Age", clearToEOL()))
+func renderRequests(b *strings.Builder, startRow, maxLines, left, width int) {
+	row := startRow
+	b.WriteString(fmt.Sprintf("\033[%d;%dH║ %-4s %-22s %-14s %-12s %-10s",
+		row, left, "#", "Hostname", "IP", "Source", "Age"))
+	padEnd(b, row, left+width-2, width)
 	row++
 
-	n := len(reqs.Requests)
-	if n > 0 {
-		if sel < 0 {
-			sel = 0
+	for i, r := range reqs.Requests {
+		if row >= startRow+maxLines {
+			break
 		}
-		if sel >= n {
-			sel = n - 1
-		}
-	}
-
-	for i := 0; i < n && row < 3+maxLines; i++ {
-		r := reqs.Requests[i]
 		indicator := "  "
 		if i == sel {
 			indicator = "▶ "
 		}
 		age := timeAgo(r.CreatedAt)
-		name := sanitize(r.Hostname)
-		b.WriteString(fmt.Sprintf("\033[%d;1H%s%-4d %-20s %-14s %-12s %-10s %s",
-			row, indicator, i+1, trunc(name, 20), r.Address, trunc(sanitize(r.SourceIP), 12), age, clearToEOL()))
+		b.WriteString(fmt.Sprintf("\033[%d;%dH║ %s%-4d %-22s %-14s %-12s %-10s",
+			row, left, indicator, i+1, trunc(sanitize(r.Hostname), 22), r.Address, trunc(sanitize(r.SourceIP), 12), age))
+		padEnd(b, row, left+width-2, width)
 		row++
 	}
-	if n == 0 {
-		b.WriteString(fmt.Sprintf("\033[%d;1H  (no pending requests)%s", row, clearToEOL()))
+	if len(reqs.Requests) == 0 {
+		b.WriteString(fmt.Sprintf("\033[%d;%dH║   (no pending requests)", row, left))
+		padEnd(b, row, left+width-2, width)
 		row++
 	}
-	for ; row < 3+maxLines; row++ {
-		b.WriteString(fmt.Sprintf("\033[%d;1H%s", row, clearToEOL()))
+	for ; row < startRow+maxLines; row++ {
+		b.WriteString(fmt.Sprintf("\033[%d;%dH║", row, left))
+		padEnd(b, row, left+width-2, width)
 	}
 }
 
-func renderStatus(b *strings.Builder, maxLines int) {
-	row := 3
+func renderStatus(b *strings.Builder, startRow, maxLines, left, width int) {
+	row := startRow
 	lines := []string{
-		fmt.Sprintf("  Daemon:      %s", colorOK(status.Daemon == "running")),
-		fmt.Sprintf("  WireGuard:   %s", colorOK(status.Wireguard == "ok")),
-		fmt.Sprintf("  Interface:   %s (port %s)", status.Interface, status.Port),
-		fmt.Sprintf("  Peers online: %d / %d", status.Online, status.Total),
-		"",
-		"  Peers:",
+		fmt.Sprintf("║   Daemon:       %s", colorOK(status.Daemon == "running")),
+		fmt.Sprintf("║   WireGuard:    %s", colorOK(status.Wireguard == "ok")),
+		fmt.Sprintf("║   Interface:    %s  port %s", status.Interface, status.Port),
+		fmt.Sprintf("║   Peers online: %d / %d", status.Online, status.Total),
+		"║",
+		"║   Peers:",
 	}
 	for _, line := range lines {
-		b.WriteString(fmt.Sprintf("\033[%d;1H%s%s", row, line, clearToEOL()))
+		if row >= startRow+maxLines {
+			break
+		}
+		b.WriteString(fmt.Sprintf("\033[%d;%dH%s", row, left, line))
+		padEnd(b, row, left+width-2, width)
 		row++
 	}
-
 	for _, p := range peers.Peers {
-		if row >= 3+maxLines {
+		if row >= startRow+maxLines {
 			break
 		}
 		dot := "●"
@@ -559,32 +640,30 @@ func renderStatus(b *strings.Builder, maxLines int) {
 		}
 		rx := formatBytes(p.TransferRx)
 		tx := formatBytes(p.TransferTx)
-		b.WriteString(fmt.Sprintf("\033[%d;1H    %s %-20s %s  rx:%s tx:%s%s",
-			row, dot, trunc(sanitize(p.Name), 20), p.Address, rx, tx, clearToEOL()))
+		b.WriteString(fmt.Sprintf("\033[%d;%dH║     %s %-20s %s  rx:%s tx:%s",
+			row, left, dot, trunc(sanitize(p.Name), 20), p.Address, rx, tx))
+		padEnd(b, row, left+width-2, width)
 		row++
 	}
-	for ; row < 3+maxLines; row++ {
-		b.WriteString(fmt.Sprintf("\033[%d;1H%s", row, clearToEOL()))
+	for ; row < startRow+maxLines; row++ {
+		b.WriteString(fmt.Sprintf("\033[%d;%dH║", row, left))
+		padEnd(b, row, left+width-2, width)
 	}
 }
 
-func renderLog(b *strings.Builder, maxLines int) {
-	start := len(logs) - maxLines
-	if start < 0 {
-		start = 0
+func renderLog(b *strings.Builder, startRow, maxLines, left, width int) {
+	offset := sel
+	if offset < 0 {
+		offset = 0
 	}
-	if sel >= len(logs) {
-		sel = len(logs) - 1
+	if offset > len(logs)-maxLines {
+		offset = len(logs) - maxLines
 	}
-	if sel < start {
-		start = sel
+	if offset < 0 {
+		offset = 0
 	}
-	end := start + maxLines
-	if end > len(logs) {
-		end = len(logs)
-	}
-	row := 3
-	for i := start; i < end; i++ {
+	row := startRow
+	for i := offset; i < len(logs) && row < startRow+maxLines; i++ {
 		line := logs[i]
 		color := ""
 		if strings.Contains(line, "approved") {
@@ -594,12 +673,23 @@ func renderLog(b *strings.Builder, maxLines int) {
 		} else if strings.Contains(line, "submitted") {
 			color = "\033[33m"
 		}
-		b.WriteString(fmt.Sprintf("\033[%d;1H%s%-.200s\033[0m%s", row, color, line, clearToEOL()))
+		prefix := "║  "
+		if i == sel {
+			prefix = "║ ▶"
+		}
+		b.WriteString(fmt.Sprintf("\033[%d;%dH%s%s%s\033[0m",
+			row, left, prefix, color, line))
+		padEnd(b, row, left+width-2, width)
 		row++
 	}
-	for ; row < 3+maxLines; row++ {
-		b.WriteString(fmt.Sprintf("\033[%d;1H%s", row, clearToEOL()))
+	for ; row < startRow+maxLines; row++ {
+		b.WriteString(fmt.Sprintf("\033[%d;%dH║", row, left))
+		padEnd(b, row, left+width-2, width)
 	}
+}
+
+func padEnd(b *strings.Builder, row, col, width int) {
+	b.WriteString(fmt.Sprintf("\033[%d;%dH║", row, col+1))
 }
 
 func handshakeAgo(s string) string {
@@ -608,7 +698,7 @@ func handshakeAgo(s string) string {
 	}
 	n, err := strconv.Atoi(s)
 	if err != nil {
-		return s
+		return "?"
 	}
 	sec := int(time.Now().Unix()) - n
 	if sec < 0 {
@@ -665,14 +755,12 @@ func trunc(s string, max int) string {
 }
 
 func sanitize(s string) string {
-	s = strings.ReplaceAll(s, "\\", "")
-	s = strings.ReplaceAll(s, "\r", "")
-	s = strings.ReplaceAll(s, "\n", "")
-	return s
-}
-
-func clearToEOL() string {
-	return "\033[K"
+	return strings.Map(func(r rune) rune {
+		if r == '\\' || r == '\r' || r == '\n' || r < ' ' {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 func colorOK(ok bool) string {
