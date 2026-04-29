@@ -186,27 +186,32 @@ init_wireguard_server() {
     header "Initializing WireGuard Server"
 
     local wg_conf="/etc/wireguard/wg0.conf"
+    local server_private=""
+    local server_public=""
+    local server_address="${WG_SUBNET%.*}.1/24"
+    local needs_init=true
 
     if [[ -f "$wg_conf" ]]; then
         warn "WireGuard config already exists at $wg_conf"
         if [[ -f "$PROJECT_DIR/server/peers.json" ]]; then
-            log "Found existing peers.json, importing..."
-            return
+            log "Found existing peers.json, WireGuard already initialized."
+            server_public=$(python3 -c "import json; print(json.load(open('$PROJECT_DIR/server/peers.json'))['server']['public_key'])" 2>/dev/null || echo "")
+            server_private=$(python3 -c "import json; print(json.load(open('$PROJECT_DIR/server/peers.json'))['server']['private_key'])" 2>/dev/null || echo "")
+            if [[ -n "$server_public" ]]; then
+                needs_init=false
+            fi
         fi
     fi
 
-    cd "$PROJECT_DIR"
+    if $needs_init; then
+        cd "$PROJECT_DIR"
 
-    log "Generating server key pair..."
-    local server_private
-    server_private=$(wg genkey)
-    local server_public
-    server_public=$(echo "$server_private" | wg pubkey)
+        log "Generating server key pair..."
+        server_private=$(wg genkey)
+        server_public=$(echo "$server_private" | wg pubkey)
 
-    local server_address="${WG_SUBNET%.*}.1/24"
-
-    log "Writing WireGuard config..."
-    cat > "$wg_conf" << WGCONF
+        log "Writing WireGuard config..."
+        cat > "$wg_conf" << WGCONF
 [Interface]
 Address = $server_address
 ListenPort = $WG_PORT
@@ -216,25 +221,25 @@ PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -D FORWARD -o wg0 -j A
 
 WGCONF
 
-    chmod 600 "$wg_conf"
-    log "Config written to $wg_conf"
+        chmod 600 "$wg_conf"
+        log "Config written to $wg_conf"
 
-    systemctl enable wg-quick@wg0 --quiet
-    systemctl restart wg-quick@wg0
+        systemctl enable wg-quick@wg0 --quiet
+        systemctl restart wg-quick@wg0
 
-    sleep 1
-    if wg show wg0 &>/dev/null; then
-        log "WireGuard interface wg0 is up"
-    else
-        error "Failed to start WireGuard interface wg0"
-        exit 1
-    fi
+        sleep 1
+        if wg show wg0 &>/dev/null; then
+            log "WireGuard interface wg0 is up"
+        else
+            error "Failed to start WireGuard interface wg0"
+            exit 1
+        fi
 
-    local api_key
-    api_key=$(openssl rand -hex 32 2>/dev/null || python3 -c "import secrets; print(secrets.token_hex(32))")
+        local api_key
+        api_key=$(openssl rand -hex 32 2>/dev/null || python3 -c "import secrets; print(secrets.token_hex(32))")
 
-    log "Writing peers.json..."
-    cat > "$PROJECT_DIR/server/peers.json" << PEERSJSON
+        log "Writing peers.json..."
+        cat > "$PROJECT_DIR/server/peers.json" << PEERSJSON
 {
   "server": {
     "public_key": "$server_public",
@@ -245,12 +250,28 @@ WGCONF
     "subnet": "$WG_SUBNET"
   },
   "peers": {},
+  "requests": {},
   "next_ip_suffix": 2
 }
 PEERSJSON
+    fi
+}
 
-    log "Writing config.env..."
+sync_config_env() {
+    # Always run — syncs config.env with the latest template keys
+    log "Syncing config.env..."
+
+    local api_key
+    if [[ -f "$CONFIG_FILE" ]]; then
+        api_key=$(grep MGMT_API_KEY "$CONFIG_FILE" 2>/dev/null | cut -d= -f2 || echo "")
+    fi
+    if [[ -z "$api_key" ]]; then
+        api_key=$(openssl rand -hex 32 2>/dev/null || python3 -c "import secrets; print(secrets.token_hex(32))")
+    fi
+
     local mgmt_listen="0.0.0.0:$MGMT_PORT"
+    local server_address="${WG_SUBNET%.*}.1/24"
+
     cat > "$CONFIG_FILE" << CONFIGEOF
 # WireGuard Management Layer Configuration
 WG_INTERFACE=wg0
@@ -269,7 +290,7 @@ AUDIT_LOG_PATH=/var/log/wg-mgmt/audit.log
 CONFIGEOF
 
     chmod 600 "$CONFIG_FILE"
-    log "Configuration saved"
+    log "config.env synced"
 
     # ── Set up audit log ──
     local log_dir="/var/log/wg-mgmt"
@@ -438,5 +459,6 @@ check_wireguard
 collect_info
 check_environment "$WG_PORT" "$MGMT_PORT"
 init_wireguard_server
+sync_config_env
 deploy_daemon
 print_summary
