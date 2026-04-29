@@ -115,7 +115,7 @@ collect_info() {
         existing_ip=$(grep SERVER_PUBLIC_IP "$CONFIG_FILE" 2>/dev/null | cut -d= -f2 || echo "")
         existing_wg_port=$(grep WG_PORT "$CONFIG_FILE" 2>/dev/null | cut -d= -f2 || echo "51820")
         existing_subnet=$(grep WG_SUBNET "$CONFIG_FILE" 2>/dev/null | cut -d= -f2 || echo "10.0.0.0/24")
-        existing_mgmt_port=$(grep MGMT_LISTEN "$CONFIG_FILE" 2>/dev/null | cut -d: -f3 || echo "58880")
+        existing_mgmt_port=$(grep MGMT_LISTEN "$CONFIG_FILE" 2>/dev/null | sed 's/.*://' || echo "58880")
         existing_dns=$(grep DEFAULT_DNS "$CONFIG_FILE" 2>/dev/null | cut -d= -f2 || echo "1.1.1.1,8.8.8.8")
 
         if [[ -n "$existing_ip" ]]; then

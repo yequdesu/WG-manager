@@ -15,10 +15,11 @@ if [[ ! -f "$CONFIG_FILE" ]]; then
 fi
 
 API_KEY=$(grep MGMT_API_KEY "$CONFIG_FILE" | cut -d= -f2)
-MGMT_LISTEN=$(grep MGMT_LISTEN "$CONFIG_FILE" | cut -d= -f2)
+MGMT_LISTEN=$(grep MGMT_LISTEN "$CONFIG_FILE" | sed 's/^[^=]*=//' | tr -d ' ')
 
 MGMT_HOST="${MGMT_LISTEN%:*}"
 MGMT_PORT="${MGMT_LISTEN##*:}"
+[ -z "$MGMT_PORT" ] && MGMT_PORT=58880
 
 if [[ "$MGMT_HOST" == "0.0.0.0" ]]; then
     MGMT_HOST="127.0.0.1"

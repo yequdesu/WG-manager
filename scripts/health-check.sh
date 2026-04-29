@@ -38,9 +38,10 @@ echo ""
 
 # Check management API health
 echo "--- Management API ---"
-MGMT_LISTEN=$(grep MGMT_LISTEN "$CONFIG_FILE" 2>/dev/null | cut -d= -f2 || echo "127.0.0.1:58880")
+MGMT_LISTEN=$(grep MGMT_LISTEN "$CONFIG_FILE" 2>/dev/null | sed 's/^[^=]*=//' | tr -d ' ' || echo "127.0.0.1:58880")
 MGMT_HOST="${MGMT_LISTEN%:*}"
 MGMT_PORT="${MGMT_LISTEN##*:}"
+[ -z "$MGMT_PORT" ] && MGMT_PORT=58880
 if [[ "$MGMT_HOST" == "0.0.0.0" ]]; then
     MGMT_HOST="127.0.0.1"
 fi
