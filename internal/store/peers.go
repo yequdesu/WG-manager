@@ -30,6 +30,7 @@ type Request struct {
 	Address    string `json:"address"`
 	Keepalive  int    `json:"keepalive"`
 	SourceIP   string `json:"source_ip"`
+	Status     string `json:"status"`
 	CreatedAt  string `json:"created_at"`
 	ExpiresAt  string `json:"expires_at"`
 }
@@ -313,7 +314,8 @@ func (s *State) ApproveRequest(id string) (Peer, error) {
 	}
 
 	s.Peers[r.Hostname] = peer
-	delete(s.Requests, id)
+	r.Status = "approved"
+	s.Requests[id] = r
 	return peer, nil
 }
 
@@ -326,7 +328,8 @@ func (s *State) RejectRequest(id string) (Request, error) {
 		return Request{}, fmt.Errorf("request %q not found", id)
 	}
 
-	delete(s.Requests, id)
+	r.Status = "rejected"
+	s.Requests[id] = r
 	return r, nil
 }
 
@@ -336,7 +339,9 @@ func (s *State) PendingRequests() []Request {
 
 	reqs := make([]Request, 0, len(s.Requests))
 	for _, r := range s.Requests {
-		reqs = append(reqs, r)
+		if r.Status == "" || r.Status == "pending" {
+			reqs = append(reqs, r)
+		}
 	}
 	return reqs
 }

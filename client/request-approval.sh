@@ -8,10 +8,31 @@ set -euo pipefail
 
 SERVER_IP="${1:-}"
 MGMT_PORT="${2:-58880}"
-CLIENT_NAME="${3:-$(hostname 2>/dev/null || echo "client")}"
+CLIENT_NAME="${3:-}"
 CLIENT_DNS="${4:-1.1.1.1,8.8.8.8}"
 POLL_INTERVAL=10
 POLL_TIMEOUT=300  # 5 minutes
+
+# Parse --name override
+for i in "$@"; do
+    case "$i" in
+        --name=*) CLIENT_NAME="${i#*=}" ;;
+        --name)   shift; CLIENT_NAME="$1" ;;
+    esac
+done
+# Trim leading args if --name was last arg
+if [[ "$CLIENT_NAME" == "$1" ]] && [[ "$1" != "${1#--}" ]]; then
+    CLIENT_NAME="${3:-}"
+fi
+
+sanitize_name() { echo "$1" | tr -cd '[:alnum:]-_' | head -c 32; }
+if [[ -z "$CLIENT_NAME" ]]; then
+    if [[ -t 0 ]] && [[ -z "$CLIENT_NAME" ]]; then
+        read -r -p "$(echo -e "\033[1mEnter peer name\033[0m [$(hostname)]: ")" CLIENT_NAME
+    fi
+    CLIENT_NAME="${CLIENT_NAME:-$(hostname 2>/dev/null || echo "client")}"
+fi
+CLIENT_NAME=$(sanitize_name "$CLIENT_NAME")
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'

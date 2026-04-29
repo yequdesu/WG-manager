@@ -391,7 +391,7 @@ func calcFrame() frame {
 	}
 	f.cw = f.bw - 2
 	f.cs = 4
-	f.ce = termH - 2
+	f.ce = termH - 1 // row above bottom bar
 	return f
 }
 
@@ -605,13 +605,17 @@ func renderLog(b *strings.Builder, f frame) {
 	if start < 0 { start = 0 }
 	if start > n-max && n > max { start = n - max }
 	row := f.cs
-	for i := start; i < n && row <= f.ce; i++ {
-		prefix := "  "
-		if i == sel { prefix = "> " }
-		writeRow(b, f, row,
-			fmt.Sprintf("%s%s", prefix, logs[i]),
-			i == sel)
-		row++
+	if n == 0 {
+		writeRow(b, f, row, "  (no log entries — run 'wg-mgmt-tui' as root, or check audit log path)", false)
+	} else {
+		for i := start; i < n && row <= f.ce; i++ {
+			prefix := "  "
+			if i == sel { prefix = "> " }
+			writeRow(b, f, row,
+				fmt.Sprintf("%s%s", prefix, logs[i]),
+				i == sel)
+			row++
+		}
 	}
 }
 

@@ -14,7 +14,10 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 CYAN='\033[0;36m'
+BOLD='\033[1m'
 NC='\033[0m'
+
+script_name="connect.sh"
 
 log()    { echo -e "${GREEN}[+]${NC} $*"; }
 warn()   { echo -e "${YELLOW}[!]${NC} $*"; }
@@ -218,8 +221,24 @@ install_wireguard
 WG_INTERFACE="wg0"
 WG_ALLOWED_IPS="__WG_ALLOWED_IPS__"
 
-HOSTNAME=$(get_hostname)
-register_with_server "$HOSTNAME"
+# ── Peer name ──
+PEER_NAME=""
+for arg in "$@"; do
+    case "$arg" in
+        --name=*) PEER_NAME="${arg#*=}" ;;
+        --name)   shift; PEER_NAME="$1" ;;
+    esac
+done
+if [[ -z "$PEER_NAME" ]]; then
+    if [[ -t 0 ]]; then
+        read -r -p "$(echo -e "${BOLD}Enter peer name${NC} [$(hostname)]: ")" PEER_NAME
+    fi
+    PEER_NAME="${PEER_NAME:-$(hostname 2>/dev/null || echo "client")}"
+fi
+sanitize_name() { echo "$1" | tr -cd '[:alnum:]-_' | head -c 32; }
+PEER_NAME=$(sanitize_name "$PEER_NAME")
+
+register_with_server "$PEER_NAME"
 write_config
 start_wireguard
 verify_connection

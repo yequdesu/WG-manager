@@ -330,6 +330,33 @@ func (h *Handler) RequestStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	switch req.Status {
+	case "approved":
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"status":     "approved",
+			"request_id": id,
+			"hostname":   req.Hostname,
+			"peer": map[string]interface{}{
+				"name":              req.Hostname,
+				"address":           fmt.Sprintf("%s/24", req.Address),
+				"private_key":       req.PrivateKey,
+				"server_public_key": h.store.Server().PublicKey,
+				"server_endpoint":   h.config.ServerEndpoint(),
+				"dns":               req.DNS,
+				"keepalive":         req.Keepalive,
+			},
+		})
+		return
+	case "rejected":
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"status":     "rejected",
+			"request_id": id,
+			"hostname":   req.Hostname,
+			"message":    "Your request was rejected by the admin.",
+		})
+		return
+	}
+
 	// Check if expired
 	expAt, err := time.Parse(time.RFC3339, req.ExpiresAt)
 	if err == nil && time.Now().UTC().After(expAt) {
