@@ -10,9 +10,10 @@ param(
 )
 
 if (-not $ServerIp -or $ServerIp -eq "__SERVER_IP__") {
-    Write-Host "Usage: .\request-approval.ps1 -ServerIp <IP> -PeerName <NAME>" -ForegroundColor Red
-    exit 1
+    $ServerIp = Read-Host "Server IP"
 }
+if (-not $ServerIp) { Write-Host "Server IP is required." -ForegroundColor Red; exit 1 }
+if ($MgmtPort -le 0) { $MgmtPort = Read-Host "Port [58880]"; if (-not $MgmtPort) { $MgmtPort = 58880 } }
 if (-not $PeerName) {
     $PeerName = Read-Host "Enter peer name"
     if (-not $PeerName) {
