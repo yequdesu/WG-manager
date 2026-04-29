@@ -282,9 +282,12 @@ PersistentKeepalive = %d
 }
 
 func (h *Handler) serveApprovalPS1(w http.ResponseWriter, r *http.Request) {
+	script := embedApprovalPs1
+	script = strings.ReplaceAll(script, "__SERVER_IP__", h.config.ServerPublicIP)
+	script = strings.ReplaceAll(script, "__MGMT_PORT__", portStr(h.config.MgmtListen))
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(embedApprovalPs1))
+	w.Write([]byte(script))
 }
 
 func (h *Handler) serveHTML(w http.ResponseWriter, r *http.Request) {

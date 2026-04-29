@@ -1,8 +1,8 @@
 # WireGuard Management Layer - Request Approval Client (Windows PowerShell)
 # Usage: powershell -ExecutionPolicy Bypass .\request-approval.ps1 -ServerIp <IP> -PeerName <NAME>
 param(
-    [string]$ServerIp,
-    [int]$MgmtPort = 58880,
+    [string]$ServerIp = "__SERVER_IP__",
+    [int]$MgmtPort = __MGMT_PORT__,
     [string]$PeerName = "",
     [string]$Dns = "1.1.1.1,8.8.8.8",
     [int]$PollInterval = 10,
