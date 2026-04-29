@@ -447,7 +447,7 @@ print_summary() {
     echo -e "  ${BOLD}API Key:${NC}       $api_key"
     echo ""
     echo -e "  ${BOLD}${CYAN}Linux / macOS:${NC}"
-    echo -e "    ${BOLD}curl -sSf http://${SERVER_PUBLIC_IP}:${mgmt_port}/api/v1/client-script | sudo bash${NC}"
+    echo -e "    ${BOLD}curl -sSf http://${SERVER_PUBLIC_IP}:${mgmt_port}/api/v1/client-script | sudo bash -s --${NC}"
     echo ""
     echo -e "  ${BOLD}${CYAN}Windows (cmd):${NC}"
     echo -e "    ${BOLD}curl -o wg0.conf \"http://${SERVER_PUBLIC_IP}:${mgmt_port}/api/v1/windows-config?name=%COMPUTERNAME%&key=${api_key}\"${NC}"

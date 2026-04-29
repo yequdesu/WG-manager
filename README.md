@@ -92,7 +92,7 @@ ufw allow 58880/tcp
 
 **Linux / macOS:**
 ```bash
-curl -sSf http://<SERVER_IP>:58880/api/v1/client-script | sudo bash
+curl -sSf http://<SERVER_IP>:58880/api/v1/client-script | sudo bash -s -- [--name my-device]
 ```
 
 **Windows (CMD):**
