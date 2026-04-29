@@ -120,6 +120,35 @@ while [[ $ELAPSED -lt $POLL_TIMEOUT ]]; do
         pending)
             echo -e "${CYAN}[${ELAPSED}s]${NC} Still waiting..."
             ;;
+        approved)
+            log "Request approved! Fetching configuration..."
+            APPROVED=true
+            PEER_ADDR=$(echo "$STATUS_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['peer']['address'])" 2>/dev/null || echo "")
+            PEER_KEY=$(echo "$STATUS_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['peer']['private_key'])" 2>/dev/null || echo "")
+            SRV_KEY=$(echo "$STATUS_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['peer']['server_public_key'])" 2>/dev/null || echo "")
+            SRV_EP=$(echo "$STATUS_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['peer']['server_endpoint'])" 2>/dev/null || echo "")
+            PEER_DNS=$(echo "$STATUS_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['peer']['dns'])" 2>/dev/null || echo "$CLIENT_DNS")
+            PEER_KA=$(echo "$STATUS_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['peer']['keepalive'])" 2>/dev/null || echo "25")
+
+            PEER_CONFIG=$(cat <<WGCONF
+[Interface]
+Address = $PEER_ADDR
+PrivateKey = $PEER_KEY
+DNS = $PEER_DNS
+
+[Peer]
+PublicKey = $SRV_KEY
+Endpoint = $SRV_EP
+AllowedIPs = 10.0.0.0/24
+PersistentKeepalive = $PEER_KA
+WGCONF
+)
+            break
+            ;;
+        rejected)
+            error "Request was rejected by the admin."
+            exit 1
+            ;;
         expired)
             error "Request has expired. Please submit a new request."
             exit 1
@@ -145,23 +174,6 @@ while [[ $ELAPSED -lt $POLL_TIMEOUT ]]; do
             ;;
     esac
 done
-
-if ! $APPROVED; then
-    if [[ $ELAPSED -ge $POLL_TIMEOUT ]]; then
-        echo ""
-        warn "Polling timed out after ${POLL_TIMEOUT}s."
-        warn "Your request (ID: $REQUEST_ID) may still be pending."
-        warn "Contact your admin or run this script again later."
-        exit 1
-    fi
-
-    # Try fetching config one more time
-    CONFIG_RESP=$(curl -s "http://${SERVER_IP}:${MGMT_PORT}/api/v1/windows-config?name=${CLIENT_NAME}" 2>/dev/null || echo "")
-    if echo "$CONFIG_RESP" | grep -q "PrivateKey"; then
-        PEER_CONFIG="$CONFIG_RESP"
-        APPROVED=true
-    fi
-fi
 
 if ! $APPROVED || [[ -z "$PEER_CONFIG" ]]; then
     error "Could not fetch configuration. Please contact your admin."
