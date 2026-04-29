@@ -94,12 +94,6 @@ func (s *State) Server() ServerConfig {
 	return s.server
 }
 
-func (s *State) SetServer(sc ServerConfig) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.server = sc
-}
-
 func (s *State) AddPeer(p Peer) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

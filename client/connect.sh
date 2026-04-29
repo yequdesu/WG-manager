@@ -100,7 +100,7 @@ DNS = $DNS
 [Peer]
 PublicKey = $SPUB
 Endpoint = $SEP
-AllowedIPs = 10.0.0.0/24
+AllowedIPs = __WG_ALLOWED_IPS__
 PersistentKeepalive = $KA
 EOF
 chmod 600 "$WG_CONF"

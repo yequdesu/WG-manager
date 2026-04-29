@@ -27,7 +27,6 @@ type Config struct {
 	PeerKeepalive        int
 	PeersDBPath          string
 	WGConfPath           string
-	ClientScriptTemplate string
 }
 
 func (c *Config) ServerEndpoint() string {
@@ -200,6 +199,7 @@ func (h *Handler) serveApprovalBash(w http.ResponseWriter, r *http.Request, name
 	script := embedApprovalSh
 	script = strings.ReplaceAll(script, "__SERVER_IP__", h.config.ServerPublicIP)
 	script = strings.ReplaceAll(script, "__MGMT_PORT__", portStr(h.config.MgmtListen))
+	script = strings.ReplaceAll(script, "__WG_ALLOWED_IPS__", h.config.WGSubnet)
 	if name != "" {
 		script = strings.ReplaceAll(script, "__PEER_NAME__", name)
 	}

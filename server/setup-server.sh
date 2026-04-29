@@ -285,7 +285,6 @@ DEFAULT_DNS=$DEFAULT_DNS
 PEER_KEEPALIVE=25
 PEERS_DB_PATH=$PROJECT_DIR/server/peers.json
 WG_CONF_PATH=/etc/wireguard/wg0.conf
-CLIENT_SCRIPT_TEMPLATE=$PROJECT_DIR/client/connect.sh
 AUDIT_LOG_PATH=/var/log/wg-mgmt/audit.log
 CONFIGEOF
 

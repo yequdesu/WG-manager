@@ -31,7 +31,6 @@ type AppConfig struct {
 	PeerKeepalive        int
 	PeersDBPath          string
 	WGConfPath           string
-	ClientScriptTemplate string
 	AuditLogPath         string
 }
 
@@ -51,7 +50,6 @@ func loadConfig(path string) (*AppConfig, error) {
 		PeerKeepalive:        25,
 		PeersDBPath:          "./server/peers.json",
 		WGConfPath:           "/etc/wireguard/wg0.conf",
-		ClientScriptTemplate: "./client/connect.sh",
 		AuditLogPath:         "/var/log/wg-mgmt/audit.log",
 	}
 
@@ -95,8 +93,6 @@ func loadConfig(path string) (*AppConfig, error) {
 			cfg.PeersDBPath = val
 		case "WG_CONF_PATH":
 			cfg.WGConfPath = val
-		case "CLIENT_SCRIPT_TEMPLATE":
-			cfg.ClientScriptTemplate = val
 		case "AUDIT_LOG_PATH":
 			cfg.AuditLogPath = val
 		}
@@ -177,7 +173,6 @@ func main() {
 		PeerKeepalive:        appCfg.PeerKeepalive,
 		PeersDBPath:          appCfg.PeersDBPath,
 		WGConfPath:           appCfg.WGConfPath,
-		ClientScriptTemplate: appCfg.ClientScriptTemplate,
 	}
 
 	srv := api.NewServer(apiCfg, state, wgMgr)

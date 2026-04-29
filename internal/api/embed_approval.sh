@@ -106,7 +106,7 @@ while [[ $ELAPSED -lt $POLL_TIMEOUT ]]; do
             SEP=$(echo "$SR" | python3 -c "import sys,json; print(json.load(sys.stdin)['peer']['server_endpoint'])" 2>/dev/null || echo "")
             DNS=$(echo "$SR" | python3 -c "import sys,json; print(json.load(sys.stdin)['peer']['dns'])" 2>/dev/null || echo "$DEFAULT_DNS")
             KA=$(echo "$SR" | python3 -c "import sys,json; print(json.load(sys.stdin)['peer']['keepalive'])" 2>/dev/null || echo "25")
-            PEER_CONFIG=$(printf "[Interface]\nAddress = %s\nPrivateKey = %s\nDNS = %s\n\n[Peer]\nPublicKey = %s\nEndpoint = %s\nAllowedIPs = 10.0.0.0/24\nPersistentKeepalive = %s\n" "$ADDR" "$KEY" "$DNS" "$SPUB" "$SEP" "$KA")
+            PEER_CONFIG=$(printf "[Interface]\nAddress = %s\nPrivateKey = %s\nDNS = %s\n\n[Peer]\nPublicKey = %s\nEndpoint = %s\nAllowedIPs = __WG_ALLOWED_IPS__\nPersistentKeepalive = %s\n" "$ADDR" "$KEY" "$DNS" "$SPUB" "$SEP" "$KA")
             break
             ;;
         rejected)  err "Request was REJECTED."; exit 1 ;;

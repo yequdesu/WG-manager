@@ -2,8 +2,6 @@ package wg
 
 import (
 	"bytes"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -166,14 +164,4 @@ func WriteFullConfig(cfgPath, iface string, listenPort int, keepalive int, serve
 	}
 
 	return nil
-}
-
-func GenerateAPIKey() string {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		for i := range b {
-			b[i] = byte(i ^ 0xAA)
-		}
-	}
-	return hex.EncodeToString(b)
 }
