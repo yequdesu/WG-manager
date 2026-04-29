@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"wire-guard-dev/internal/audit"
 	"wire-guard-dev/internal/store"
 	"wire-guard-dev/internal/wg"
 )
@@ -124,6 +125,8 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	audit.Log("peer_registered", auditFields("name", peer.Name, "ip", peer.Address, "source", remoteIP(r)))
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
 		"peer": map[string]interface{}{
@@ -204,6 +207,8 @@ func (h *Handler) WindowsConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	audit.Log("config_fetched", auditFields("name", name, "ip", ip, "source", remoteIP(r)))
+
 	conf := fmt.Sprintf(`[Interface]
 Address = %s/24
 PrivateKey = %s
@@ -220,6 +225,288 @@ PersistentKeepalive = %d
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s.conf", name))
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(conf))
+}
+
+// ── Request / Approval handlers ──────────────────
+
+func (h *Handler) SubmitRequest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	var req struct {
+		Hostname string `json:"hostname"`
+		DNS      string `json:"dns"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	req.Hostname = strings.TrimSpace(req.Hostname)
+	if req.Hostname == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "hostname is required"})
+		return
+	}
+
+	if h.store.HasPeer(req.Hostname) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "peer already exists"})
+		return
+	}
+
+	if h.hasPendingRequest(req.Hostname) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "a pending request for this hostname already exists"})
+		return
+	}
+
+	// Clean up expired requests
+	expired := h.store.ExpireRequests()
+	for _, e := range expired {
+		audit.Log("request_expired", auditFields("name", e.Hostname, "ip", e.Address, "request_id", e.ID))
+	}
+
+	dns := req.DNS
+	if dns == "" {
+		dns = h.config.DefaultDNS
+	}
+
+	privateKey, publicKey, err := h.wgMgr.GenKeyPair()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate keys"})
+		return
+	}
+
+	ip, err := h.store.NextAvailableIP(h.config.WGSubnet)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "no available IP addresses"})
+		return
+	}
+
+	requestID := store.GenerateRequestID()
+	sourceIP := remoteIP(r)
+
+	pendingReq := store.Request{
+		ID:         requestID,
+		Hostname:   req.Hostname,
+		DNS:        dns,
+		PrivateKey: privateKey,
+		PublicKey:  publicKey,
+		Address:    ip,
+		Keepalive:  h.config.PeerKeepalive,
+		SourceIP:   sourceIP,
+	}
+
+	if err := h.store.AddRequest(pendingReq); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save request"})
+		return
+	}
+
+	if err := h.store.Save(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist state"})
+		return
+	}
+
+	audit.Log("request_submitted", auditFields("name", req.Hostname, "ip", ip, "source", sourceIP, "request_id", requestID))
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":     "pending",
+		"request_id": requestID,
+		"message":    "Request submitted. Waiting for admin approval.",
+	})
+}
+
+func (h *Handler) RequestStatus(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/v1/request/")
+	if id == "" || id == r.URL.Path {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "request_id is required"})
+		return
+	}
+
+	// Check if request exists
+	req, ok := h.store.GetRequest(id)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"status": "not_found", "error": "request not found"})
+		return
+	}
+
+	// Check if expired
+	expAt, err := time.Parse(time.RFC3339, req.ExpiresAt)
+	if err == nil && time.Now().UTC().After(expAt) {
+		writeJSON(w, http.StatusGone, map[string]string{"status": "expired", "error": "request has expired"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":     "pending",
+		"request_id": id,
+		"hostname":   req.Hostname,
+		"message":    "Waiting for admin approval.",
+	})
+}
+
+func (h *Handler) ListRequests(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	expired := h.store.ExpireRequests()
+	for _, e := range expired {
+		audit.Log("request_expired", auditFields("name", e.Hostname, "ip", e.Address, "request_id", e.ID))
+	}
+
+	reqs := h.store.PendingRequests()
+
+	type reqInfo struct {
+		ID        string `json:"id"`
+		Hostname  string `json:"hostname"`
+		Address   string `json:"address"`
+		DNS       string `json:"dns"`
+		SourceIP  string `json:"source_ip"`
+		CreatedAt string `json:"created_at"`
+		ExpiresAt string `json:"expires_at"`
+	}
+
+	result := make([]reqInfo, 0, len(reqs))
+	for _, rq := range reqs {
+		result = append(result, reqInfo{
+			ID:        rq.ID,
+			Hostname:  rq.Hostname,
+			Address:   rq.Address,
+			DNS:       rq.DNS,
+			SourceIP:  rq.SourceIP,
+			CreatedAt: rq.CreatedAt,
+			ExpiresAt: rq.ExpiresAt,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"pending_count": len(result),
+		"requests":      result,
+	})
+}
+
+func (h *Handler) ApproveRequest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	id := strings.TrimPrefix(r.URL.Path, "/api/v1/requests/")
+	id = strings.TrimSuffix(id, "/approve")
+	if id == "" || id == r.URL.Path {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "request_id is required"})
+		return
+	}
+
+	peer, err := h.store.ApproveRequest(id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+
+	allowedIP := fmt.Sprintf("%s/32", peer.Address)
+	if err := h.wgMgr.AddPeerLive(h.config.WGInterface, peer.PublicKey, allowedIP, peer.Keepalive); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to add peer to wireguard"})
+		return
+	}
+
+	if err := h.writeConfigToDisk(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to write config"})
+		return
+	}
+
+	if err := h.store.Save(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist state"})
+		return
+	}
+
+	adminIP := remoteIP(r)
+	audit.Log("request_approved", auditFields("name", peer.Name, "ip", peer.Address, "admin", adminIP, "request_id", id))
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"peer": map[string]interface{}{
+			"name":            peer.Name,
+			"address":         fmt.Sprintf("%s/24", peer.Address),
+			"private_key":     peer.PrivateKey,
+			"public_key":      peer.PublicKey,
+			"server_public_key": h.store.Server().PublicKey,
+			"server_endpoint": h.config.ServerEndpoint(),
+			"dns":             peer.DNS,
+			"keepalive":       peer.Keepalive,
+		},
+	})
+}
+
+func (h *Handler) RejectRequest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	id := strings.TrimPrefix(r.URL.Path, "/api/v1/requests/")
+	if id == "" || id == r.URL.Path {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "request_id is required"})
+		return
+	}
+
+	rejected, err := h.store.RejectRequest(id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+
+	if err := h.store.Save(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist state"})
+		return
+	}
+
+	adminIP := remoteIP(r)
+	audit.Log("request_rejected", auditFields("name", rejected.Hostname, "ip", rejected.Address, "admin", adminIP, "request_id", id))
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"message": fmt.Sprintf("request %q rejected", rejected.Hostname),
+	})
+}
+
+func (h *Handler) ManageRequest(w http.ResponseWriter, r *http.Request) {
+	if strings.HasSuffix(r.URL.Path, "/approve") {
+		h.ApproveRequest(w, r)
+		return
+	}
+	if r.Method == http.MethodDelete {
+		h.RejectRequest(w, r)
+		return
+	}
+	writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "use POST .../approve or DELETE"})
+}
+
+func remoteIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
+func (h *Handler) hasPendingRequest(hostname string) bool {
+	for _, rq := range h.store.PendingRequests() {
+		if rq.Hostname == hostname {
+			return true
+		}
+	}
+	return false
+}
+
+func auditFields(pairs ...string) map[string]string {
+	m := make(map[string]string, len(pairs)/2)
+	for i := 0; i+1 < len(pairs); i += 2 {
+		m[pairs[i]] = pairs[i+1]
+	}
+	return m
 }
 
 func (h *Handler) ListPeers(w http.ResponseWriter, r *http.Request) {
@@ -318,6 +605,8 @@ func (h *Handler) DeletePeer(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist state"})
 		return
 	}
+
+	audit.Log("peer_deleted", auditFields("name", peer.Name, "ip", peer.Address, "admin", remoteIP(r)))
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,

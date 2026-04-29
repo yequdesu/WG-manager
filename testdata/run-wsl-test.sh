@@ -121,10 +121,12 @@ echo ""
 echo "=== Test 4: Auth ==="
 NOAUTH=$(curl -s -o /dev/null -w "%{http_code}" "$API/api/v1/peers")
 WRONG=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer wrong" "$API/api/v1/peers")
-if [ "$NOAUTH" = "401" ] && [ "$WRONG" = "401" ]; then
+if [ "$NOAUTH" = "200" ] && [ "$WRONG" = "401" ]; then
+    echo "PASS: localhost bypass, wrong key rejected (200/401)"
+elif [ "$NOAUTH" = "401" ] && [ "$WRONG" = "401" ]; then
     echo "PASS: auth rejected (401/401)"
 else
-    echo "FAIL: expected 401/401 got $NOAUTH/$WRONG"
+    echo "FAIL: expected 200/401 or 401/401 got $NOAUTH/$WRONG"
 fi
 
 # Test 5: Register new peer

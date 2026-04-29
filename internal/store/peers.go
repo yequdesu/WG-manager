@@ -1,6 +1,8 @@
 package store
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -19,6 +21,19 @@ type Peer struct {
 	CreatedAt  string `json:"created_at"`
 }
 
+type Request struct {
+	ID         string `json:"id"`
+	Hostname   string `json:"hostname"`
+	DNS        string `json:"dns"`
+	PrivateKey string `json:"private_key"`
+	PublicKey  string `json:"public_key"`
+	Address    string `json:"address"`
+	Keepalive  int    `json:"keepalive"`
+	SourceIP   string `json:"source_ip"`
+	CreatedAt  string `json:"created_at"`
+	ExpiresAt  string `json:"expires_at"`
+}
+
 type ServerConfig struct {
 	PublicKey  string `json:"public_key"`
 	PrivateKey string `json:"private_key"`
@@ -29,8 +44,9 @@ type ServerConfig struct {
 }
 
 type State struct {
-	server ServerConfig
-	Peers  map[string]Peer `json:"peers"`
+	server   ServerConfig
+	Peers    map[string]Peer    `json:"peers"`
+	Requests map[string]Request `json:"requests,omitempty"`
 
 	mu   sync.RWMutex `json:"-"`
 	path string       `json:"-"`
@@ -38,19 +54,22 @@ type State struct {
 
 func (s *State) MarshalJSON() ([]byte, error) {
 	type Alias struct {
-		Server ServerConfig   `json:"server"`
-		Peers  map[string]Peer `json:"peers"`
+		Server   ServerConfig      `json:"server"`
+		Peers    map[string]Peer   `json:"peers"`
+		Requests map[string]Request `json:"requests,omitempty"`
 	}
 	return json.Marshal(&Alias{
-		Server: s.server,
-		Peers:  s.Peers,
+		Server:   s.server,
+		Peers:    s.Peers,
+		Requests: s.Requests,
 	})
 }
 
 func (s *State) UnmarshalJSON(data []byte) error {
 	type Alias struct {
-		Server ServerConfig  `json:"server"`
-		Peers  map[string]Peer `json:"peers"`
+		Server   ServerConfig      `json:"server"`
+		Peers    map[string]Peer   `json:"peers"`
+		Requests map[string]Request `json:"requests,omitempty"`
 	}
 	var alias Alias
 	if err := json.Unmarshal(data, &alias); err != nil {
@@ -58,8 +77,12 @@ func (s *State) UnmarshalJSON(data []byte) error {
 	}
 	s.server = alias.Server
 	s.Peers = alias.Peers
+	s.Requests = alias.Requests
 	if s.Peers == nil {
 		s.Peers = make(map[string]Peer)
+	}
+	if s.Requests == nil {
+		s.Requests = make(map[string]Request)
 	}
 	return nil
 }
@@ -142,17 +165,19 @@ func (s *State) NextAvailableIP(subnet string) (string, error) {
 	}
 
 	serverIP := ipNet.IP
-	serverIP[len(serverIP)-1] = 1 // 10.0.0.1
+	serverIP[len(serverIP)-1] = 1
 
 	used := make(map[string]bool)
 	used[serverIP.String()] = true
 	for _, p := range s.Peers {
 		used[p.Address] = true
 	}
+	for _, r := range s.Requests {
+		used[r.Address] = true
+	}
 
 	ip := make(net.IP, len(ipNet.IP))
 	copy(ip, ipNet.IP)
-
 	for i := 2; i <= 254; i++ {
 		ip[len(ip)-1] = byte(i)
 		addr := ip.String()
@@ -186,8 +211,9 @@ func (s *State) Save() error {
 
 func Load(path string) (*State, error) {
 	s := &State{
-		Peers: make(map[string]Peer),
-		path:  path,
+		Peers:    make(map[string]Peer),
+		Requests: make(map[string]Request),
+		path:     path,
 	}
 
 	data, err := os.ReadFile(path)
@@ -209,6 +235,124 @@ func Load(path string) (*State, error) {
 	if s.Peers == nil {
 		s.Peers = make(map[string]Peer)
 	}
+	if s.Requests == nil {
+		s.Requests = make(map[string]Request)
+	}
 
 	return s, nil
+}
+
+// ── Request management ──────────────────────────
+
+func GenerateRequestID() string {
+	b := make([]byte, 12)
+	if _, err := rand.Read(b); err != nil {
+		for i := range b {
+			b[i] = byte((time.Now().UnixNano() >> (i * 4)) & 0xFF)
+		}
+	}
+	return hex.EncodeToString(b)
+}
+
+func (s *State) AddRequest(r Request) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.Requests[r.ID]; ok {
+		return fmt.Errorf("request %q already exists", r.ID)
+	}
+
+	for _, existing := range s.Requests {
+		if existing.Hostname == r.Hostname {
+			return fmt.Errorf("a pending request for %q already exists", r.Hostname)
+		}
+	}
+
+	if r.CreatedAt == "" {
+		r.CreatedAt = time.Now().UTC().Format(time.RFC3339)
+	}
+	if r.ExpiresAt == "" {
+		r.ExpiresAt = time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339)
+	}
+	if r.Keepalive == 0 {
+		r.Keepalive = 25
+	}
+
+	s.Requests[r.ID] = r
+	return nil
+}
+
+func (s *State) GetRequest(id string) (Request, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	r, ok := s.Requests[id]
+	return r, ok
+}
+
+func (s *State) ApproveRequest(id string) (Peer, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	r, ok := s.Requests[id]
+	if !ok {
+		return Peer{}, fmt.Errorf("request %q not found", id)
+	}
+
+	if _, ok := s.Peers[r.Hostname]; ok {
+		return Peer{}, fmt.Errorf("peer %q already exists", r.Hostname)
+	}
+
+	peer := Peer{
+		Name:       r.Hostname,
+		PublicKey:  r.PublicKey,
+		PrivateKey: r.PrivateKey,
+		Address:    r.Address,
+		DNS:        r.DNS,
+		Keepalive:  r.Keepalive,
+		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
+	}
+
+	s.Peers[r.Hostname] = peer
+	delete(s.Requests, id)
+	return peer, nil
+}
+
+func (s *State) RejectRequest(id string) (Request, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	r, ok := s.Requests[id]
+	if !ok {
+		return Request{}, fmt.Errorf("request %q not found", id)
+	}
+
+	delete(s.Requests, id)
+	return r, nil
+}
+
+func (s *State) PendingRequests() []Request {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	reqs := make([]Request, 0, len(s.Requests))
+	for _, r := range s.Requests {
+		reqs = append(reqs, r)
+	}
+	return reqs
+}
+
+func (s *State) ExpireRequests() []Request {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now().UTC()
+	var expired []Request
+	for id, r := range s.Requests {
+		expAt, err := time.Parse(time.RFC3339, r.ExpiresAt)
+		if err != nil || now.After(expAt) {
+			expired = append(expired, r)
+			delete(s.Requests, id)
+		}
+	}
+	return expired
 }

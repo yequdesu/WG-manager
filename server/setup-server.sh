@@ -265,9 +265,28 @@ PEER_KEEPALIVE=25
 PEERS_DB_PATH=$PROJECT_DIR/server/peers.json
 WG_CONF_PATH=/etc/wireguard/wg0.conf
 CLIENT_SCRIPT_TEMPLATE=$PROJECT_DIR/client/connect.sh
+AUDIT_LOG_PATH=/var/log/wg-mgmt/audit.log
 CONFIGEOF
 
+    chmod 600 "$CONFIG_FILE"
     log "Configuration saved"
+
+    # ── Set up audit log ──
+    local log_dir="/var/log/wg-mgmt"
+    mkdir -p "$log_dir"
+    chmod 750 "$log_dir"
+    cat > /etc/logrotate.d/wg-mgmt << LOGROTATE
+$log_dir/audit.log {
+    daily
+    rotate 30
+    missingok
+    notifempty
+    compress
+    delaycompress
+    create 0640 root root
+}
+LOGROTATE
+    log "Audit log configured: $log_dir/audit.log"
 }
 
 deploy_daemon() {
@@ -388,10 +407,19 @@ print_summary() {
     echo ""
     echo -e "    ${BOLD}(Then open WireGuard → Import Tunnel(s) → select wg0.conf)${NC}"
     echo ""
+    echo -e "  ${BOLD}${CYAN}Request Approval (no API key needed):${NC}"
+    echo -e "    ${BOLD}bash <(curl -sSf http://${SERVER_PUBLIC_IP}:${mgmt_port}/api/v1/client-script)${NC}"
+    echo -e "    ${BOLD}(or bash client/request-approval.sh ${SERVER_PUBLIC_IP} ${mgmt_port})${NC}"
+    echo ""
     echo -e "  ${YELLOW}Admin commands (run on server):${NC}"
-    echo -e "    curl -s http://127.0.0.1:${mgmt_port}/api/v1/peers \\"
+    echo -e "    # List pending requests"
+    echo -e "    curl -s http://127.0.0.1:${mgmt_port}/api/v1/requests \\"
     echo -e "         -H 'Authorization: Bearer ${api_key}' | python3 -m json.tool"
-    echo -e "    curl -s -X DELETE http://127.0.0.1:${mgmt_port}/api/v1/peers/<name> \\"
+    echo -e "    # Approve a request"
+    echo -e "    curl -s -X POST http://127.0.0.1:${mgmt_port}/api/v1/requests/<id>/approve \\"
+    echo -e "         -H 'Authorization: Bearer ${api_key}'"
+    echo -e "    # Reject a request"
+    echo -e "    curl -s -X DELETE http://127.0.0.1:${mgmt_port}/api/v1/requests/<id> \\"
     echo -e "         -H 'Authorization: Bearer ${api_key}'"
     echo ""
     echo -e "  ${YELLOW}Important:${NC} Ensure your cloud firewall/security group allows:"

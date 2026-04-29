@@ -23,6 +23,18 @@ func NewServer(cfg *Config, s *store.State, m *wg.Manager) *http.Server {
 	windowsConfigHandler := authOrLocalMiddleware(cfg.APIKey)(h.WindowsConfig)
 	mux.HandleFunc("/api/v1/windows-config", windowsConfigHandler)
 
+	// Request / Approval (no auth, rate limited)
+	rateLimit := RateLimitMiddleware(3)
+	mux.HandleFunc("/api/v1/request", rateLimit(h.SubmitRequest))
+	mux.HandleFunc("/api/v1/request/", h.RequestStatus)
+
+	// Admin: manage requests
+	listReqsHandler := AuthMiddleware(cfg.APIKey)(AdminOnlyMiddleware(h.ListRequests))
+	mux.Handle("/api/v1/requests", methodGuard(http.MethodGet, listReqsHandler))
+
+	reqManageHandler := AuthMiddleware(cfg.APIKey)(AdminOnlyMiddleware(h.ManageRequest))
+	mux.Handle("/api/v1/requests/", reqManageHandler)
+
 	listPeersHandler := AuthMiddleware(cfg.APIKey)(AdminOnlyMiddleware(h.ListPeers))
 	mux.Handle("/api/v1/peers", methodGuard(http.MethodGet, listPeersHandler))
 

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"wire-guard-dev/internal/api"
+	"wire-guard-dev/internal/audit"
 	"wire-guard-dev/internal/store"
 	"wire-guard-dev/internal/wg"
 )
@@ -31,6 +32,7 @@ type AppConfig struct {
 	PeersDBPath          string
 	WGConfPath           string
 	ClientScriptTemplate string
+	AuditLogPath         string
 }
 
 func loadConfig(path string) (*AppConfig, error) {
@@ -50,6 +52,7 @@ func loadConfig(path string) (*AppConfig, error) {
 		PeersDBPath:          "./server/peers.json",
 		WGConfPath:           "/etc/wireguard/wg0.conf",
 		ClientScriptTemplate: "./client/connect.sh",
+		AuditLogPath:         "/var/log/wg-mgmt/audit.log",
 	}
 
 	lines := strings.Split(string(data), "\n")
@@ -94,6 +97,8 @@ func loadConfig(path string) (*AppConfig, error) {
 			cfg.WGConfPath = val
 		case "CLIENT_SCRIPT_TEMPLATE":
 			cfg.ClientScriptTemplate = val
+		case "AUDIT_LOG_PATH":
+			cfg.AuditLogPath = val
 		}
 	}
 
@@ -150,6 +155,13 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to load peer state: %v", err)
 	}
+
+	if err := audit.Init(appCfg.AuditLogPath); err != nil {
+		log.Printf("Warning: audit log init failed: %v", err)
+	} else {
+		audit.Log("daemon_started", map[string]string{"version": "1.0.0"})
+	}
+	defer audit.Close()
 
 	wgMgr := wg.NewManager()
 
