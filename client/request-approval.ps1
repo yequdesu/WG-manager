@@ -91,6 +91,10 @@ while ($elapsed -lt $PollTimeout) {
             Write-Host "[x] Request not found. It may have been processed already." -ForegroundColor Red
             exit 1
         }
+        default {
+            Write-Host "[${elapsed}s] Status: $($statusResp.status)" -ForegroundColor Yellow
+            Write-Host "    Raw response: $statusResp" -ForegroundColor DarkGray
+        }
     }
 
     if ($approved) { break }
@@ -111,8 +115,19 @@ Write-Host "[+] Config saved to: $confPath" -ForegroundColor Green
 Write-Host ""
 
 # ── Phase 4: Try auto-import into WireGuard ───────────
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+
 $wgPath = "$env:ProgramFiles\WireGuard\wireguard.exe"
-if (Test-Path $wgPath) {
+if (-not (Test-Path $wgPath)) {
+    Write-Host "[!] WireGuard not installed." -ForegroundColor Yellow
+    Write-Host "    Download: https://download.wireguard.com/windows-client/" -ForegroundColor Yellow
+    Write-Host "    Then: Import Tunnel(s) -> $confPath" -ForegroundColor Yellow
+} elseif (-not $isAdmin) {
+    Write-Host "[!] Administrator privileges required for auto-import." -ForegroundColor Yellow
+    Write-Host "    Re-run as administrator:" -ForegroundColor Yellow
+    Write-Host "      Start-Process powershell -Verb RunAs -ArgumentList '-ExecutionPolicy Bypass -File request-approval.ps1 -ServerIp $ServerIp -PeerName $PeerName'" -ForegroundColor Yellow
+    Write-Host "    Or import manually: Open WireGuard -> Import Tunnel(s) -> $confPath" -ForegroundColor Yellow
+} else {
     Write-Host "[+] Importing tunnel into WireGuard..." -ForegroundColor Green
     & $wgPath /installtunnelservice $confPath 2>&1 | Out-Null
     if ($LASTEXITCODE -eq 0) {
@@ -121,10 +136,6 @@ if (Test-Path $wgPath) {
         Write-Host "[!] Auto-import failed. Import manually:" -ForegroundColor Yellow
         Write-Host "    Open WireGuard -> Import Tunnel(s) -> $confPath" -ForegroundColor Yellow
     }
-} else {
-    Write-Host "[!] WireGuard not installed." -ForegroundColor Yellow
-    Write-Host "    Download: https://download.wireguard.com/windows-client/" -ForegroundColor Yellow
-    Write-Host "    Then: Import Tunnel(s) -> $confPath" -ForegroundColor Yellow
 }
 
 Write-Host ""
