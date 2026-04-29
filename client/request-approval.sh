@@ -23,18 +23,16 @@ log()    { echo -e "${GREEN}[+]${NC} $*"; }
 warn()   { echo -e "${YELLOW}[!]${NC} $*"; }
 error()  { echo -e "${RED}[x]${NC} $*"; }
 
+# Auto-sudo: re-exec with sudo if not root
+if [[ "$(id -u)" -ne 0 ]]; then
+    exec sudo bash "$0" "$@"
+fi
+
 if [[ -z "$SERVER_IP" ]]; then
     echo "Usage: bash request-approval.sh <SERVER_IP> [PORT] [NAME] [DNS]"
     echo "Example: bash request-approval.sh 1.2.3.4 58880"
     exit 1
 fi
-
-check_root() {
-    if [[ "$(id -u)" -ne 0 ]]; then
-        error "This script must be run as root (sudo bash)"
-        exit 1
-    fi
-}
 
 detect_os() {
     if [[ "$(uname)" == "Darwin" ]]; then OS="macos"
@@ -61,7 +59,6 @@ echo -e "${CYAN}║   WG-Manager — Request Access             ║${NC}"
 echo -e "${CYAN}╚════════════════════════════════════════════╝${NC}"
 echo ""
 
-check_root
 detect_os
 install_wireguard
 
