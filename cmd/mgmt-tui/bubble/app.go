@@ -30,6 +30,12 @@ type model struct {
 	height    int
 	loading   bool
 	quitting  bool
+
+	winX     int
+	winY     int
+	dragging bool
+	dragOffX int
+	dragOffY int
 }
 
 type fetchMsg struct {
@@ -47,6 +53,8 @@ func NewModel(cfg Config, theme Theme, style int) model {
 		theme:   theme,
 		style:   style,
 		loading: true,
+		winX:    3,
+		winY:    1,
 	}
 }
 
@@ -74,7 +82,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		if m.style == StyleWindow {
+			m.winX = (m.width - 82) / 2
+			if m.winX < 1 {
+				m.winX = 1
+			}
+			m.winY = (m.height - 24) / 2
+			if m.winY < 1 {
+				m.winY = 1
+			}
+		}
 		return m, nil
+
+	case tea.MouseMsg:
+		return m.handleMouse(msg)
 
 	case tea.KeyMsg:
 		if m.quitting {
@@ -126,7 +147,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "x":
 			return m.handleDeny()
 		case "ctrl+t":
-			m.style = (m.style + 1) % 3
+			m.style = (m.style + 1) % 4
 			m.theme = ThemeByIndex(m.style)
 			return m, nil
 		}
@@ -153,6 +174,84 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case TickMsg:
 		return m, tea.Batch(fetchCmd(m.cfg), tickCmd())
+	}
+
+	return m, nil
+}
+
+func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if m.style != StyleWindow {
+		return m, nil
+	}
+
+	mx, my := msg.X, msg.Y
+
+	if m.dragging && msg.Action == tea.MouseActionMotion {
+		m.winX = mx - m.dragOffX
+		m.winY = my - m.dragOffY
+		if m.winX < 0 {
+			m.winX = 0
+		}
+		if m.winY < 0 {
+			m.winY = 0
+		}
+		return m, nil
+	}
+
+	if msg.Button != tea.MouseButtonLeft || msg.Action != tea.MouseActionPress {
+		return m, nil
+	}
+
+	winW := 82
+	titleRight := m.winX + winW - 1
+
+	if my == m.winY && mx >= titleRight-2 && mx <= titleRight {
+		m.quitting = true
+		return m, tea.Quit
+	}
+
+	if my == m.winY {
+		m.dragging = true
+		m.dragOffX = mx - m.winX
+		m.dragOffY = my - m.winY
+		return m, nil
+	}
+
+	if msg.Action == tea.MouseActionRelease {
+		m.dragging = false
+		return m, nil
+	}
+
+	if m.dragging && msg.Action == tea.MouseActionRelease {
+		m.dragging = false
+	}
+
+	tabY := m.winY + 1
+	if my == tabY {
+		tabX := m.winX + 2
+		tabs := []string{"Peers", "Requests", "Status", "Log"}
+		for i, name := range tabs {
+			w := len(name) + 4
+			if mx >= tabX && mx < tabX+w {
+				m.tab = i
+				m.cursor = 0
+				return m, nil
+			}
+			tabX += w
+		}
+	}
+
+	contentY := m.winY + 3
+	if my > contentY {
+		rowIdx := my - contentY - 1
+		if m.tab == 0 && rowIdx >= 0 && rowIdx < len(m.peers) {
+			m.cursor = rowIdx
+			return m, nil
+		}
+		if m.tab == 1 && rowIdx >= 0 && rowIdx < len(m.requests) {
+			m.cursor = rowIdx
+			return m, nil
+		}
 	}
 
 	return m, nil
@@ -229,9 +328,86 @@ func (m model) View() string {
 		return m.viewDashboard()
 	case StyleMinimal:
 		return m.viewMinimal()
+	case StyleWindow:
+		return m.viewWindow()
 	default:
 		return m.viewClassic()
 	}
+}
+
+func (m model) viewWindow() string {
+	winW := 82
+
+	titleStr := m.theme.WinTitle.Render(" WG-Manager ")
+	closeStr := m.theme.CloseBtn.Render(" × ")
+	gap := winW - 4 - lipgloss.Width(titleStr) - lipgloss.Width(closeStr)
+	if gap < 0 {
+		gap = 0
+	}
+	titleBar := m.theme.WinTitle.Render(titleStr + strings.Repeat(" ", gap) + closeStr)
+
+	tabs := []string{"Peers", "Requests", "Status", "Log"}
+	var tabBar strings.Builder
+	tabBar.WriteString(" ")
+	for i, t := range tabs {
+		if i == m.tab {
+			tabBar.WriteString(m.theme.TabActive.Render(" " + t + " "))
+		} else {
+			tabBar.WriteString(m.theme.Tab.Render(" " + t + " "))
+		}
+	}
+	tabLine := m.theme.TabBar.Render(tabBar.String())
+
+	var content string
+	switch m.tab {
+	case 0:
+		content = viewPeers(m.theme, m.peers, m.cursor, winW-4)
+	case 1:
+		content = viewRequests(m.theme, m.requests, m.cursor)
+	case 2:
+		content = viewStatus(m.theme, m.status, m.endpoint)
+	case 3:
+		content = viewLog(m.theme, m.logs, m.logOffset, 16)
+	}
+
+	help := " Tab:Switch  ↑↓:Select "
+	switch m.tab {
+	case 1:
+		help += " a:Approve  d:Deny "
+	case 0:
+		help += " d:Delete "
+	case 3:
+		help += " j/k:Scroll "
+	}
+	help += " r:Refresh  Ctrl+T:Theme  q:Quit "
+	helpLine := m.theme.Help.Render(" " + help)
+
+	sections := []string{
+		titleBar,
+		tabLine,
+		"",
+		content,
+		"",
+		helpLine,
+	}
+
+	if m.msg != "" {
+		sections = append(sections, m.theme.Status.Render("  "+m.msg))
+	}
+
+	body := strings.Join(sections, "\n")
+	framed := m.theme.WinFrame.Width(winW).Render(body)
+
+	desktopStyle := m.theme.Desktop.
+		Width(m.width).
+		Height(m.height)
+
+	placeStyle := lipgloss.NewStyle().
+		PaddingLeft(m.winX).
+		PaddingTop(m.winY).
+		Render(framed)
+
+	return desktopStyle.Render(placeStyle)
 }
 
 func (m model) viewClassic() string {

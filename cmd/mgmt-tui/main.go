@@ -22,6 +22,8 @@ func main() {
 			style = "dashboard"
 		case arg == "--style=minimal" || arg == "--style=mini":
 			style = "minimal"
+		case arg == "--style=window" || arg == "--style=win":
+			style = "window"
 		case arg == "--style=classic":
 			style = "classic"
 		}
@@ -46,6 +48,8 @@ func main() {
 		styleIdx = bubble.StyleDashboard
 	case "minimal":
 		styleIdx = bubble.StyleMinimal
+	case "window":
+		styleIdx = bubble.StyleWindow
 	}
 
 	m := bubble.NewModel(bubble.Config{
@@ -54,7 +58,12 @@ func main() {
 		AuditLog: cfg.AuditLog,
 	}, theme, styleIdx)
 
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	opts := []tea.ProgramOption{tea.WithAltScreen()}
+	if style == "window" {
+		opts = append(opts, tea.WithMouseCellMotion())
+	}
+
+	p := tea.NewProgram(m, opts...)
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)

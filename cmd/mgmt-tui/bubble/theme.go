@@ -12,6 +12,7 @@ const (
 	StyleClassic   = 0
 	StyleDashboard = 1
 	StyleMinimal   = 2
+	StyleWindow    = 3
 )
 
 type Theme struct {
@@ -32,6 +33,10 @@ type Theme struct {
 	TableRow  lipgloss.Style
 	SparkHi   lipgloss.Style
 	SparkLo   lipgloss.Style
+	Desktop   lipgloss.Style
+	WinFrame  lipgloss.Style
+	WinTitle  lipgloss.Style
+	CloseBtn  lipgloss.Style
 }
 
 func ThemeByName(name string) Theme {
@@ -40,6 +45,8 @@ func ThemeByName(name string) Theme {
 		return ThemeDashboard()
 	case "minimal", "mini":
 		return ThemeMinimal()
+	case "window", "win":
+		return ThemeWindow()
 	default:
 		return ThemeClassic()
 	}
@@ -51,6 +58,8 @@ func ThemeByIndex(idx int) Theme {
 		return ThemeDashboard()
 	case StyleMinimal:
 		return ThemeMinimal()
+	case StyleWindow:
+		return ThemeWindow()
 	default:
 		return ThemeClassic()
 	}
@@ -171,5 +180,70 @@ func ThemeMinimal() Theme {
 		TableRow: lipgloss.NewStyle().Foreground(lipgloss.Color("15")),
 		SparkHi:  lipgloss.NewStyle().Foreground(lipgloss.Color("10")),
 		SparkLo:  lipgloss.NewStyle().Foreground(lipgloss.Color("8")),
+		Desktop:  lipgloss.NewStyle(),
+		WinFrame: lipgloss.NewStyle(),
+		WinTitle: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("15")).
+			Bold(true),
+		CloseBtn: lipgloss.NewStyle(),
+	}
+}
+
+func ThemeWindow() Theme {
+	return Theme{
+		Name: "window",
+		Base:   lipgloss.NewStyle(),
+		Desktop: lipgloss.NewStyle().Width(120).Height(40),
+		WinFrame: lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder(), true).
+			BorderForeground(lipgloss.Color("63")).
+			Background(lipgloss.Color("17")),
+		WinTitle: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("15")).
+			Background(lipgloss.Color("63")).
+			Bold(true).
+			Padding(0, 1),
+		CloseBtn: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("15")).
+			Background(lipgloss.Color("63")).
+			Padding(0, 1),
+		Title: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("15")).
+			Bold(true),
+		Tab: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("246")).
+			Background(lipgloss.Color("17")).
+			Padding(0, 2),
+		TabActive: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("15")).
+			Background(lipgloss.Color("23")).
+			Padding(0, 2).
+			Bold(true),
+		TabBar: lipgloss.NewStyle().Background(lipgloss.Color("17")),
+		Panel: lipgloss.NewStyle().
+			Background(lipgloss.Color("17")).
+			Padding(0, 1),
+		Online: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("48")).
+			Background(lipgloss.Color("17")),
+		Offline: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("240")).
+			Background(lipgloss.Color("17")),
+		Selected: lipgloss.NewStyle().
+			Background(lipgloss.Color("23")).
+			Foreground(lipgloss.Color("15")).
+			Bold(true),
+		Help:   lipgloss.NewStyle().Foreground(lipgloss.Color("246")).Background(lipgloss.Color("17")),
+		Status: lipgloss.NewStyle().Foreground(lipgloss.Color("63")).Bold(true).Background(lipgloss.Color("17")),
+		Cursor: "▸",
+		TableHdr: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("246")).
+			Background(lipgloss.Color("17")).
+			Bold(true),
+		TableRow: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("252")).
+			Background(lipgloss.Color("17")),
+		SparkHi:  lipgloss.NewStyle().Foreground(lipgloss.Color("48")).Background(lipgloss.Color("17")),
+		SparkLo:  lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Background(lipgloss.Color("17")),
 	}
 }
