@@ -14,6 +14,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 	"unsafe"
 )
 
@@ -491,7 +492,7 @@ func render() {
 		help += " j/k:Scroll "
 	}
 	help += " r:Refresh  q:Quit "
-	rem := f.cw - len(help)
+	rem := f.cw - utf8.RuneCountInString(help)
 	if rem < 0 {
 		rem = 0
 	}
