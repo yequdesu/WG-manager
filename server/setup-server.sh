@@ -8,6 +8,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 CONFIG_FILE="$PROJECT_DIR/config.env"
 
+export GOPROXY="${GOPROXY:-https://goproxy.cn,direct}"
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
@@ -106,7 +108,7 @@ check_environment() {
 
     if command -v go &>/dev/null; then
         local gov
-        gov=$(go version 2>/dev/null | grep -oP 'go\d+\.\d+' | head -1 || echo "unknown")
+        gov=$(go version 2>/dev/null | awk '{print $3}' || echo "unknown")
         log "Go: $gov"
     else
         warn "Go not installed — daemon cannot be built"
@@ -267,13 +269,17 @@ init_wireguard_server() {
 
     if [[ -f "$wg_conf" ]]; then
         warn "WireGuard config already exists at $wg_conf"
-        if [[ -f "$PROJECT_DIR/server/peers.json" ]]; then
-            log "Found existing peers.json, WireGuard already initialized."
-            server_public=$(python3 -c "import json; print(json.load(open('$PROJECT_DIR/server/peers.json'))['server']['public_key'])" 2>/dev/null || echo "")
-            server_private=$(python3 -c "import json; print(json.load(open('$PROJECT_DIR/server/peers.json'))['server']['private_key'])" 2>/dev/null || echo "")
-            if [[ -n "$server_public" ]]; then
-                needs_init=false
-            fi
+        server_private=$(grep -m1 "PrivateKey" "$wg_conf" 2>/dev/null | awk '{print $NF}' || echo "")
+        if [[ -n "$server_private" ]]; then
+            server_public=$(echo "$server_private" | wg pubkey 2>/dev/null || echo "")
+        fi
+        if [[ -z "$server_public" ]] && wg show wg0 &>/dev/null; then
+            server_public=$(wg show wg0 public-key 2>/dev/null || echo "")
+            server_private=$(wg show wg0 private-key 2>/dev/null || echo "")
+        fi
+        if [[ -n "$server_public" ]]; then
+            needs_init=false
+            log "Existing WireGuard server keys found — reusing."
         fi
     fi
 
@@ -403,8 +409,6 @@ deploy_daemon() {
         error "Go is not installed. Please install golang-go: sudo apt install golang-go"
         exit 1
     fi
-
-    export GOPROXY="https://goproxy.cn,direct"
 
     local src_hash=""
     if [[ -d "$PROJECT_DIR/cmd" ]] && command -v git &>/dev/null; then
