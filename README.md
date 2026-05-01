@@ -177,19 +177,28 @@ curl -o wg0.conf "http://118.178.171.166:58880/connect?mode=direct&name=MYPC"
 
 ##### Mobile (QR Code)
 
-Admin generates a QR code on the server:
+WireGuard's official app has a built-in "Scan from QR code" feature. WG-Manager provides QR codes in two ways:
+
+**Scenario A: Printed after PC approval**
+
+When an approval completes on Linux / WSL / PowerShell, the terminal prints a QR command:
 
 ```bash
-# Approval mode — scan to open the HTML approval page
-curl -s "http://localhost:58880/connect?qrcode" -o join.svg
-
-# Direct mode — auto-register + return .conf, phone imports directly
-curl -s "http://localhost:58880/connect?qrcode&mode=direct&name=my-phone" -o phone.svg
+# After approval on Linux/WSL:
+# Mobile: curl "http://118.178.171.166:58880/connect?qrcode&mode=direct&name=DEVICE" -o qr.svg
+#   → scan with WireGuard app
 ```
 
-Share the SVG file with the user. On mobile:
-- **Approval QR**: scan to open HTML page → enter peer name → submit → wait for admin → copy config to WireGuard app
-- **Direct QR**: open WireGuard app → scan QR → directly imports the tunnel
+Run that command to get an SVG file. Send it to the phone → WireGuard App → Scan QR → tunnel imports directly.
+
+**Scenario B: Admin generates directly on server**
+
+```bash
+# Auto-registers peer "alice-phone" and outputs QR
+curl -s "http://localhost:58880/connect?qrcode&mode=direct&name=alice-phone" -o alice.svg
+```
+
+Share `alice.svg` with the user → WireGuard App → Scan QR → connected.
 
 ---
 

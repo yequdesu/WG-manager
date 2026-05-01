@@ -179,19 +179,28 @@ curl -o wg0.conf "http://118.178.171.166:58880/connect?mode=direct&name=MYPC"
 
 ##### 移动端（QR 码）
 
-管理员在服务器上为移动端生成 QR 码：
+WireGuard 官方 App 自带"Scan from QR code"功能。WG-Manager 提供两种获取 QR 的方式：
+
+**场景 A：PC/WSL 审批通过后打印 QR 命令**
+
+在 Linux / WSL / PowerShell 上走审批流程通过后，终端会自动打印一条 QR 命令：
 
 ```bash
-# 生成审批模式入口 QR（扫码打开审批页面）
-curl -s "http://localhost:58880/connect?qrcode" -o join.svg
-
-# 生成直连 QR（自动注册 + 返回 .conf，手机可直接导入 WireGuard）
-curl -s "http://localhost:58880/connect?qrcode&mode=direct&name=my-phone" -o phone.svg
+# Linux / WSL 审批通过后输出:
+# Mobile: curl "http://118.178.171.166:58880/connect?qrcode&mode=direct&name=DESKTOP-XXX" -o qr.svg
+#   → scan with WireGuard app
 ```
 
-将 SVG 文件发送给用户。用户用手机：
-- **审批模式 QR**：扫码打开 HTML 页面 → 输入 peer 名称 → 提交 → 等待管理员批准 → 页面显示配置 → 复制到 WireGuard App
-- **直连 QR**：打开 WireGuard App → 扫描 QR → 直接导入连接
+执行该命令得到一个 SVG 文件，发送到手机，打开 WireGuard App → Scan QR → 隧道直接导入。
+
+**场景 B：管理员在服务器上直接为手机生成**
+
+```bash
+# 自动注册 peer "alice-phone" 并生成 QR（手机可直接扫码）
+curl -s "http://localhost:58880/connect?qrcode&mode=direct&name=alice-phone" -o alice.svg
+```
+
+将 `alice.svg` 发送给用户 → WireGuard App → Scan QR → 连接。
 
 ---
 
