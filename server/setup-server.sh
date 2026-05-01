@@ -404,6 +404,8 @@ deploy_daemon() {
         exit 1
     fi
 
+    export GOPROXY="https://goproxy.cn,direct"
+
     local src_hash=""
     if [[ -d "$PROJECT_DIR/cmd" ]] && command -v git &>/dev/null; then
         cd "$PROJECT_DIR"

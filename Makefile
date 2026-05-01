@@ -10,6 +10,7 @@ GOOS        ?= linux
 GOARCH      ?= amd64
 CGO_ENABLED ?= 0
 LDFLAGS     := -s -w
+GOPROXY     ?= https://goproxy.cn,direct
 
 help:
 	@echo "WireGuard Management Layer"
@@ -26,7 +27,7 @@ help:
 build:
 	@echo "Building $(BINARY_NAME) for $(GOOS)/$(GOARCH)..."
 	@mkdir -p $(OUTPUT_DIR)
-	GOOS=$(GOOS) GOARCH=$(GOARCH) CGO_ENABLED=$(CGO_ENABLED) \
+	GOOS=$(GOOS) GOARCH=$(GOARCH) CGO_ENABLED=$(CGO_ENABLED) GOPROXY=$(GOPROXY) \
 		go build -ldflags="$(LDFLAGS)" -o $(OUTPUT_DIR)/$(BINARY_NAME) $(CMD_DIR)
 	@echo "Done: $(OUTPUT_DIR)/$(BINARY_NAME)"
 	@ls -lh $(OUTPUT_DIR)/$(BINARY_NAME)
@@ -34,7 +35,7 @@ build:
 build-tui:
 	@echo "Building $(TUI_NAME) for $(GOOS)/$(GOARCH)..."
 	@mkdir -p $(OUTPUT_DIR)
-	GOOS=$(GOOS) GOARCH=$(GOARCH) CGO_ENABLED=$(CGO_ENABLED) \
+	GOOS=$(GOOS) GOARCH=$(GOARCH) CGO_ENABLED=$(CGO_ENABLED) GOPROXY=$(GOPROXY) \
 		go build -ldflags="$(LDFLAGS)" -o $(OUTPUT_DIR)/$(TUI_NAME) $(TUI_DIR)
 	@echo "Done: $(OUTPUT_DIR)/$(TUI_NAME)"
 	@ls -lh $(OUTPUT_DIR)/$(TUI_NAME)
@@ -44,12 +45,12 @@ build-all: build build-tui
 build-win:
 	@echo "Building $(BINARY_NAME) for windows/amd64..."
 	@mkdir -p $(OUTPUT_DIR)
-	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 GOPROXY=$(GOPROXY) \
 		go build -ldflags="$(LDFLAGS)" -o $(OUTPUT_DIR)/$(BINARY_NAME).exe $(CMD_DIR)
 	@echo "Done: $(OUTPUT_DIR)/$(BINARY_NAME).exe"
 
 run:
-	@go run $(CMD_DIR)
+	@GOPROXY=$(GOPROXY) go run $(CMD_DIR)
 
 clean:
 	@rm -rf $(OUTPUT_DIR)
