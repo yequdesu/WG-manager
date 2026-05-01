@@ -61,6 +61,12 @@ check_wireguard() {
         apt-get install -y wireguard wireguard-tools
         log "WireGuard installed successfully"
     fi
+
+    if command -v qrencode &>/dev/null; then
+        log "qrencode available (QR code support)"
+    else
+        apt-get install -y qrencode 2>/dev/null || log "qrencode optional (QR codes use fallback text)"
+    fi
 }
 
 check_environment() {
