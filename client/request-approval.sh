@@ -132,3 +132,4 @@ wg_service wg0
 sleep 1
 wg show wg0 2>/dev/null || true
 log "Connected."
+log "Mobile: curl \"http://${SERVER_IP}:${MGMT_PORT}/connect?qrcode&mode=direct&name=${PEER_NAME}\" -o qr.svg — scan with WireGuard app"

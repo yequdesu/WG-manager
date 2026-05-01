@@ -135,4 +135,8 @@ Write-Host ""
 Write-Host "Configuration preview:" -ForegroundColor Cyan
 Write-Host $peerConf
 Write-Host ""
+Write-Host ""
+Write-Host "Mobile QR:" -ForegroundColor Cyan
+Write-Host "  curl http://${ServerIp}:${MgmtPort}/connect?qrcode&mode=direct&name=$PeerName -o qr.svg" -ForegroundColor White
+Write-Host "  (send qr.svg to phone, scan with WireGuard app)" -ForegroundColor DarkGray
 Write-Host "[+] Done." -ForegroundColor Green
