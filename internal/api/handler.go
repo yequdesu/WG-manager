@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"wire-guard-dev/internal/audit"
@@ -27,11 +28,16 @@ type Config struct {
 	PeerKeepalive        int
 	PeersDBPath          string
 	WGConfPath           string
+
+	reloadMu sync.Mutex
 }
 
 func (c *Config) ServerEndpoint() string {
 	return fmt.Sprintf("%s:%d", c.ServerPublicIP, c.WGPort)
 }
+
+func (c *Config) LockReload()   { c.reloadMu.Lock() }
+func (c *Config) UnlockReload() { c.reloadMu.Unlock() }
 
 type Handler struct {
 	store  *store.State
@@ -67,6 +73,10 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "hostname is required"})
 		return
 	}
+	if err := validatePeerName(req.Hostname); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 
 	if h.store.HasPeer(req.Hostname) {
 		writeJSON(w, http.StatusConflict, map[string]string{
@@ -96,15 +106,9 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
 	}
 
-	ip, err := h.store.AllocateIPAndAddPeer(&peer, h.config.WGSubnet)
+	ip, err := h.store.AllocateIPAndAddPeer(&peer, h.config.WGSubnet, h.getWGPeerIPs(publicKey))
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "no available IP addresses"})
-		return
-	}
-
-	if err := h.checkIPConflict(ip); err != nil {
-		h.store.RemovePeer(peer.Name)
-		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
 
@@ -227,6 +231,10 @@ func (h *Handler) serveDirectWin(w http.ResponseWriter, r *http.Request, name st
 	if name == "" {
 		name = "client"
 	}
+	if err := validatePeerName(name); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 	dns := strings.TrimSpace(q.Get("dns"))
 	if dns == "" {
 		dns = h.config.DefaultDNS
@@ -249,14 +257,9 @@ func (h *Handler) serveDirectWin(w http.ResponseWriter, r *http.Request, name st
 			DNS: dns, Keepalive: h.config.PeerKeepalive,
 			CreatedAt: time.Now().UTC().Format(time.RFC3339),
 		}
-		ip, err = h.store.AllocateIPAndAddPeer(&peer, h.config.WGSubnet)
+		ip, err = h.store.AllocateIPAndAddPeer(&peer, h.config.WGSubnet, h.getWGPeerIPs(publicKey))
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "no available IP addresses"})
-			return
-		}
-		if err := h.checkIPConflict(ip); err != nil {
-			h.store.RemovePeer(name)
-			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 			return
 		}
 		allowedIP := fmt.Sprintf("%s/32", ip)
@@ -466,14 +469,9 @@ func (h *Handler) serveQR(w http.ResponseWriter, r *http.Request, mode, name str
 				DNS: dns, Keepalive: h.config.PeerKeepalive,
 				CreatedAt: time.Now().UTC().Format(time.RFC3339),
 			}
-			ip, err = h.store.AllocateIPAndAddPeer(&peer, h.config.WGSubnet)
+			ip, err = h.store.AllocateIPAndAddPeer(&peer, h.config.WGSubnet, h.getWGPeerIPs(publicKey))
 			if err != nil {
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "no IP available"})
-				return
-			}
-			if err := h.checkIPConflict(ip); err != nil {
-				h.store.RemovePeer(name)
-				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 				return
 			}
 			allowedIP := fmt.Sprintf("%s/32", ip)
@@ -535,6 +533,10 @@ func (h *Handler) SubmitRequest(w http.ResponseWriter, r *http.Request) {
 	req.Hostname = strings.TrimSpace(req.Hostname)
 	if req.Hostname == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "hostname is required"})
+		return
+	}
+	if err := validatePeerName(req.Hostname); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 
@@ -717,18 +719,21 @@ func (h *Handler) ApproveRequest(w http.ResponseWriter, r *http.Request) {
 
 	allowedIP := fmt.Sprintf("%s/32", peer.Address)
 	if err := h.wgMgr.AddPeerLive(h.config.WGInterface, peer.PublicKey, allowedIP, peer.Keepalive); err != nil {
+		h.store.RemovePeer(peer.Name)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to add peer to wireguard"})
 		return
 	}
 
 	if err := h.writeConfigToDisk(); err != nil {
 		h.wgMgr.RemovePeerByKey(h.config.WGInterface, peer.PublicKey)
+		h.store.RemovePeer(peer.Name)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to write config"})
 		return
 	}
 
 	if err := h.store.Save(); err != nil {
 		h.wgMgr.RemovePeerByKey(h.config.WGInterface, peer.PublicKey)
+		h.store.RemovePeer(peer.Name)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist state"})
 		return
 	}
@@ -900,21 +905,6 @@ func (h *Handler) ListPeers(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (h *Handler) checkIPConflict(ip string) error {
-	wgStatus, wgErr := h.wgMgr.Show(h.config.WGInterface)
-	if wgErr != nil {
-		return nil
-	}
-	for _, p := range wgStatus.Peers {
-		if parts := strings.SplitN(p.AllowedIPs, "/", 2); len(parts) > 0 {
-			if parts[0] == ip {
-				return fmt.Errorf("IP %s is in use by an orphaned WireGuard peer — remove it via TUI first", ip)
-			}
-		}
-	}
-	return nil
-}
-
 func (h *Handler) DeletePeer(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -1051,4 +1041,33 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 
 	result := bytes.TrimRight(buf.Bytes(), "\n")
 	w.Write(result)
+}
+
+func validatePeerName(name string) error {
+	if len(name) > 64 {
+		return fmt.Errorf("peer name too long (max 64 characters)")
+	}
+	for _, ch := range name {
+		if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-') {
+			return fmt.Errorf("peer name contains invalid characters (use a-z, A-Z, 0-9, -)")
+		}
+	}
+	return nil
+}
+
+func (h *Handler) getWGPeerIPs(excludePubKey string) map[string]bool {
+	ips := make(map[string]bool)
+	wgStatus, err := h.wgMgr.Show(h.config.WGInterface)
+	if err != nil {
+		return ips
+	}
+	for _, p := range wgStatus.Peers {
+		if p.PublicKey == excludePubKey {
+			continue
+		}
+		if parts := strings.SplitN(p.AllowedIPs, "/", 2); len(parts) > 0 && parts[0] != "0.0.0.0" {
+			ips[parts[0]] = true
+		}
+	}
+	return ips
 }

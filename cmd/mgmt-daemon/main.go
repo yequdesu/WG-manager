@@ -162,12 +162,14 @@ func reloadConfig(path string, appCfg *AppConfig, apiCfg *api.Config, state *sto
 
 	*appCfg = *newCfg
 
+	apiCfg.LockReload()
 	apiCfg.APIKey = appCfg.APIKey
 	apiCfg.ServerPublicIP = appCfg.ServerPublicIP
 	apiCfg.DefaultDNS = appCfg.DefaultDNS
 	apiCfg.PeerKeepalive = appCfg.PeerKeepalive
 	apiCfg.WGConfPath = appCfg.WGConfPath
 	apiCfg.PeersDBPath = appCfg.PeersDBPath
+	apiCfg.UnlockReload()
 
 	var crypto *store.Crypto
 	if appCfg.APIKey != "" {
@@ -230,6 +232,9 @@ func main() {
 	if appCfg.ServerPublicIP == "" {
 		log.Fatal("SERVER_PUBLIC_IP is empty — set it in config.env")
 	}
+	if appCfg.APIKey == "" {
+		log.Fatal("MGMT_API_KEY is empty — set it in config.env")
+	}
 
 	var crypto *store.Crypto
 	if appCfg.APIKey != "" {
@@ -260,8 +265,8 @@ func main() {
 			if parts := strings.SplitN(p.AllowedIPs, "/", 2); len(parts) > 0 {
 				ip = parts[0]
 			}
-			wgPeers[p.PublicKey[:8]] = store.Peer{
-				Name:       "recovered-" + p.PublicKey[:8],
+			wgPeers[p.PublicKey] = store.Peer{
+				Name:       "recovered-" + p.PublicKey[:12],
 				PublicKey:  p.PublicKey,
 				Address:    ip,
 				Keepalive:  appCfg.PeerKeepalive,

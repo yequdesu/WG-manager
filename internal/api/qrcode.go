@@ -9,7 +9,7 @@ import (
 // generateQR returns an SVG QR code for the given data using qrencode.
 // If qrencode is not available, returns a plain-text fallback.
 func generateQR(data string) string {
-	cmd := exec.Command("qrencode", "-s", "8", "-o", "-", "-t", "SVG", data)
+	cmd := exec.Command("qrencode", "-s", "8", "-o", "-", "-t", "SVG", "--", data)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = nil

@@ -176,7 +176,7 @@ func (s *State) ReconcileFromWG(wgPeers map[string]Peer) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	added := 0
-	for tag, wp := range wgPeers {
+	for pubKey, wp := range wgPeers {
 		found := false
 		for _, p := range s.Peers {
 			if p.PublicKey == wp.PublicKey {
@@ -185,7 +185,7 @@ func (s *State) ReconcileFromWG(wgPeers map[string]Peer) int {
 			}
 		}
 		if !found {
-			name := "recovered-" + tag
+			name := "recovered-" + pubKey[:12]
 			if len(name) > 32 {
 				name = name[:32]
 			}
@@ -205,31 +205,53 @@ func (s *State) ReconcileFromWG(wgPeers map[string]Peer) int {
 func (s *State) NextAvailableIP(subnet string) (string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.nextIPInLock(subnet)
+	return s.nextIPInLock(subnet, nil)
 }
 
-func (s *State) nextIPInLock(subnet string) (string, error) {
+func (s *State) nextIPInLock(subnet string, extraUsed map[string]bool) (string, error) {
 	_, ipNet, err := net.ParseCIDR(subnet)
 	if err != nil {
 		return "", fmt.Errorf("invalid subnet %q: %w", subnet, err)
 	}
 
-	serverIP := ipNet.IP
-	serverIP[len(serverIP)-1] = 1
+	ipv4 := ipNet.IP.To4()
+	if ipv4 == nil {
+		return "", fmt.Errorf("only IPv4 subnets are supported")
+	}
 
 	used := make(map[string]bool)
+	used[ipNet.IP.String()] = true
+
+	serverIP := net.IPv4(ipv4[0], ipv4[1], ipv4[2], ipv4[3]+1)
 	used[serverIP.String()] = true
+
 	for _, p := range s.Peers {
 		used[p.Address] = true
 	}
 	for _, r := range s.Requests {
 		used[r.Address] = true
 	}
+	for k := range extraUsed {
+		used[k] = true
+	}
 
-	ip := make(net.IP, len(ipNet.IP))
-	copy(ip, ipNet.IP)
-	for i := 2; i <= 254; i++ {
-		ip[len(ip)-1] = byte(i)
+	ones, bits := ipNet.Mask.Size()
+	hostBits := uint(bits - ones)
+	if hostBits > 30 {
+		return "", fmt.Errorf("subnet %s too small (need at least 2 host addresses)", subnet)
+	}
+	maxHost := uint32(1) << hostBits
+
+	netUint := uint32(ipv4[0])<<24 | uint32(ipv4[1])<<16 | uint32(ipv4[2])<<8 | uint32(ipv4[3])
+
+	for i := uint32(2); i < maxHost-1; i++ {
+		addrUint := netUint + i
+		ip := net.IPv4(
+			byte(addrUint>>24),
+			byte(addrUint>>16),
+			byte(addrUint>>8),
+			byte(addrUint),
+		)
 		addr := ip.String()
 		if !used[addr] {
 			return addr, nil
@@ -239,7 +261,7 @@ func (s *State) nextIPInLock(subnet string) (string, error) {
 	return "", fmt.Errorf("no available IP in subnet %s", subnet)
 }
 
-func (s *State) AllocateIPAndAddPeer(p *Peer, subnet string) (string, error) {
+func (s *State) AllocateIPAndAddPeer(p *Peer, subnet string, extraUsed map[string]bool) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -247,7 +269,7 @@ func (s *State) AllocateIPAndAddPeer(p *Peer, subnet string) (string, error) {
 		return "", fmt.Errorf("peer %q already exists", p.Name)
 	}
 
-	ip, err := s.nextIPInLock(subnet)
+	ip, err := s.nextIPInLock(subnet, extraUsed)
 	if err != nil {
 		return "", err
 	}
@@ -278,7 +300,7 @@ func (s *State) ReserveIPAndAddRequest(r Request, subnet string) (string, error)
 		}
 	}
 
-	ip, err := s.nextIPInLock(subnet)
+	ip, err := s.nextIPInLock(subnet, nil)
 	if err != nil {
 		return "", err
 	}
