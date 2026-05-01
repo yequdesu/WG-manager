@@ -123,6 +123,19 @@ func (m *Manager) RemovePeerByKey(iface string, pubKey string) error {
 	return nil
 }
 
+func (m *Manager) RemoveAllPeers(iface string) error {
+	status, err := m.Show(iface)
+	if err != nil {
+		return fmt.Errorf("wg show: %w", err)
+	}
+	for _, p := range status.Peers {
+		if err := m.RemovePeerByKey(iface, p.PublicKey); err != nil {
+			return fmt.Errorf("remove peer %s: %w", p.PublicKey[:8], err)
+		}
+	}
+	return nil
+}
+
 type PeerInfo struct {
 	PubKey    string
 	Address   string

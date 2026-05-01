@@ -21,18 +21,19 @@ import (
 )
 
 type AppConfig struct {
-	WGInterface          string
-	WGPort               int
-	WGSubnet             string
-	WGServerIP           string
-	MgmtListen           string
-	APIKey               string
-	ServerPublicIP       string
-	DefaultDNS           string
-	PeerKeepalive        int
-	PeersDBPath          string
-	WGConfPath           string
-	AuditLogPath         string
+	WGInterface      string
+	WGPort           int
+	WGSubnet         string
+	WGServerIP       string
+	MgmtListen       string
+	APIKey           string
+	ServerPublicIP   string
+	DefaultDNS       string
+	PeerKeepalive    int
+	PeersDBPath      string
+	WGConfPath       string
+	AuditLogPath     string
+	CleanPeersOnExit bool
 }
 
 func loadConfig(path string) (*AppConfig, error) {
@@ -96,6 +97,8 @@ func loadConfig(path string) (*AppConfig, error) {
 			cfg.WGConfPath = val
 		case "AUDIT_LOG_PATH":
 			cfg.AuditLogPath = val
+		case "CLEAN_PEERS_ON_EXIT":
+			cfg.CleanPeersOnExit = strings.EqualFold(val, "true") || val == "1"
 		}
 	}
 
@@ -148,7 +151,9 @@ func main() {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	// Self-check
+		ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	if _, err := exec.LookPath("wg"); err != nil {
 		log.Printf("Warning: 'wg' binary not found in PATH — WireGuard operations will fail")
 	}
@@ -240,7 +245,7 @@ func main() {
 		WGConfPath:           appCfg.WGConfPath,
 	}
 
-	srv := api.NewServer(apiCfg, state, wgMgr)
+	srv := api.NewServer(ctx, apiCfg, state, wgMgr)
 
 	idleConnsClosed := make(chan struct{})
 	go func() {
@@ -253,10 +258,19 @@ func main() {
 			log.Printf("Failed to save state on exit: %v", err)
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
+		if appCfg.CleanPeersOnExit {
+			log.Printf("Removing all peers from %s...", appCfg.WGInterface)
+			if err := wgMgr.RemoveAllPeers(appCfg.WGInterface); err != nil {
+				log.Printf("Warning: peer cleanup: %v", err)
+			}
+		}
 
-		if err := srv.Shutdown(ctx); err != nil {
+		cancel()
+
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer shutdownCancel()
+
+		if err := srv.Shutdown(shutdownCtx); err != nil {
 			log.Printf("HTTP server shutdown error: %v", err)
 		}
 		close(idleConnsClosed)

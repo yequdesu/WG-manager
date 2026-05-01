@@ -1,13 +1,14 @@
 package api
 
 import (
+	"context"
 	"net/http"
 
 	"wire-guard-dev/internal/store"
 	"wire-guard-dev/internal/wg"
 )
 
-func NewServer(cfg *Config, s *store.State, m *wg.Manager) *http.Server {
+func NewServer(ctx context.Context, cfg *Config, s *store.State, m *wg.Manager) *http.Server {
 	h := NewHandler(s, m, cfg)
 
 	mux := http.NewServeMux()
@@ -18,7 +19,7 @@ func NewServer(cfg *Config, s *store.State, m *wg.Manager) *http.Server {
 	registerHandler := KeyOrLocal(cfg.APIKey)(h.Register)
 	mux.HandleFunc("/api/v1/register", registerHandler)
 
-	rateLimit := RateLimitMiddleware(3)
+	rateLimit := RateLimitMiddleware(ctx, 3)
 	mux.HandleFunc("/api/v1/request", rateLimit(h.SubmitRequest))
 	mux.HandleFunc("/api/v1/request/", h.RequestStatus)
 

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net"
 	"net/http"
 	"strings"
@@ -18,18 +19,24 @@ var (
 	rateMutex sync.Mutex
 )
 
-func RateLimitMiddleware(maxPerMinute int) func(http.HandlerFunc) http.HandlerFunc {
+func RateLimitMiddleware(ctx context.Context, maxPerMinute int) func(http.HandlerFunc) http.HandlerFunc {
 	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
 		for {
-			time.Sleep(5 * time.Minute)
-			rateMutex.Lock()
-			now := time.Now()
-			for ip, e := range rateMap {
-				if now.Sub(e.window) > 2*time.Minute {
-					delete(rateMap, ip)
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				rateMutex.Lock()
+				now := time.Now()
+				for ip, e := range rateMap {
+					if now.Sub(e.window) > 2*time.Minute {
+						delete(rateMap, ip)
+					}
 				}
+				rateMutex.Unlock()
 			}
-			rateMutex.Unlock()
 		}
 	}()
 	return func(next http.HandlerFunc) http.HandlerFunc {
