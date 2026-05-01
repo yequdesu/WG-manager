@@ -517,6 +517,21 @@ func (s *State) PendingRequests() []Request {
 	return reqs
 }
 
+func (s *State) Replace(other *State) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	other.mu.RLock()
+	defer other.mu.RUnlock()
+	s.Peers = make(map[string]Peer)
+	for k, v := range other.Peers {
+		s.Peers[k] = v
+	}
+	s.Requests = make(map[string]Request)
+	for k, v := range other.Requests {
+		s.Requests[k] = v
+	}
+}
+
 func (s *State) ExpireRequests() []Request {
 	s.mu.Lock()
 	defer s.mu.Unlock()

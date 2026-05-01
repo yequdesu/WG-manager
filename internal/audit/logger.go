@@ -35,6 +35,12 @@ func Init(logPath string) error {
 	return nil
 }
 
+func CurrentPath() string {
+	mu.Lock()
+	defer mu.Unlock()
+	return path
+}
+
 func Close() {
 	mu.Lock()
 	defer mu.Unlock()

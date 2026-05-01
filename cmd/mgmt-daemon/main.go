@@ -133,6 +133,76 @@ func detectPublicIP() string {
 	return ""
 }
 
+func reloadConfig(path string, appCfg *AppConfig, apiCfg *api.Config, state *store.State, wgMgr *wg.Manager) error {
+	newCfg, err := loadConfig(path)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+
+	if newCfg.WGInterface != appCfg.WGInterface {
+		log.Printf("Warning: WG_INTERFACE change (%s → %s) requires restart, ignoring", appCfg.WGInterface, newCfg.WGInterface)
+		newCfg.WGInterface = appCfg.WGInterface
+	}
+	if newCfg.WGPort != appCfg.WGPort {
+		log.Printf("Warning: WG_PORT change (%d → %d) requires restart, ignoring", appCfg.WGPort, newCfg.WGPort)
+		newCfg.WGPort = appCfg.WGPort
+	}
+	if newCfg.WGSubnet != appCfg.WGSubnet {
+		log.Printf("Warning: WG_SUBNET change (%s → %s) requires restart, ignoring", appCfg.WGSubnet, newCfg.WGSubnet)
+		newCfg.WGSubnet = appCfg.WGSubnet
+	}
+	if newCfg.WGServerIP != appCfg.WGServerIP {
+		log.Printf("Warning: WG_SERVER_IP change (%s → %s) requires restart, ignoring", appCfg.WGServerIP, newCfg.WGServerIP)
+		newCfg.WGServerIP = appCfg.WGServerIP
+	}
+	if newCfg.MgmtListen != appCfg.MgmtListen {
+		log.Printf("Warning: MGMT_LISTEN change (%s → %s) requires restart, ignoring", appCfg.MgmtListen, newCfg.MgmtListen)
+		newCfg.MgmtListen = appCfg.MgmtListen
+	}
+
+	*appCfg = *newCfg
+
+	apiCfg.APIKey = appCfg.APIKey
+	apiCfg.ServerPublicIP = appCfg.ServerPublicIP
+	apiCfg.DefaultDNS = appCfg.DefaultDNS
+	apiCfg.PeerKeepalive = appCfg.PeerKeepalive
+	apiCfg.WGConfPath = appCfg.WGConfPath
+	apiCfg.PeersDBPath = appCfg.PeersDBPath
+
+	var crypto *store.Crypto
+	if appCfg.APIKey != "" {
+		crypto = store.NewCrypto(appCfg.APIKey)
+	}
+
+	newState, err := store.Load(appCfg.PeersDBPath, crypto)
+	if err != nil {
+		log.Printf("Warning: failed to reload peers db (%s): %v — keeping current state", appCfg.PeersDBPath, err)
+	} else {
+		state.Replace(newState)
+		log.Printf("Reloaded %d peer(s) and %d request(s) from %s",
+			len(newState.AllPeers()), len(newState.PendingRequests()), appCfg.PeersDBPath)
+	}
+
+	if appCfg.AuditLogPath != "" && appCfg.AuditLogPath != audit.CurrentPath() {
+		audit.Close()
+		if err := audit.Init(appCfg.AuditLogPath); err != nil {
+			log.Printf("Warning: audit re-init to %s: %v", appCfg.AuditLogPath, err)
+		} else {
+			log.Printf("Audit log path changed to %s", appCfg.AuditLogPath)
+		}
+	}
+
+	peerMap := make(map[string]wg.PeerInfo)
+	for _, p := range state.AllPeers() {
+		peerMap[p.Name] = wg.PeerInfo{PubKey: p.PublicKey, Address: p.Address, Keepalive: p.Keepalive}
+	}
+	if err := wg.WriteFullConfig(appCfg.WGConfPath, appCfg.WGInterface, appCfg.WGPort, appCfg.PeerKeepalive, appCfg.WGServerIP, state.Server().PrivateKey, peerMap); err != nil {
+		log.Printf("Warning: failed to write config on reload: %v", err)
+	}
+
+	return nil
+}
+
 func main() {
 	configPath := "config.env"
 	if len(os.Args) > 2 && os.Args[1] == "--config" {
@@ -250,30 +320,46 @@ func main() {
 	idleConnsClosed := make(chan struct{})
 	go func() {
 		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-		sig := <-sigCh
-		log.Printf("Received signal %v, saving state and shutting down...", sig)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
-		if err := state.Save(); err != nil {
-			log.Printf("Failed to save state on exit: %v", err)
-		}
+		for {
+			sig := <-sigCh
+			switch sig {
+			case syscall.SIGHUP:
+				log.Println("Received SIGHUP, reloading configuration...")
+				if err := reloadConfig(configPath, appCfg, apiCfg, state, wgMgr); err != nil {
+					log.Printf("Config reload failed: %v", err)
+				} else {
+					audit.Log("config_reloaded", nil)
+					log.Println("Config reloaded successfully")
+				}
 
-		if appCfg.CleanPeersOnExit {
-			log.Printf("Removing all peers from %s...", appCfg.WGInterface)
-			if err := wgMgr.RemoveAllPeers(appCfg.WGInterface); err != nil {
-				log.Printf("Warning: peer cleanup: %v", err)
+			case syscall.SIGINT, syscall.SIGTERM:
+				log.Printf("Received signal %v, saving state and shutting down...", sig)
+
+				if err := state.Save(); err != nil {
+					log.Printf("Failed to save state on exit: %v", err)
+				}
+
+				if appCfg.CleanPeersOnExit {
+					log.Printf("Removing all peers from %s...", appCfg.WGInterface)
+					if err := wgMgr.RemoveAllPeers(appCfg.WGInterface); err != nil {
+						log.Printf("Warning: peer cleanup: %v", err)
+					}
+				}
+
+				cancel()
+
+				shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer shutdownCancel()
+
+				if err := srv.Shutdown(shutdownCtx); err != nil {
+					log.Printf("HTTP server shutdown error: %v", err)
+				}
+				close(idleConnsClosed)
+				return
 			}
 		}
-
-		cancel()
-
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer shutdownCancel()
-
-		if err := srv.Shutdown(shutdownCtx); err != nil {
-			log.Printf("HTTP server shutdown error: %v", err)
-		}
-		close(idleConnsClosed)
 	}()
 
 	log.Printf("WireGuard Management Daemon starting on %s", appCfg.MgmtListen)
