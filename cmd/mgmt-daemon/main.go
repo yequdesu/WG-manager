@@ -156,9 +156,15 @@ func main() {
 		log.Fatal("SERVER_PUBLIC_IP is empty — set it in config.env")
 	}
 
-	state, err := store.Load(appCfg.PeersDBPath)
+	var crypto *store.Crypto
+	if appCfg.APIKey != "" {
+		crypto = store.NewCrypto(appCfg.APIKey)
+	}
+
+	state, err := store.Load(appCfg.PeersDBPath, crypto)
 	if err != nil {
-		log.Fatalf("Failed to load peer state: %v", err)
+		log.Printf("WARNING: Failed to load peer state: %v — starting with empty state", err)
+		state = store.NewState(appCfg.PeersDBPath, crypto)
 	}
 
 	if err := audit.Init(appCfg.AuditLogPath); err != nil {

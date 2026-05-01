@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -49,8 +50,18 @@ type State struct {
 	Peers    map[string]Peer    `json:"peers"`
 	Requests map[string]Request `json:"requests,omitempty"`
 
-	mu   sync.RWMutex `json:"-"`
-	path string       `json:"-"`
+	mu     sync.RWMutex `json:"-"`
+	path   string       `json:"-"`
+	crypto *Crypto      `json:"-"`
+}
+
+func NewState(path string, crypto *Crypto) *State {
+	return &State{
+		Peers:    make(map[string]Peer),
+		Requests: make(map[string]Request),
+		path:     path,
+		crypto:   crypto,
+	}
 }
 
 func (s *State) MarshalJSON() ([]byte, error) {
@@ -193,6 +204,22 @@ func (s *State) Save() error {
 		return fmt.Errorf("marshal state: %w", err)
 	}
 
+	if s.crypto != nil {
+		enc, err := s.crypto.Encrypt(data)
+		if err != nil {
+			return fmt.Errorf("encrypt state: %w", err)
+		}
+		result := make([]byte, len(encryptedPrefix)+len(enc))
+		copy(result, encryptedPrefix)
+		copy(result[len(encryptedPrefix):], enc)
+		data = result
+	}
+
+	bakPath := s.path + ".bak"
+	if existing, err := os.ReadFile(s.path); err == nil && len(existing) > 0 {
+		os.WriteFile(bakPath, existing, 0600)
+	}
+
 	tmpPath := s.path + ".tmp"
 	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
 		return fmt.Errorf("write temp file: %w", err)
@@ -204,11 +231,12 @@ func (s *State) Save() error {
 	return nil
 }
 
-func Load(path string) (*State, error) {
+func Load(path string, crypto *Crypto) (*State, error) {
 	s := &State{
 		Peers:    make(map[string]Peer),
 		Requests: make(map[string]Request),
 		path:     path,
+		crypto:   crypto,
 	}
 
 	data, err := os.ReadFile(path)
@@ -223,8 +251,52 @@ func Load(path string) (*State, error) {
 		return s, nil
 	}
 
+	if bytes.HasPrefix(data, []byte(encryptedPrefix)) {
+		if crypto == nil {
+			return nil, fmt.Errorf("state is encrypted but no crypto key provided")
+		}
+		dec, err := crypto.Decrypt(data[len(encryptedPrefix):])
+		if err != nil {
+			bakPath := path + ".bak"
+			bakData, bakErr := os.ReadFile(bakPath)
+			if bakErr == nil && len(bakData) > 0 && bytes.HasPrefix(bakData, []byte(encryptedPrefix)) {
+				if decData, decErr := crypto.Decrypt(bakData[len(encryptedPrefix):]); decErr == nil {
+					fmt.Fprintf(os.Stderr, "WARNING: %s corrupted, recovered from %s\n", path, bakPath)
+					data = decData
+					goto unmarshal
+				}
+			}
+			return nil, fmt.Errorf("decrypt state: %w", err)
+		}
+		data = dec
+	} else if crypto != nil {
+		fmt.Fprintf(os.Stderr, "WARNING: %s is not encrypted — will be encrypted on next save\n", path)
+	}
+
+unmarshal:
 	if err := json.Unmarshal(data, s); err != nil {
-		return nil, fmt.Errorf("unmarshal state: %w", err)
+		bakPath := path + ".bak"
+		bakData, bakErr := os.ReadFile(bakPath)
+		if bakErr != nil || len(bakData) == 0 {
+			fmt.Fprintf(os.Stderr, "WARNING: %s corrupted and no valid backup, starting with empty state\n", path)
+			return s, nil
+		}
+		if bytes.HasPrefix(bakData, []byte(encryptedPrefix)) {
+			if crypto == nil {
+				fmt.Fprintf(os.Stderr, "WARNING: %s corrupted, backup is encrypted but no key, starting empty\n", path)
+				return s, nil
+			}
+			bakData, bakErr = crypto.Decrypt(bakData[len(encryptedPrefix):])
+			if bakErr != nil {
+				fmt.Fprintf(os.Stderr, "WARNING: %s and backup both corrupted, starting with empty state\n", path)
+				return s, nil
+			}
+		}
+		if bakErr := json.Unmarshal(bakData, s); bakErr != nil {
+			fmt.Fprintf(os.Stderr, "WARNING: %s corrupted, backup also invalid, starting with empty state\n", path)
+			return s, nil
+		}
+		fmt.Fprintf(os.Stderr, "WARNING: %s corrupted, recovered from %s\n", path, bakPath)
 	}
 
 	if s.Peers == nil {

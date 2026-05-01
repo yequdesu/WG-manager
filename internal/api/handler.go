@@ -109,17 +109,22 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 	}
 
 	allowedIP := fmt.Sprintf("%s/32", peer.Address)
-	if err := h.wgMgr.AddPeerLive(h.config.WGInterface, peer.PublicKey, allowedIP, peer.Keepalive); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to add peer to wireguard"})
-		return
-	}
+		if err := h.wgMgr.AddPeerLive(h.config.WGInterface, peer.PublicKey, allowedIP, peer.Keepalive); err != nil {
+			h.store.RemovePeer(peer.Name)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to add peer to wireguard"})
+			return
+		}
 
 	if err := h.writeConfigToDisk(); err != nil {
+		h.wgMgr.RemovePeerByKey(h.config.WGInterface, peer.PublicKey)
+		h.store.RemovePeer(peer.Name)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to write config"})
 		return
 	}
 
 	if err := h.store.Save(); err != nil {
+		h.wgMgr.RemovePeerByKey(h.config.WGInterface, peer.PublicKey)
+		h.store.RemovePeer(peer.Name)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist state"})
 		return
 	}
@@ -255,18 +260,23 @@ func (h *Handler) serveDirectWin(w http.ResponseWriter, r *http.Request, name st
 		}
 		allowedIP := fmt.Sprintf("%s/32", ip)
 		if err := h.wgMgr.AddPeerLive(h.config.WGInterface, publicKey, allowedIP, h.config.PeerKeepalive); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to add peer"})
-			return
-		}
-		if err := h.writeConfigToDisk(); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to write config"})
-			return
-		}
-		if err := h.store.Save(); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist state"})
-			return
-		}
-		audit.Log("peer_registered", auditFields("name", name, "ip", ip, "source", remoteIP(r)))
+				h.store.RemovePeer(name)
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to add peer"})
+				return
+			}
+			if err := h.writeConfigToDisk(); err != nil {
+				h.wgMgr.RemovePeerByKey(h.config.WGInterface, publicKey)
+				h.store.RemovePeer(name)
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to write config"})
+				return
+			}
+			if err := h.store.Save(); err != nil {
+				h.wgMgr.RemovePeerByKey(h.config.WGInterface, publicKey)
+				h.store.RemovePeer(name)
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist state"})
+				return
+			}
+			audit.Log("peer_registered", auditFields("name", name, "ip", ip, "source", remoteIP(r)))
 	}
 
 	conf := fmt.Sprintf(`[Interface]
@@ -356,11 +366,22 @@ func (h *Handler) serveQR(w http.ResponseWriter, r *http.Request, mode, name str
 			}
 			allowedIP := fmt.Sprintf("%s/32", ip)
 			if err := h.wgMgr.AddPeerLive(h.config.WGInterface, publicKey, allowedIP, h.config.PeerKeepalive); err != nil {
+				h.store.RemovePeer(name)
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "wg add failed"})
 				return
 			}
-			if err := h.writeConfigToDisk(); err != nil { return }
-			if err := h.store.Save(); err != nil { return }
+			if err := h.writeConfigToDisk(); err != nil {
+				h.wgMgr.RemovePeerByKey(h.config.WGInterface, publicKey)
+				h.store.RemovePeer(name)
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to write config"})
+				return
+			}
+			if err := h.store.Save(); err != nil {
+				h.wgMgr.RemovePeerByKey(h.config.WGInterface, publicKey)
+				h.store.RemovePeer(name)
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist state"})
+				return
+			}
 			audit.Log("peer_registered", auditFields("name", name, "ip", ip, "source", "qr"))
 		}
 		content = fmt.Sprintf(`[Interface]
@@ -595,11 +616,13 @@ func (h *Handler) ApproveRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.writeConfigToDisk(); err != nil {
+		h.wgMgr.RemovePeerByKey(h.config.WGInterface, peer.PublicKey)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to write config"})
 		return
 	}
 
 	if err := h.store.Save(); err != nil {
+		h.wgMgr.RemovePeerByKey(h.config.WGInterface, peer.PublicKey)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist state"})
 		return
 	}
@@ -774,16 +797,21 @@ func (h *Handler) DeletePeer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.store.RemovePeer(name); err != nil {
+		h.wgMgr.AddPeerLive(h.config.WGInterface, peer.PublicKey, fmt.Sprintf("%s/32", peer.Address), peer.Keepalive)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to remove peer from store"})
 		return
 	}
 
 	if err := h.writeConfigToDisk(); err != nil {
+		h.store.AddPeer(peer)
+		h.wgMgr.AddPeerLive(h.config.WGInterface, peer.PublicKey, fmt.Sprintf("%s/32", peer.Address), peer.Keepalive)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to write config"})
 		return
 	}
 
 	if err := h.store.Save(); err != nil {
+		h.store.AddPeer(peer)
+		h.wgMgr.AddPeerLive(h.config.WGInterface, peer.PublicKey, fmt.Sprintf("%s/32", peer.Address), peer.Keepalive)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist state"})
 		return
 	}
