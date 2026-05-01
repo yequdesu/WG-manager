@@ -311,6 +311,12 @@ init_wireguard_server() {
         server_private=$(wg genkey)
         server_public=$(echo "$server_private" | wg pubkey)
 
+        # Preserve existing peer sections from old wg0.conf if any
+        local old_peers=""
+        if [[ -f "$wg_conf" ]]; then
+            old_peers=$(awk '/^\[Peer\]/{p=1} p{print}' "$wg_conf" 2>/dev/null || echo "")
+        fi
+
         log "Writing WireGuard config..."
         cat > "$wg_conf" << WGCONF
 [Interface]
@@ -321,6 +327,11 @@ PostUp = iptables -A FORWARD -i wg0 -j ACCEPT; iptables -A FORWARD -o wg0 -j ACC
 PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -D FORWARD -o wg0 -j ACCEPT
 
 WGCONF
+
+        if [[ -n "$old_peers" ]]; then
+            log "Preserving existing peer sections from old wg0.conf"
+            echo "$old_peers" >> "$wg_conf"
+        fi
 
         chmod 600 "$wg_conf"
         log "Config written to $wg_conf"
@@ -339,8 +350,12 @@ WGCONF
         local api_key
         api_key=$(openssl rand -hex 32 2>/dev/null || python3 -c "import secrets; print(secrets.token_hex(32))")
 
-        log "Writing peers.json..."
-        cat > "$PROJECT_DIR/server/peers.json" << PEERSJSON
+        if [[ -f "$PROJECT_DIR/server/peers.json" ]] && [[ -s "$PROJECT_DIR/server/peers.json" ]]; then
+            warn "peers.json already exists — keeping existing data, daemon will reconcile"
+            warn "Old backup saved as peers.json.bak-$(date +%Y%m%d-%H%M%S)"
+        else
+            log "Writing initial peers.json..."
+            cat > "$PROJECT_DIR/server/peers.json" << PEERSJSON
 {
   "server": {
     "public_key": "$server_public",
@@ -351,10 +366,10 @@ WGCONF
     "subnet": "$WG_SUBNET"
   },
   "peers": {},
-  "requests": {},
-  "next_ip_suffix": 2
+  "requests": {}
 }
 PEERSJSON
+        fi
     fi
 }
 
