@@ -1,113 +1,313 @@
 # WG-Manager
 
-基于 WireGuard 的管理层 — 星形拓扑 VPN，客户端一行命令即可加入。服务端运行 Go 守护进程提供 HTTP API，支持 Linux / macOS / WSL / Windows。
+基于 WireGuard 的管理层 — 星形拓扑 VPN，客户端一行命令即可加入。服务端运行 Go 守护进程提供 HTTP API，支持 Linux / macOS / WSL / Windows / 移动端（QR 码）。
+
+---
+
+## 目录
+
+- [设计理念](#设计理念)
+- [快速开始](#快速开始)
+  - [1. 服务端初始化](#1-服务端初始化)
+  - [2. 开放端口](#2-开放端口)
+  - [3. 客户端加入](#3-客户端加入)
+  - [4. 管理员操作](#4-管理员操作)
+- [API 参考](#api-参考)
+- [更新服务器](#更新服务器)
+- [编译](#编译)
+- [常见问题](#常见问题)
+
+---
 
 ## 设计理念
 
 两种连接模式，适配不同信任级别：
 
-| 模式 | 信任度 | 流程 | API Key |
-|------|--------|------|:--:|
-| **审批**（默认） | 低 / 公开分发 | 客户端提交申请 → 管理员批准 → 自动配置连接 | 无 |
-| **直连** | 高 / 内部使用 | 管理员提供含 API Key 的 URL → 即时加入 | 有 |
+| 模式 | 信任度 | 适用场景 | 是否需要 API Key |
+|------|--------|----------|:--:|
+| **审批**（默认） | 低 / 公开 | 对外分发、访客接入、不愿暴露 API Key 的场景 | 否 |
+| **直连** | 高 / 内部 | 管理员直接分发给信任设备，即时加入 | 是（服务端嵌入脚本） |
 
 ```
-                     ┌───────────────────────┐
-                     │      服务器 (Linux)     │
-                     │                        │
-                     │  wg-mgmt-daemon :58880 │
-                     │  ┌──────────────────┐  │
-                     │  │ GET /connect     │  │ ← 统一入口
-                     │  │ POST /register   │  │    所有平台
-                     │  │ POST /request    │  │
-                     │  └──────────────────┘  │
-                     │       wg set ↓         │
-                     │  WireGuard wg0 10.0.0.1 │
-                     └──┬─────────────┬───────┘
-                        │ WG 隧道     │ HTTP
-              ┌─────────┴───┐    ┌────┴──────────┐
-              │ Linux/macOS │    │    Windows      │
-              │ / WSL        │    │                 │
-              │ curl｜sudo   │    │ iwr → .ps1      │
-              │   bash       │    │ curl → .conf    │
-              └──────────────┘    └─────────────────┘
+┌─ 服务器 ──────────────────────────────────┐
+│  wg-mgmt-daemon :58880                     │
+│  GET /connect   ← 所有平台统一入口          │
+│  POST /register ← 直连注册                  │
+│  POST /request  ← 审批提交                  │
+│         │ wg set                            │
+│  WireGuard wg0  10.0.0.1/24                │
+└────┬──────────────┬────────────────────────┘
+     │ WG 隧道       │ HTTP
+  ┌──┴────┐    ┌────┴──────┐
+  │ Linux │    │  Windows   │
+  │ macOS │    │  PS / CMD  │
+  │ WSL   │    │  Mobile QR │
+  └───────┘    └────────────┘
 ```
+
+---
 
 ## 快速开始
 
 ### 1. 服务端初始化
 
+**前置条件：** 一台 Ubuntu/Debian Linux 服务器（Aliyun / 腾讯云 / VPS 均可），已安装 Git。
+
 ```bash
+# 1. 克隆项目
 git clone git@github.com:yequdesu/WG-manager.git ~/WG-manager
 cd ~/WG-manager
+
+# 2. 安装 Go（如未安装）
+sudo apt install -y golang-go
+
+# 3. 一键初始化
 sudo bash server/setup-server.sh
 ```
 
+脚本会依次提示：
+
+| 提示 | 说明 | 示例 |
+|------|------|------|
+| `Server Public IP` | 服务器公网 IP（自动检测，回车确认） | `118.178.171.166` |
+| `WireGuard Port` | WG 监听端口 | `51820`（回车默认） |
+| `VPN Subnet` | VPN 内网子网 | `10.0.0.0/24`（回车默认） |
+| `Management API Port` | 管理 API 端口 | `58880`（回车默认） |
+| `Default Client DNS` | 客户端 DNS | `1.1.1.1,8.8.8.8`（回车默认） |
+
+完成后输出摘要，包含连接命令和管理命令。
+
+**后续升级服务器**只需执行：
+```bash
+cd ~/WG-manager && git pull
+sudo bash server/setup-server.sh
+# 提示 "Use existing configuration? [Y/n]" → 输入 Y 回车
+```
+
+---
+
 ### 2. 开放端口
+
+在云服务商控制台的安全组中添加**入方向**规则：
 
 | 协议 | 端口 | 用途 |
 |------|------|------|
 | UDP | 51820 | WireGuard 隧道 |
-| TCP | 58880 | 管理 API |
+| TCP | 58880 | 管理 API（客户端注册 / 脚本下载） |
+
+服务器本地防火墙（如有 UFW）：
+```bash
+sudo ufw allow 51820/udp
+sudo ufw allow 58880/tcp
+```
+
+---
 
 ### 3. 客户端加入
 
-**审批模式（默认，无需 API Key）：**
+以下命令中，把 `118.178.171.166` 替换为你的服务器 IP。
 
-| 平台 | 命令 |
-|------|------|
-| Linux / macOS / WSL | `curl -sSf http://IP:58880/connect \| sudo bash` |
-| Windows PowerShell | `iwr http://IP:58880/connect -OutFile t.ps1; .\t.ps1` |
-| 浏览器 | 打开 `http://IP:58880/connect` |
+---
 
-**直连模式（管理员分发，内含 API Key）：**
+#### 3.1 审批模式（默认，无需 API Key）
 
-| 平台 | 命令 |
-|------|------|
-| Linux / macOS / WSL | `curl -sSf "http://IP:58880/connect?mode=direct&name=DEVICE" \| sudo bash` |
-| Windows | `curl -o wg0.conf "http://IP:58880/connect?mode=direct&name=MYPC"` |
+> 客户端提交申请 → 管理员在服务器上批准 → 客户端自动完成配置并连接。
 
-> **注意**：使用 `curl | sudo bash` 管道方式执行时，stdin 已被脚本内容占用，无法弹出交互式提示。需要自定义 peer 名称时，在 URL 后追加 `?name=自定义名称`。如需交互式输入名称，先下载脚本再执行：`curl -o t.sh ...; sudo bash t.sh`。
+##### Linux / macOS / WSL
 
-## 管理命令
+打开终端，执行：
 
 ```bash
-wg-mgmt-tui                          # TUI 管理面板
-tail -f /var/log/wg-mgmt/audit.log   # 审计日志
-bash scripts/health-check.sh         # 健康检查
-bash scripts/list-peers.sh           # 查看 peer
+curl -sSf http://118.178.171.166:58880/connect | sudo bash
 ```
 
-**TUI 快捷键：**
+脚本会自动完成：
+1. 检测操作系统
+2. 检测/安装 WireGuard
+3. 提交申请（peer 名称默认使用本机 hostname）
+4. 每 3 秒轮询审批结果
+5. 管理员批准后自动写入配置并启动连接
 
-| 键 | 功能 |
-|----|------|
-| `Tab` | 切换标签页（Peers / Requests / Status / Log） |
-| `↑ ↓` | 选择列表项 |
-| `a` | 批准选中的请求 |
-| `d` | 删除选中的 peer / 拒绝选中的请求 |
-| `r` | 刷新 |
-| `q` | 退出 |
+**自定义 peer 名称：**
+```bash
+curl -sSf "http://118.178.171.166:58880/connect?name=my-device" | sudo bash
+```
 
-**CLI 等效操作：**
+**下载脚本后交互执行（可交互输入名称）：**
+```bash
+curl -sSf http://118.178.171.166:58880/connect -o join.sh
+sudo bash join.sh
+```
+
+##### Windows PowerShell
+
+```powershell
+# 步骤 1：下载脚本
+Invoke-WebRequest http://118.178.171.166:58880/connect -OutFile join.ps1
+
+# 步骤 2：运行（交互输入名称）
+.\join.ps1
+```
+
+脚本自动完成：提交申请 → 等待批准 → 批准后自动下载 `.conf` → 打印手动导入指引。
+
+**批准后的操作：**
+1. 下载安装 [WireGuard for Windows](https://download.wireguard.com/windows-client/)
+2. 打开 WireGuard → 点击 **Import Tunnel(s) from file**
+3. 选择脚本输出的 `.conf` 文件路径（如 `C:\Users\xxx\AppData\Local\Temp\wg0.conf`）
+4. 点击 **Activate** 激活连接
+
+##### Windows CMD
+
+```cmd
+:: 步骤 1：提交申请
+curl -X POST http://118.178.171.166:58880/api/v1/request ^
+  -H "Content-Type: application/json" ^
+  -d "{\"hostname\":\"MYPC\",\"dns\":\"1.1.1.1\"}"
+
+:: 返回: {"request_id":"abc123...","status":"pending"}
+:: 记下 request_id
+
+:: 步骤 2：轮询审批状态（每 3 秒执行一次）
+curl -s http://118.178.171.166:58880/api/v1/request/abc123
+
+:: 步骤 3：管理员批准后，下载 .conf
+curl -o wg0.conf "http://118.178.171.166:58880/connect?mode=direct&name=MYPC"
+
+:: 步骤 4：导入 WireGuard 客户端（同 PowerShell 的步骤）
+```
+
+##### 移动端（QR 码）
+
+管理员在服务器上为移动端生成 QR 码：
 
 ```bash
-# 查看待审批
-curl -s http://127.0.0.1:58880/api/v1/requests \
-  -H 'Authorization: Bearer <KEY>' | python3 -m json.tool
+# 生成审批模式入口 QR（扫码打开审批页面）
+curl -s "http://localhost:58880/connect?qrcode" -o join.svg
 
-# 批准
+# 生成直连 QR（自动注册 + 返回 .conf，手机可直接导入 WireGuard）
+curl -s "http://localhost:58880/connect?qrcode&mode=direct&name=my-phone" -o phone.svg
+```
+
+将 SVG 文件发送给用户。用户用手机：
+- **审批模式 QR**：扫码打开 HTML 页面 → 输入 peer 名称 → 提交 → 等待管理员批准 → 页面显示配置 → 复制到 WireGuard App
+- **直连 QR**：打开 WireGuard App → 扫描 QR → 直接导入连接
+
+---
+
+#### 3.2 直连模式（管理员分发，内含 API Key）
+
+> 管理员将 URL 发给信任用户。用户执行后直接加入，无需审批。
+
+API Key 存放位置（仅管理员可见）：
+```bash
+grep MGMT_API_KEY ~/WG-manager/config.env
+# MGMT_API_KEY=9c4a9e609690eef456f5ae6014e981cf22e6c01ad6f96df632b187e0376ac31d
+```
+
+##### Linux / macOS / WSL
+
+```bash
+curl -sSf "http://118.178.171.166:58880/connect?mode=direct&name=my-laptop" | sudo bash
+```
+
+脚本自动完成：WG 检测安装 → POST /register（内嵌 API Key）→ 写配置 → 启动连接。
+
+##### Windows PowerShell
+
+```powershell
+Invoke-WebRequest "http://118.178.171.166:58880/connect?mode=direct&name=MYPC" -OutFile wg0.conf
+```
+
+然后将 `wg0.conf` 导入 WireGuard 客户端。
+
+##### Windows CMD
+
+```cmd
+curl -o wg0.conf "http://118.178.171.166:58880/connect?mode=direct&name=MYPC"
+```
+
+---
+
+#### 3.3 验证连接
+
+加入后在客户端设备上：
+
+```bash
+# 检查 WireGuard 状态
+sudo wg show
+
+# ping 网关（服务器）
+ping 10.0.0.1
+
+# ping 其他 peer
+ping 10.0.0.2
+```
+
+**Windows 注意：** 如果 ping 不通，需要允许 ICMP：
+```powershell
+New-NetFirewallRule -DisplayName "WG ICMP" -Direction Inbound -Protocol ICMPv4 -IcmpType 8 -Action Allow
+```
+
+---
+
+### 4. 管理员操作
+
+所有管理操作在服务器上执行。
+
+#### 4.1 TUI 管理面板（推荐）
+
+```bash
+wg-mgmt-tui
+```
+
+| 标签页 | 内容 | 操作 |
+|--------|------|------|
+| **Peers** | 所有已连接 peer + 详情面板 | `↑↓` 选择，`d` 删除 |
+| **Requests** | 待审批列表 | `↑↓` 选择，`a` 批准，`d` 拒绝 |
+| **Status** | 服务状态 + 各 peer 流量 | 只读 |
+| **Log** | 最近 50 条审计日志 | `j/k` 滚动 |
+
+全局快捷键：`Tab` 切换标签，`r` 刷新，`q` 退出。
+
+#### 4.2 审批请求（CLI）
+
+```bash
+# 查看 API Key
+API_KEY=$(grep MGMT_API_KEY ~/WG-manager/config.env | cut -d= -f2)
+
+# 查看待审批列表
+curl -s http://127.0.0.1:58880/api/v1/requests \
+  -H "Authorization: Bearer $API_KEY" | python3 -m json.tool
+
+# 批准（替换 <id> 为实际的 request_id）
 curl -s -X POST http://127.0.0.1:58880/api/v1/requests/<id>/approve \
-  -H 'Authorization: Bearer <KEY>'
+  -H "Authorization: Bearer $API_KEY"
 
 # 拒绝
 curl -s -X DELETE http://127.0.0.1:58880/api/v1/requests/<id> \
-  -H 'Authorization: Bearer <KEY>'
-
-# 删除 peer
-curl -s -X DELETE http://127.0.0.1:58880/api/v1/peers/<名称> \
-  -H 'Authorization: Bearer <KEY>'
+  -H "Authorization: Bearer $API_KEY"
 ```
+
+#### 4.3 删除 peer
+
+```bash
+# TUI 方式：Peers 标签页 → ↑↓ 选中 → d 删除
+
+# CLI 方式：
+curl -s -X DELETE http://127.0.0.1:58880/api/v1/peers/<peer名称> \
+  -H "Authorization: Bearer $API_KEY"
+```
+
+#### 4.4 健康检查
+
+```bash
+bash ~/WG-manager/scripts/health-check.sh
+bash ~/WG-manager/scripts/list-peers.sh
+tail -f /var/log/wg-mgmt/audit.log
+```
+
+---
 
 ## API 参考
 
@@ -115,78 +315,63 @@ curl -s -X DELETE http://127.0.0.1:58880/api/v1/peers/<名称> \
 
 | 方法 | 路径 | 鉴权 | 说明 |
 |------|------|------|------|
-| `GET` | `/connect` | 无 | 统一分发——根据 User-Agent 返回 bash/ps1/conf/HTML |
-| `POST` | `/register` | API Key / localhost | 注册 peer，返回配置 |
+| `GET` | `/connect` | 无 | 统一分发——返回 bash/ps1/conf/HTML/QR |
+| `GET` | `/connect?qrcode` | 无 | SVG QR 码 |
+| `POST` | `/register` | KeyOrLocal | 注册 peer，返回配置 |
 | `POST` | `/request` | 限流 | 提交审批申请 |
-| `GET` | `/request/{id}` | 无 | 轮询状态：pending / approved / rejected |
-| `GET` | `/requests` | API Key + localhost | 查看待审批列表 |
-| `POST` | `/requests/{id}/approve` | API Key + localhost | 批准申请 |
-| `DELETE` | `/requests/{id}` | API Key + localhost | 拒绝申请 |
-| `GET` | `/peers` | API Key + localhost | 查看 peer 及在线状态 |
-| `DELETE` | `/peers/{name}` | API Key + localhost | 删除 peer |
-| `GET` | `/status` | API Key + localhost | 服务状态 |
+| `GET` | `/request/{id}` | 无 | 轮询状态 |
+| `GET` | `/requests` | LocalOnly | 查看待审批列表 |
+| `POST` | `/requests/{id}/approve` | LocalOnly | 批准 |
+| `DELETE` | `/requests/{id}` | LocalOnly | 拒绝 |
+| `GET` | `/peers` | LocalOnly | 查看 peer 列表 |
+| `DELETE` | `/peers/{name}` | LocalOnly | 删除 peer |
+| `GET` | `/status` | LocalOnly | 服务状态 |
 | `GET` | `/health` | 无 | 存活检查 |
 
-鉴权方式：Header 传 `Authorization: Bearer <KEY>` 或 URL 参数 `?key=<KEY>`。管理端点同时允许 localhost 免鉴权。
+鉴权说明：
+- `LocalOnly` = 仅允许 `127.0.0.1` 访问（服务器本地操作）
+- `KeyOrLocal` = localhost 免鉴权，或远程提供 `Authorization: Bearer <KEY>` / `?key=<KEY>`
+
+---
 
 ## 更新服务器
 
 ```bash
-cd ~/WG-manager && git pull
-sudo bash server/setup-server.sh   # 自动检测代码变更，有变动则重新编译
+cd ~/WG-manager
+git pull
+sudo bash server/setup-server.sh   # Y 复用配置，自动重新编译
 ```
 
 更新过程中已有 WireGuard 连接**不受影响**。
 
-## 项目结构
-
-```
-wg-manager/
-├── cmd/
-│   ├── mgmt-daemon/main.go          # 守护进程入口（HTTP API + WG 操作）
-│   └── mgmt-tui/main.go             # 终端 TUI 入口
-├── internal/
-│   ├── api/                         # Handler、中间件、路由、内嵌脚本
-│   ├── audit/                       # 审计日志写入器
-│   ├── store/                       # Peer / Request 状态持久化 (peers.json)
-│   └── wg/                          # WireGuard CLI 操作 (wg set / genkey / show)
-├── client/
-│   ├── connect.sh                   # 直连脚本模板（编译进 daemon）
-│   ├── request-approval.sh          # 审批脚本模板（编译进 daemon）
-│   ├── request-approval.ps1         # Windows 审批脚本（编译进 daemon）
-│   ├── install-wireguard.sh         # 独立 WG 安装器
-│   └── lib/os-detect.sh            # 平台抽象层（可复用库）
-├── server/
-│   ├── setup-server.sh              # 一键初始化 / 升级
-│   └── wg-mgmt.service              # systemd unit
-├── scripts/
-│   ├── build.sh / build.bat         # 交叉编译
-│   └── list-peers.sh / health-check.sh
-├── config.env
-└── Makefile
-```
+---
 
 ## 编译
 
 ```bash
-make build          # 守护进程 → bin/wg-mgmt-daemon
-make build-tui      # TUI → bin/wg-mgmt-tui
-make build-all      # 两个一起
-make vet            # go vet
+make build      # 守护进程 → bin/wg-mgmt-daemon
+make build-tui  # TUI → bin/wg-mgmt-tui
+make build-all  # 两个一起
+make vet        # go vet
 ```
+
+---
 
 ## 常见问题
 
 | 现象 | 解决方案 |
 |------|----------|
-| Windows 无法 ping 通 | 防火墙放行 ICMP：`New-NetFirewallRule -DisplayName "WG ICMP" -Direction Inbound -Protocol ICMPv4 -IcmpType 8 -Action Allow` |
+| Windows 无法 ping 通 | `New-NetFirewallRule -DisplayName "WG ICMP" -Direction Inbound -Protocol ICMPv4 -IcmpType 8 -Action Allow` |
 | 无法访问管理 API | 检查云安全组是否放行 TCP 58880 |
 | 无 WireGuard 握手 | 检查云安全组是否放行 UDP 51820 |
 | 注册重复（409） | 先删除旧 peer 再重新加入 |
+| 部署时提示 "Binary is up to date" 但功能未变 | `sudo rm -f /usr/local/bin/wg-mgmt-daemon` 强制重新编译 |
 | 守护进程启动失败 | `journalctl -u wg-mgmt -n 20` |
 | WG 接口不存在 | `modprobe wireguard && ip link add wg0 type wireguard` |
-| 配置端口被写坏 | `sed -i 's/MGMT_LISTEN=.*/MGMT_LISTEN=0.0.0.0:58880/' config.env` 后 `systemctl restart wg-mgmt` |
-| 管道模式无交互提示 | URL 后加 `?name=自定义名称`，或下载脚本后 `sudo bash script.sh` |
+| 管道模式无交互提示 | URL 后加 `?name=自定义名称`，或下载脚本后 `sudo bash join.sh` |
+| config.env 端口被写坏 | `sed -i 's/MGMT_LISTEN=.*/MGMT_LISTEN=0.0.0.0:58880/' config.env; systemctl restart wg-mgmt` |
+
+---
 
 ## 许可证
 
