@@ -284,7 +284,28 @@ init_wireguard_server() {
     fi
 
     if $needs_init; then
+        local peer_count
+        peer_count=$(wg show wg0 peers 2>/dev/null | wc -l || echo "0")
+        if [[ "$peer_count" -gt 0 ]]; then
+            warn "WireGuard interface wg0 has $peer_count active peer(s) but server keys could not be read."
+            warn "Re-initializing will REPLACE the keypair and all peer configs will be invalid."
+            read -p "$(echo -e "${BOLD}Continue with re-initialization? This is DANGEROUS [y/N]: ")" REINIT_CONFIRM
+            if [[ ! "$REINIT_CONFIRM" =~ ^[Yy] ]]; then
+                error "Aborted. Try restoring from backup or contact support."
+                exit 1
+            fi
+        fi
         cd "$PROJECT_DIR"
+
+        # Backup existing data before overwriting
+        if [[ -f "$PROJECT_DIR/server/peers.json" ]] && [[ -s "$PROJECT_DIR/server/peers.json" ]]; then
+            warn "Backing up existing peers.json to peers.json.bak-$(date +%Y%m%d-%H%M%S)"
+            cp "$PROJECT_DIR/server/peers.json" "$PROJECT_DIR/server/peers.json.bak-$(date +%Y%m%d-%H%M%S)"
+        fi
+        if [[ -f "$wg_conf" ]] && grep -q "^\[Peer\]" "$wg_conf" 2>/dev/null; then
+            warn "Existing wg0.conf has peer sections — backing up before overwrite"
+            cp "$wg_conf" "$wg_conf.bak-$(date +%Y%m%d-%H%M%S)"
+        fi
 
         log "Generating server key pair..."
         server_private=$(wg genkey)
