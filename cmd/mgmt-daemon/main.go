@@ -178,7 +178,9 @@ func main() {
 
 	if wgStatus, err := wgMgr.Show(appCfg.WGInterface); err == nil {
 		wgPeers := make(map[string]store.Peer)
+		wgPubKeySet := make(map[string]bool)
 		for _, p := range wgStatus.Peers {
+			wgPubKeySet[p.PublicKey] = true
 			ip := "0.0.0.0"
 			if parts := strings.SplitN(p.AllowedIPs, "/", 2); len(parts) > 0 {
 				ip = parts[0]
@@ -193,6 +195,22 @@ func main() {
 		recovered := state.ReconcileFromWG(wgPeers)
 		if recovered > 0 {
 			log.Printf("Recovered %d peer(s) from live WireGuard interface", recovered)
+		}
+
+		addedToWG := 0
+		for _, p := range state.AllPeers() {
+			if !wgPubKeySet[p.PublicKey] {
+				allowedIP := fmt.Sprintf("%s/32", p.Address)
+				if err := wgMgr.AddPeerLive(appCfg.WGInterface, p.PublicKey, allowedIP, p.Keepalive); err != nil {
+					log.Printf("WARNING: Failed to add peer %q to WireGuard: %v", p.Name, err)
+				} else {
+					log.Printf("Restored peer %q to WireGuard interface", p.Name)
+					addedToWG++
+				}
+			}
+		}
+
+		if recovered > 0 || addedToWG > 0 {
 			peerMap := make(map[string]wg.PeerInfo)
 			for _, p := range state.AllPeers() {
 				peerMap[p.Name] = wg.PeerInfo{PubKey: p.PublicKey, Address: p.Address, Keepalive: p.Keepalive}
