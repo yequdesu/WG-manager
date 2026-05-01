@@ -205,7 +205,10 @@ func (s *State) ReconcileFromWG(wgPeers map[string]Peer) int {
 func (s *State) NextAvailableIP(subnet string) (string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return s.nextIPInLock(subnet)
+}
 
+func (s *State) nextIPInLock(subnet string) (string, error) {
 	_, ipNet, err := net.ParseCIDR(subnet)
 	if err != nil {
 		return "", fmt.Errorf("invalid subnet %q: %w", subnet, err)
@@ -234,6 +237,65 @@ func (s *State) NextAvailableIP(subnet string) (string, error) {
 	}
 
 	return "", fmt.Errorf("no available IP in subnet %s", subnet)
+}
+
+func (s *State) AllocateIPAndAddPeer(p *Peer, subnet string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.Peers[p.Name]; ok {
+		return "", fmt.Errorf("peer %q already exists", p.Name)
+	}
+
+	ip, err := s.nextIPInLock(subnet)
+	if err != nil {
+		return "", err
+	}
+
+	p.Address = ip
+	if p.Keepalive == 0 {
+		p.Keepalive = 25
+	}
+	if p.CreatedAt == "" {
+		p.CreatedAt = time.Now().UTC().Format(time.RFC3339)
+	}
+
+	s.Peers[p.Name] = *p
+	return ip, nil
+}
+
+func (s *State) ReserveIPAndAddRequest(r Request, subnet string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.Requests[r.ID]; ok {
+		return "", fmt.Errorf("request %q already exists", r.ID)
+	}
+
+	for _, existing := range s.Requests {
+		if existing.Hostname == r.Hostname && (existing.Status == "" || existing.Status == "pending") {
+			return "", fmt.Errorf("a pending request for %q already exists", r.Hostname)
+		}
+	}
+
+	ip, err := s.nextIPInLock(subnet)
+	if err != nil {
+		return "", err
+	}
+
+	r.Address = ip
+	if r.CreatedAt == "" {
+		r.CreatedAt = time.Now().UTC().Format(time.RFC3339)
+	}
+	if r.ExpiresAt == "" {
+		r.ExpiresAt = time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339)
+	}
+	if r.Keepalive == 0 {
+		r.Keepalive = 25
+	}
+
+	s.Requests[r.ID] = r
+	return ip, nil
 }
 
 func (s *State) Save() error {

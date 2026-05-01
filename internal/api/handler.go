@@ -87,28 +87,28 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ip, err := h.allocateSafeIP()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "no available IP addresses"})
-		return
-	}
-
 	peer := store.Peer{
 		Name:       req.Hostname,
 		PublicKey:  publicKey,
 		PrivateKey: privateKey,
-		Address:    ip,
 		DNS:        dns,
 		Keepalive:  h.config.PeerKeepalive,
 		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
 	}
 
-	if err := h.store.AddPeer(peer); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save peer"})
+	ip, err := h.store.AllocateIPAndAddPeer(&peer, h.config.WGSubnet)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "no available IP addresses"})
 		return
 	}
 
-	allowedIP := fmt.Sprintf("%s/32", peer.Address)
+	if err := h.checkIPConflict(ip); err != nil {
+		h.store.RemovePeer(peer.Name)
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+
+	allowedIP := fmt.Sprintf("%s/32", ip)
 		if err := h.wgMgr.AddPeerLive(h.config.WGInterface, peer.PublicKey, allowedIP, peer.Keepalive); err != nil {
 			h.store.RemovePeer(peer.Name)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to add peer to wireguard"})
@@ -244,18 +244,19 @@ func (h *Handler) serveDirectWin(w http.ResponseWriter, r *http.Request, name st
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate keys"})
 			return
 		}
-		ip, err = h.allocateSafeIP()
+		peer := store.Peer{
+			Name: name, PublicKey: publicKey, PrivateKey: privateKey,
+			DNS: dns, Keepalive: h.config.PeerKeepalive,
+			CreatedAt: time.Now().UTC().Format(time.RFC3339),
+		}
+		ip, err = h.store.AllocateIPAndAddPeer(&peer, h.config.WGSubnet)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "no available IP addresses"})
 			return
 		}
-		peer := store.Peer{
-			Name: name, PublicKey: publicKey, PrivateKey: privateKey,
-			Address: ip, DNS: dns, Keepalive: h.config.PeerKeepalive,
-			CreatedAt: time.Now().UTC().Format(time.RFC3339),
-		}
-		if err := h.store.AddPeer(peer); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save peer"})
+		if err := h.checkIPConflict(ip); err != nil {
+			h.store.RemovePeer(name)
+			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 			return
 		}
 		allowedIP := fmt.Sprintf("%s/32", ip)
@@ -460,18 +461,19 @@ func (h *Handler) serveQR(w http.ResponseWriter, r *http.Request, mode, name str
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "keygen failed"})
 				return
 			}
-			ip, err = h.allocateSafeIP()
+			peer := store.Peer{
+				Name: name, PublicKey: publicKey, PrivateKey: privateKey,
+				DNS: dns, Keepalive: h.config.PeerKeepalive,
+				CreatedAt: time.Now().UTC().Format(time.RFC3339),
+			}
+			ip, err = h.store.AllocateIPAndAddPeer(&peer, h.config.WGSubnet)
 			if err != nil {
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "no IP available"})
 				return
 			}
-			peer := store.Peer{
-				Name: name, PublicKey: publicKey, PrivateKey: privateKey,
-				Address: ip, DNS: dns, Keepalive: h.config.PeerKeepalive,
-				CreatedAt: time.Now().UTC().Format(time.RFC3339),
-			}
-			if err := h.store.AddPeer(peer); err != nil {
-				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "save failed"})
+			if err := h.checkIPConflict(ip); err != nil {
+				h.store.RemovePeer(name)
+				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 				return
 			}
 			allowedIP := fmt.Sprintf("%s/32", ip)
@@ -563,12 +565,6 @@ func (h *Handler) SubmitRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ip, err := h.allocateSafeIP()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "no available IP addresses"})
-		return
-	}
-
 	requestID := store.GenerateRequestID()
 	sourceIP := remoteIP(r)
 
@@ -578,12 +574,12 @@ func (h *Handler) SubmitRequest(w http.ResponseWriter, r *http.Request) {
 		DNS:        dns,
 		PrivateKey: privateKey,
 		PublicKey:  publicKey,
-		Address:    ip,
 		Keepalive:  h.config.PeerKeepalive,
 		SourceIP:   sourceIP,
 	}
 
-	if err := h.store.AddRequest(pendingReq); err != nil {
+	ip, err := h.store.ReserveIPAndAddRequest(pendingReq, h.config.WGSubnet)
+	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save request"})
 		return
 	}
@@ -904,25 +900,19 @@ func (h *Handler) ListPeers(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (h *Handler) allocateSafeIP() (string, error) {
-	ip, err := h.allocateSafeIP()
-	if err != nil {
-		return "", err
-	}
+func (h *Handler) checkIPConflict(ip string) error {
 	wgStatus, wgErr := h.wgMgr.Show(h.config.WGInterface)
 	if wgErr != nil {
-		return ip, nil
+		return nil
 	}
-	usedInWG := make(map[string]bool)
 	for _, p := range wgStatus.Peers {
 		if parts := strings.SplitN(p.AllowedIPs, "/", 2); len(parts) > 0 {
-			usedInWG[parts[0]] = true
+			if parts[0] == ip {
+				return fmt.Errorf("IP %s is in use by an orphaned WireGuard peer — remove it via TUI first", ip)
+			}
 		}
 	}
-	if !usedInWG[ip] {
-		return ip, nil
-	}
-	return "", fmt.Errorf("IP %s is in use by an orphaned WireGuard peer — remove it via TUI first", ip)
+	return nil
 }
 
 func (h *Handler) DeletePeer(w http.ResponseWriter, r *http.Request) {
