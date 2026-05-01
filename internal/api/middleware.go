@@ -82,8 +82,7 @@ func LocalOnly(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// KeyOrLocal allows localhost, or remote with valid API Key.
-// Accepts Authorization: Bearer <key> header or ?key=<key> query param.
+// KeyOrLocal allows localhost, or remote with valid API Key via Authorization: Bearer header.
 func KeyOrLocal(apiKey string) func(http.HandlerFunc) http.HandlerFunc {
 	return func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
@@ -103,11 +102,7 @@ func KeyOrLocal(apiKey string) func(http.HandlerFunc) http.HandlerFunc {
 					keyOK = true
 				}
 			}
-			if !keyOK && r.URL.Query().Get("key") == apiKey {
-				keyOK = true
-			}
-
-			if !keyOK {
+	if !keyOK {
 				writeJSON(w, http.StatusUnauthorized, map[string]string{
 					"error": "invalid or missing API key",
 				})
