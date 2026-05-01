@@ -308,20 +308,130 @@ func (h *Handler) serveApprovalPS1(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) serveHTML(w http.ResponseWriter, r *http.Request) {
 	ip := h.config.ServerPublicIP
-	html := `<!DOCTYPE html><html><head><meta charset="utf-8"><title>WG-Manager Connect</title>
-<style>body{font:14px/1.5 monospace;max-width:680px;margin:40px auto;background:#111;color:#eee}
-h1{color:#5af} .box{background:#222;padding:12px;margin:8px 0;border-radius:4px;border:1px solid #444}
-pre{margin:0;white-space:pre-wrap;word-break:break-all;color:#afa} .cmd{color:#ff8}
-label{display:inline-block;min-width:80px}.tab{display:inline-block;padding:4px 12px;cursor:pointer;border:1px solid #555;border-bottom:none;margin-right:4px;border-radius:4px 4px 0 0}.tab.active{background:#333;color:#5af;font-weight:bold}
-.platform{display:none}.platform.active{display:block}a{color:#5af}
+	p := portStr(h.config.MgmtListen)
+	wgSubnet := h.config.WGSubnet
+	html := `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WG-Manager</title>
+<style>*{margin:0;padding:0;box-sizing:border-box}
+body{font:14px/1.6 system-ui,-apple-system,monospace;background:#0d1117;color:#c9d1d9;max-width:780px;margin:0 auto;padding:24px 16px}
+h1{color:#58a6ff;font-size:20px;margin-bottom:4px}
+.sub{color:#8b949e;font-size:12px;margin-bottom:20px}
+.tabs{display:flex;gap:0;border-bottom:1px solid #30363d;margin-bottom:16px}
+.tab{padding:8px 16px;cursor:pointer;border:1px solid transparent;border-radius:6px 6px 0 0;color:#8b949e;font-size:13px;transition:.15s}
+.tab:hover{color:#c9d1d9;background:#161b22}
+.tab.active{color:#58a6ff;border-color:#30363d;border-bottom-color:#0d1117;background:#161b22;font-weight:600}
+.section{display:none}.section.active{display:block}
+.box{background:#161b22;border:1px solid #30363d;border-radius:6px;padding:14px;margin-bottom:12px}
+.box h3{font-size:13px;color:#8b949e;margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px}
+pre{background:#0d1117;padding:10px 14px;border-radius:4px;overflow-x:auto;font-size:13px;color:#7ee787;border:1px solid #21262d;white-space:pre-wrap;word-break:break-all}
+pre.cmd{color:#d2a8ff}
+.hint{color:#8b949e;font-size:12px;margin-top:6px}
+.badge{font-size:11px;padding:1px 6px;border-radius:10px;margin-left:6px}
+.badge-green{background:#0a4225;color:#7ee787}
+.badge-yellow{background:#3b2700;color:#d2991d}
+.badge-blue{background:#04244a;color:#79c0ff}
+a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
+.steps{font-size:13px;color:#c9d1d9;line-height:2;padding-left:16px}
+.footer{margin-top:24px;border-top:1px solid #30363d;padding-top:12px;font-size:12px;color:#484f58}
+.footer a{color:#6e7681}
 </style></head><body>
-<h1>WG-Manager Connect</h1>
-<p>Server: ` + ip + `</p>
-<div><span class="tab active" onclick="show('linux')">Linux / macOS / WSL</span><span class="tab" onclick="show('windows')">Windows</span><span class="tab" onclick="show('browser')">Browser</span></div>
-<div id="linux" class="platform active"><div class="box"><p>Approval (default):</p><pre>curl -sSf http://` + ip + `:` + portStr(h.config.MgmtListen) + `/connect | sudo bash</pre></div><div class="box"><p>Direct (admin link):</p><pre>curl -sSf "http://` + ip + `:` + portStr(h.config.MgmtListen) + `/connect?mode=direct&name=my-device" | sudo bash</pre></div></div>
-<div id="windows" class="platform"><div class="box"><p>Approval — PowerShell:</p><pre>Invoke-WebRequest http://` + ip + `:` + portStr(h.config.MgmtListen) + `/connect -OutFile t.ps1; .\t.ps1</pre></div><div class="box"><p>Direct — CMD:</p><pre>curl -o wg0.conf "http://` + ip + `:` + portStr(h.config.MgmtListen) + `/connect?mode=direct&name=my-pc"</pre></div></div>
-<div id="browser" class="platform"><p>You are already here. Choose a platform tab above to see commands.</p></div>
-<script>function show(id){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));document.querySelectorAll('.platform').forEach(p=>p.classList.remove('active'));document.getElementById(id).classList.add('active');event.target.classList.add('active')}</script>
+<h1>WG-Manager</h1>
+<p class="sub">Server: ` + ip + `  |  Port: ` + p + `  |  Subnet: ` + wgSubnet + `</p>
+<div class="tabs">
+  <span class="tab active" onclick="show('linux')">Linux / macOS / WSL</span>
+  <span class="tab" onclick="show('windows')">Windows</span>
+  <span class="tab" onclick="show('mobile')">Mobile QR</span>
+  <span class="tab" onclick="show('admin')">Admin</span>
+</div>
+
+<div id="linux" class="section active">
+  <div class="box">
+    <h3>Approval Mode <span class="badge badge-green">default</span></h3>
+    <p class="hint">Submit a request, an admin approves it, then you auto-connect.</p>
+    <pre>curl -sSf http://` + ip + `:` + p + `/connect | sudo bash</pre>
+    <p class="hint">With custom name: append ?name=myname to the URL</p>
+  </div>
+  <div class="box">
+    <h3>Direct Mode <span class="badge badge-yellow">requires API key</span></h3>
+    <p class="hint">Trusted users join instantly with just one command.</p>
+    <pre class="cmd">curl -sSf "http://` + ip + `:` + p + `/connect?mode=direct&name=my-laptop" | sudo bash</pre>
+  </div>
+  <div class="box">
+    <h3>Verify</h3>
+    <ol class="steps"><li><pre>sudo wg show</pre></li><li><pre>ping 10.0.0.1</pre></li></ol>
+  </div>
+</div>
+
+<div id="windows" class="section">
+  <div class="box">
+    <h3>PowerShell — Approval</h3>
+    <pre>Invoke-WebRequest http://` + ip + `:` + p + `/connect -OutFile join.ps1
+.\join.ps1</pre>
+    <p class="hint">Enter peer name when prompted. Wait for admin approval.</p>
+  </div>
+  <div class="box">
+    <h3>PowerShell — Direct <span class="badge badge-yellow">API key embedded</span></h3>
+    <pre class="cmd">Invoke-WebRequest "http://` + ip + `:` + p + `/connect?mode=direct&name=MYPC" -OutFile wg0.conf</pre>
+  </div>
+  <div class="box">
+    <h3>CMD — Approval</h3>
+    <pre>curl -X POST http://` + ip + `:` + p + `/api/v1/request -H "Content-Type: application/json" -d "{\"hostname\":\"MYPC\",\"dns\":\"1.1.1.1\"}"</pre>
+  </div>
+  <div class="box">
+    <h3>CMD — Direct</h3>
+    <pre class="cmd">curl -o wg0.conf "http://` + ip + `:` + p + `/connect?mode=direct&name=MYPC"</pre>
+  </div>
+  <div class="box">
+    <h3>Import .conf into WireGuard</h3>
+    <ol class="steps">
+      <li>Install <a href="https://download.wireguard.com/windows-client/" target="_blank">WireGuard for Windows</a></li>
+      <li>WireGuard → Import Tunnel(s) from file → select .conf</li>
+      <li>Click Activate</li>
+    </ol>
+    <p class="hint">If ping fails: New-NetFirewallRule -DisplayName "WG ICMP" -Direction Inbound -Protocol ICMPv4 -IcmpType 8 -Action Allow</p>
+  </div>
+</div>
+
+<div id="mobile" class="section">
+  <div class="box">
+    <h3>Generate QR on Server</h3>
+    <p class="hint">Admin runs this on the server to create a QR image for a device:</p>
+    <pre>curl -s "http://localhost:` + p + `/connect?qrcode&mode=direct&name=phone1" -o phone1.svg</pre>
+    <p class="hint">Send phone1.svg to the mobile device → WireGuard App → Scan from QR code</p>
+  </div>
+  <div class="box">
+    <h3>QR from Browser</h3>
+    <p class="hint">Scan a direct-registration QR directly (API key embedded):</p>
+    <pre>http://` + ip + `:` + p + `/connect?qrcode&mode=direct&name=phone1</pre>
+    <p class="hint">Open this URL in a browser to see the QR code, or use WireGuard's built-in scanner.</p>
+  </div>
+</div>
+
+<div id="admin" class="section">
+  <div class="box">
+    <h3>Server Management</h3>
+    <pre>wg-mgmt-tui                           # Interactive TUI dashboard
+bash scripts/health-check.sh          # System health check
+bash scripts/list-peers.sh            # List peers with status
+tail -f /var/log/wg-mgmt/audit.log    # Audit log</pre>
+  </div>
+  <div class="box">
+    <h3>API Reference</h3>
+    <pre>GET  /api/v1/health                    Health check (no auth)
+GET  /api/v1/peers                     List peers (server-local)
+GET  /api/v1/requests                  Pending requests (server-local)
+GET  /api/v1/status                    Daemon + WG status (server-local)
+POST /api/v1/register                  Register peer (API key)
+POST /api/v1/request                   Submit approval request (rate-limited)
+POST /api/v1/requests/{id}/approve     Approve request (server-local)
+DELETE /api/v1/peers/{name}            Remove peer (server-local)
+DELETE /api/v1/requests/{id}           Reject request (server-local)</pre>
+  </div>
+</div>
+
+<div class="footer">
+  WG-Manager  |  <a href="/api/v1/health">health</a>  |  <a href="/api/v1/status">status</a>
+</div>
+<script>function show(id){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));document.getElementById(id).classList.add('active');event.target.classList.add('active')}</script>
 </body></html>`
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)

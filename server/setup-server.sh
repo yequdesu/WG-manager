@@ -84,16 +84,84 @@ check_environment() {
     local wg_port="${1:-51820}"
     local mgmt_port="${2:-58880}"
 
-    if ss -uln | grep -q ":$wg_port "; then
+    if ss -uln 2>/dev/null | grep -q ":$wg_port "; then
         warn "UDP port $wg_port is already in use"
     else
         log "UDP port $wg_port: available"
     fi
 
-    if ss -tln | grep -q ":$mgmt_port "; then
+    if ss -tln 2>/dev/null | grep -q ":$mgmt_port "; then
         warn "TCP port $mgmt_port is already in use"
     else
         log "TCP port $mgmt_port: available"
+    fi
+
+    if lsmod 2>/dev/null | grep -q wireguard; then
+        log "WireGuard kernel module: loaded"
+    elif modprobe wireguard 2>/dev/null; then
+        log "WireGuard kernel module: loaded manually"
+    else
+        warn "WireGuard kernel module not found — ensure wireguard-dkms is installed"
+    fi
+
+    if command -v go &>/dev/null; then
+        local gov
+        gov=$(go version 2>/dev/null | grep -oP 'go\d+\.\d+' | head -1 || echo "unknown")
+        log "Go: $gov"
+    else
+        warn "Go not installed — daemon cannot be built"
+        warn "  Install: sudo apt install golang-go"
+    fi
+
+    if command -v python3 &>/dev/null; then
+        log "python3: available"
+    else
+        warn "python3 not found — client scripts use python3 for JSON parsing"
+        warn "  Install: sudo apt install python3"
+    fi
+
+    if command -v jq &>/dev/null; then
+        log "jq: available (preferred JSON parser)"
+    elif command -v python3 &>/dev/null; then
+        log "jq: not installed (python3 fallback available)"
+    else
+        warn "Neither jq nor python3 available — JSON parsing will use basic shell fallback"
+        warn "  Install jq for best results: sudo apt install jq"
+    fi
+
+    if command -v curl &>/dev/null; then log "curl: available"; else warn "curl not found"; fi
+    if command -v openssl &>/dev/null; then log "openssl: available"; else warn "openssl not found"; fi
+
+    if command -v iptables &>/dev/null; then
+        log "iptables: available"
+    else
+        warn "iptables not found — WireGuard forwarding rules may not work"
+    fi
+
+    if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q "active"; then
+        warn "UFW is active — ensure it allows UDP $wg_port and TCP $mgmt_port"
+    fi
+
+    local avail_kb
+    avail_kb=$(df /var/log --output=avail 2>/dev/null | tail -1 | tr -d ' ' || echo "0")
+    if [[ "$avail_kb" -gt 102400 ]]; then
+        log "Disk space (/var/log): $(($avail_kb / 1024)) MB"
+    else
+        warn "Low disk space on /var/log: $(($avail_kb / 1024)) MB (need 100+ MB for audit logs)"
+    fi
+
+    local mem_kb
+    mem_kb=$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}' || echo "0")
+    if [[ "$mem_kb" -gt 65536 ]]; then
+        log "Memory: $(($mem_kb / 1024)) MB"
+    else
+        warn "Low memory: $(($mem_kb / 1024)) MB (recommend 64+ MB free)"
+    fi
+
+    if timedatectl 2>/dev/null | grep -q "NTP service: active"; then
+        log "NTP/time sync: active"
+    else
+        warn "NTP not active — WireGuard handshake timing depends on accurate clock"
     fi
 }
 
@@ -444,32 +512,53 @@ print_summary() {
     local api_key
     api_key=$(grep MGMT_API_KEY "$CONFIG_FILE" 2>/dev/null | cut -d= -f2 || echo "unknown")
 
-    echo -e "${BOLD}${GREEN}WireGuard Management Layer is ready!${NC}"
+    echo -e "${BOLD}${GREEN}WG-Manager is ready!${NC}"
     echo ""
-    echo -e "  ${BOLD}Server IP:${NC}     $SERVER_PUBLIC_IP"
-    echo -e "  ${BOLD}WG Port:${NC}       $WG_PORT"
-    echo -e "  ${BOLD}MGMT Port:${NC}     $mgmt_port"
-    echo -e "  ${BOLD}API Key:${NC}       $api_key"
+
+    echo -e "  ${BOLD}Server Info${NC}"
+    echo -e "    Server IP:    ${BOLD}${SERVER_PUBLIC_IP}${NC}"
+    echo -e "    WG Port:      ${BOLD}${WG_PORT}${NC} (UDP)"
+    echo -e "    MGMT Port:    ${BOLD}${mgmt_port}${NC} (TCP)"
+    echo -e "    API Key:      ${BOLD}${api_key}${NC}"
+    echo -e "    Default DNS:  ${BOLD}${DEFAULT_DNS}${NC}"
     echo ""
-    echo -e "  ${BOLD}${CYAN}Connect (all platforms, approval mode):${NC}"
-    echo -e "    ${BOLD}curl -sSf http://${SERVER_PUBLIC_IP}:${mgmt_port}/connect | sudo bash${NC}"
+
+    echo -e "  ${BOLD}${CYAN}Client Connect${NC} ${YELLOW}-- copy a command to share${NC}"
     echo ""
-    echo -e "  ${BOLD}${CYAN}Direct (trusted users, with API key):${NC}"
-    echo -e "    ${BOLD}curl -sSf \"http://${SERVER_PUBLIC_IP}:${mgmt_port}/connect?mode=direct&name=DEVICE\" | sudo bash${NC}"
+
+    echo -e "    ${BOLD}Linux / macOS / WSL${NC}"
+    echo -e "      Approval (no key):  curl -sSf http://${SERVER_PUBLIC_IP}:${mgmt_port}/connect | sudo bash"
+    echo -e "      Direct (trusted):   curl -sSf \"http://${SERVER_PUBLIC_IP}:${mgmt_port}/connect?mode=direct&name=DEVICE\" | sudo bash"
     echo ""
-    echo -e "  ${BOLD}${CYAN}Windows / Browser:${NC}"
-    echo -e "    ${BOLD}Open http://${SERVER_PUBLIC_IP}:${mgmt_port}/connect${NC}"
+
+    echo -e "    ${BOLD}Windows PowerShell${NC}"
+    echo -e "      Approval:  Invoke-WebRequest http://${SERVER_PUBLIC_IP}:${mgmt_port}/connect -OutFile join.ps1; .\\join.ps1"
+    echo -e "      Direct:    Invoke-WebRequest \"http://${SERVER_PUBLIC_IP}:${mgmt_port}/connect?mode=direct&name=MYPC\" -OutFile wg0.conf"
     echo ""
-    echo -e "  ${YELLOW}Admin commands (run on server):${NC}"
-    echo -e "    ${BOLD}wg-mgmt-tui${NC}                                          # TUI manager"
-    echo -e "    ${BOLD}curl -s http://127.0.0.1:${mgmt_port}/api/v1/peers \\${NC}"
-    echo -e "         ${BOLD}-H 'Authorization: Bearer ${api_key}' | python3 -m json.tool${NC}"
-    echo -e "    ${BOLD}tail -f /var/log/wg-mgmt/audit.log${NC}                   # Audit log"
-    echo -e "         -H 'Authorization: Bearer ${api_key}'"
+
+    echo -e "    ${BOLD}Windows CMD${NC}"
+    echo -e "      Approval:  curl -X POST http://${SERVER_PUBLIC_IP}:${mgmt_port}/api/v1/request -H \"Content-Type: application/json\" -d \"{\\\"hostname\\\":\\\"MYPC\\\",\\\"dns\\\":\\\"1.1.1.1\\\"}\""
+    echo -e "      Direct:    curl -o wg0.conf \"http://${SERVER_PUBLIC_IP}:${mgmt_port}/connect?mode=direct&name=MYPC\""
     echo ""
-    echo -e "  ${YELLOW}Important:${NC} Ensure your cloud firewall/security group allows:"
-    echo -e "    - UDP port ${WG_PORT}  (WireGuard)"
-    echo -e "    - TCP port ${mgmt_port}  (Management API for client registration)"
+
+    echo -e "    ${BOLD}Mobile QR${NC} (generate on server)"
+    echo -e "      curl -s \"http://localhost:${mgmt_port}/connect?qrcode&mode=direct&name=phone1\" -o phone1.svg"
+    echo -e "      Send phone1.svg to device -> WireGuard App -> Scan from QR code"
+    echo ""
+
+    echo -e "    ${BOLD}Browser${NC}:  http://${SERVER_PUBLIC_IP}:${mgmt_port}/connect"
+    echo ""
+
+    echo -e "  ${BOLD}${CYAN}Server Management${NC}"
+    echo -e "    ${BOLD}wg-mgmt-tui${NC}                              Interactive dashboard"
+    echo -e "    ${BOLD}bash scripts/health-check.sh${NC}            System health check"
+    echo -e "    ${BOLD}bash scripts/list-peers.sh${NC}             View all peers"
+    echo -e "    ${BOLD}tail -f /var/log/wg-mgmt/audit.log${NC}     Live audit trail"
+    echo ""
+
+    echo -e "  ${BOLD}${YELLOW}Security${NC}"
+    echo -e "    Firewall:       allow UDP ${WG_PORT} + TCP ${mgmt_port}"
+    echo -e "    peers.json:     encrypted at rest (AES-256-GCM)"
     echo ""
 }
 

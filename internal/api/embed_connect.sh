@@ -15,6 +15,18 @@ log()  { echo -e "${GREEN}[+]${NC} $*"; }
 warn() { echo -e "${YELLOW}[!]${NC} $*"; }
 err()  { echo -e "${RED}[x]${NC} $*"; }
 
+json_get() {
+    local json="$1" key="$2" default="${3:-}"
+    if command -v jq &>/dev/null; then
+        echo "$json" | jq -r ".$key" 2>/dev/null || echo "$default"
+    elif command -v python3 &>/dev/null; then
+        local pykey="['$(echo "$key" | sed "s/\./']['/g")']"
+        echo "$json" | python3 -c "import sys,json; print(json.load(sys.stdin)$pykey)" 2>/dev/null || echo "$default"
+    else
+        echo "$default"
+    fi
+}
+
 auto_sudo() {
     if [[ "$(id -u)" -ne 0 ]]; then
         echo "[x] Run as root: curl ... | sudo bash"
@@ -80,12 +92,12 @@ RESP=$(curl --connect-timeout 5 --max-time 10 -sSf -X POST "http://${SERVER_IP}:
     err "Failed to register. Response: $RESP"; exit 1
 }
 
-ADDR=$(echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['peer']['address'])" 2>/dev/null || echo "")
-KEY=$(echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['peer']['private_key'])" 2>/dev/null || echo "")
-SPUB=$(echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['peer']['server_public_key'])" 2>/dev/null || echo "")
-SEP=$(echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['peer']['server_endpoint'])" 2>/dev/null || echo "")
-DNS=$(echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['peer']['dns'])" 2>/dev/null || echo "$DEFAULT_DNS")
-KA=$(echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['peer']['keepalive'])" 2>/dev/null || echo "25")
+ADDR=$(json_get "$RESP" "peer.address" "")
+KEY=$(json_get "$RESP" "peer.private_key" "")
+SPUB=$(json_get "$RESP" "peer.server_public_key" "")
+SEP=$(json_get "$RESP" "peer.server_endpoint" "")
+DNS=$(json_get "$RESP" "peer.dns" "$DEFAULT_DNS")
+KA=$(json_get "$RESP" "peer.keepalive" "25")
 log "Registered: $PEER_NAME ($ADDR)"
 
 # ── Phase 3: Write config and start ─────────────────

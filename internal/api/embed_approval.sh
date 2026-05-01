@@ -16,6 +16,18 @@ log()  { echo -e "${GREEN}[+]${NC} $*"; }
 warn() { echo -e "${YELLOW}[!]${NC} $*"; }
 err()  { echo -e "${RED}[x]${NC} $*"; }
 
+json_get() {
+    local json="$1" key="$2" default="${3:-}"
+    if command -v jq &>/dev/null; then
+        echo "$json" | jq -r ".$key" 2>/dev/null || echo "$default"
+    elif command -v python3 &>/dev/null; then
+        local pykey="['$(echo "$key" | sed "s/\./']['/g")']"
+        echo "$json" | python3 -c "import sys,json; print(json.load(sys.stdin)$pykey)" 2>/dev/null || echo "$default"
+    else
+        echo "$default"
+    fi
+}
+
 auto_sudo() {
     if [[ "$(id -u)" -ne 0 ]]; then
         echo "[x] Run as root: curl ... | sudo bash"
@@ -84,7 +96,7 @@ RESP=$(curl --connect-timeout 5 --max-time 10 -sSf -X POST "http://${SERVER_IP}:
     -d "{\"hostname\":\"${PEER_NAME}\",\"dns\":\"${DEFAULT_DNS}\"}" 2>&1) || {
     err "Failed to submit: $RESP"; exit 1
 }
-REQ_ID=$(echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['request_id'])" 2>/dev/null || echo "")
+REQ_ID=$(json_get "$RESP" "request_id" "")
 [[ -z "$REQ_ID" ]] && { echo "$RESP" | python3 -m json.tool 2>/dev/null || echo "$RESP"; exit 1; }
 log "Request ID: $REQ_ID"
 warn "Waiting for admin approval..."
@@ -94,18 +106,18 @@ ELAPSED=0; APPROVED=false; PEER_CONFIG=""
 while [[ $ELAPSED -lt $POLL_TIMEOUT ]]; do
     sleep $POLL_INTERVAL; ELAPSED=$((ELAPSED + POLL_INTERVAL))
     SR=$(curl -s --connect-timeout 5 --max-time 10 "http://${SERVER_IP}:${MGMT_PORT}/api/v1/request/${REQ_ID}" 2>/dev/null || echo '{"status":"error"}')
-    ST=$(echo "$SR" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','error'))" 2>/dev/null || echo "error")
+    ST=$(json_get "$SR" "status" "error")
     case "$ST" in
         pending) echo -e "${CYAN}[${ELAPSED}s]${NC} waiting..." ;;
         approved)
             log "Approved! Configuring..."
             APPROVED=true
-            ADDR=$(echo "$SR" | python3 -c "import sys,json; print(json.load(sys.stdin)['peer']['address'])" 2>/dev/null || echo "")
-            KEY=$(echo "$SR" | python3 -c "import sys,json; print(json.load(sys.stdin)['peer']['private_key'])" 2>/dev/null || echo "")
-            SPUB=$(echo "$SR" | python3 -c "import sys,json; print(json.load(sys.stdin)['peer']['server_public_key'])" 2>/dev/null || echo "")
-            SEP=$(echo "$SR" | python3 -c "import sys,json; print(json.load(sys.stdin)['peer']['server_endpoint'])" 2>/dev/null || echo "")
-            DNS=$(echo "$SR" | python3 -c "import sys,json; print(json.load(sys.stdin)['peer']['dns'])" 2>/dev/null || echo "$DEFAULT_DNS")
-            KA=$(echo "$SR" | python3 -c "import sys,json; print(json.load(sys.stdin)['peer']['keepalive'])" 2>/dev/null || echo "25")
+            ADDR=$(json_get "$SR" "peer.address" "")
+            KEY=$(json_get "$SR" "peer.private_key" "")
+            SPUB=$(json_get "$SR" "peer.server_public_key" "")
+            SEP=$(json_get "$SR" "peer.server_endpoint" "")
+            DNS=$(json_get "$SR" "peer.dns" "$DEFAULT_DNS")
+            KA=$(json_get "$SR" "peer.keepalive" "25")
             PEER_CONFIG=$(printf "[Interface]\nAddress = %s\nPrivateKey = %s\nDNS = %s\n\n[Peer]\nPublicKey = %s\nEndpoint = %s\nAllowedIPs = __WG_ALLOWED_IPS__\nPersistentKeepalive = %s\n" "$ADDR" "$KEY" "$DNS" "$SPUB" "$SEP" "$KA")
             break
             ;;
