@@ -147,6 +147,12 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 	name := r.URL.Query().Get("name")
 	platform := r.URL.Query().Get("platform")
 
+	// QR code endpoint
+	if _, ok := r.URL.Query()["qrcode"]; ok {
+		h.serveQR(w, r, mode, name)
+		return
+	}
+
 	isPS := platform == "windows" || strings.Contains(ua, "PowerShell") || strings.Contains(ua, "WindowsPowerShell")
 	isShell := platform == "linux" || platform == "wsl" || platform == "macos" ||
 		strings.Contains(ua, "curl") || strings.Contains(ua, "Wget") || strings.Contains(ua, "bash") || strings.Contains(ua, "libcurl")
@@ -310,6 +316,72 @@ label{display:inline-block;min-width:80px}.tab{display:inline-block;padding:4px 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(html))
+}
+
+func (h *Handler) serveQR(w http.ResponseWriter, r *http.Request, mode, name string) {
+	isDirect := mode == "direct"
+	var content string
+
+	if isDirect {
+		if name == "" { name = "mobile" }
+		q := r.URL.Query()
+		dns := q.Get("dns")
+		if dns == "" { dns = h.config.DefaultDNS }
+
+		var privateKey, publicKey, ip string
+		if existing, ok := h.store.GetPeer(name); ok {
+			privateKey = existing.PrivateKey
+			publicKey = existing.PublicKey
+			ip = existing.Address
+		} else {
+			var err error
+			privateKey, publicKey, err = h.wgMgr.GenKeyPair()
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "keygen failed"})
+				return
+			}
+			ip, err = h.store.NextAvailableIP(h.config.WGSubnet)
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "no IP available"})
+				return
+			}
+			peer := store.Peer{
+				Name: name, PublicKey: publicKey, PrivateKey: privateKey,
+				Address: ip, DNS: dns, Keepalive: h.config.PeerKeepalive,
+				CreatedAt: time.Now().UTC().Format(time.RFC3339),
+			}
+			if err := h.store.AddPeer(peer); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "save failed"})
+				return
+			}
+			allowedIP := fmt.Sprintf("%s/32", ip)
+			if err := h.wgMgr.AddPeerLive(h.config.WGInterface, publicKey, allowedIP, h.config.PeerKeepalive); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "wg add failed"})
+				return
+			}
+			if err := h.writeConfigToDisk(); err != nil { return }
+			if err := h.store.Save(); err != nil { return }
+			audit.Log("peer_registered", auditFields("name", name, "ip", ip, "source", "qr"))
+		}
+		content = fmt.Sprintf(`[Interface]
+Address = %s/24
+PrivateKey = %s
+DNS = %s
+
+[Peer]
+PublicKey = %s
+Endpoint = %s
+AllowedIPs = %s
+PersistentKeepalive = %d
+`, ip, privateKey, dns, h.store.Server().PublicKey, h.config.ServerEndpoint(), h.config.WGSubnet, h.config.PeerKeepalive)
+	} else {
+		content = fmt.Sprintf("http://%s:%s/connect", h.config.ServerPublicIP, portStr(h.config.MgmtListen))
+	}
+
+	svg := generateQR(content)
+	w.Header().Set("Content-Type", "image/svg+xml")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(svg))
 }
 
 func (h *Handler) SubmitRequest(w http.ResponseWriter, r *http.Request) {

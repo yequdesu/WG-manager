@@ -9,8 +9,8 @@ import (
 )
 
 type rateEntry struct {
-	count    int
-	window   time.Time
+	count  int
+	window time.Time
 }
 
 var (
@@ -65,65 +65,55 @@ func RateLimitMiddleware(maxPerMinute int) func(http.HandlerFunc) http.HandlerFu
 	}
 }
 
-func AuthMiddleware(apiKey string) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			host, _, err := net.SplitHostPort(r.RemoteAddr)
-			if err != nil {
-				host = r.RemoteAddr
-			}
-			if host == "127.0.0.1" || host == "::1" {
-				next.ServeHTTP(w, r)
-				return
-			}
-
-			if apiKey == "" {
-				next.ServeHTTP(w, r)
-				return
-			}
-
-			auth := r.Header.Get("Authorization")
-			if auth == "" {
-				writeJSON(w, http.StatusUnauthorized, map[string]string{
-					"error": "missing Authorization header",
-				})
-				return
-			}
-
-			parts := strings.SplitN(auth, " ", 2)
-			if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
-				writeJSON(w, http.StatusUnauthorized, map[string]string{
-					"error": "invalid Authorization format, expected: Bearer <token>",
-				})
-				return
-			}
-
-			if parts[1] != apiKey {
-				writeJSON(w, http.StatusUnauthorized, map[string]string{
-					"error": "invalid API key",
-				})
-				return
-			}
-
-			next.ServeHTTP(w, r)
-		})
-	}
-}
-
-func AdminOnlyMiddleware(next http.HandlerFunc) http.HandlerFunc {
+// LocalOnly allows only localhost (127.0.0.1 / ::1).
+func LocalOnly(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		host, _, err := net.SplitHostPort(r.RemoteAddr)
 		if err != nil {
 			host = r.RemoteAddr
 		}
-
 		if host != "127.0.0.1" && host != "::1" {
 			writeJSON(w, http.StatusForbidden, map[string]string{
 				"error": "access denied: admin endpoints require localhost access",
 			})
 			return
 		}
-
 		next(w, r)
+	}
+}
+
+// KeyOrLocal allows localhost, or remote with valid API Key.
+// Accepts Authorization: Bearer <key> header or ?key=<key> query param.
+func KeyOrLocal(apiKey string) func(http.HandlerFunc) http.HandlerFunc {
+	return func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			host, _, err := net.SplitHostPort(r.RemoteAddr)
+			if err != nil {
+				host = r.RemoteAddr
+			}
+			if host == "127.0.0.1" || host == "::1" {
+				next(w, r)
+				return
+			}
+
+			keyOK := false
+			if auth := r.Header.Get("Authorization"); auth != "" {
+				parts := strings.SplitN(auth, " ", 2)
+				if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") && parts[1] == apiKey {
+					keyOK = true
+				}
+			}
+			if !keyOK && r.URL.Query().Get("key") == apiKey {
+				keyOK = true
+			}
+
+			if !keyOK {
+				writeJSON(w, http.StatusUnauthorized, map[string]string{
+					"error": "invalid or missing API key",
+				})
+				return
+			}
+			next(w, r)
+		}
 	}
 }
