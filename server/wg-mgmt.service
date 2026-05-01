@@ -6,7 +6,9 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=root
-ExecStart=/usr/local/bin/wg-mgmt-daemon --config=__CONFIG_PATH__
+# Template — setup-server.sh generates the real unit with actual paths.
+# Do not deploy this file directly.
+ExecStart=/usr/local/bin/wg-mgmt-daemon --config=/home/yequdesu/WG-manager/config.env
 Restart=always
 RestartSec=5
 

@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strconv"
 	"strings"
@@ -118,9 +119,9 @@ func detectPublicIP() string {
 		if err != nil {
 			continue
 		}
-		defer resp.Body.Close()
 		buf := make([]byte, 64)
 		n, _ := resp.Body.Read(buf)
+		resp.Body.Close()
 		ip := strings.TrimSpace(string(buf[:n]))
 		if net.ParseIP(ip) != nil {
 			return ip
@@ -145,6 +146,14 @@ func main() {
 	appCfg, err := loadConfig(configPath)
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
+	}
+
+	// Self-check
+	if _, err := exec.LookPath("wg"); err != nil {
+		log.Printf("Warning: 'wg' binary not found in PATH — WireGuard operations will fail")
+	}
+	if appCfg.ServerPublicIP == "" {
+		log.Fatal("SERVER_PUBLIC_IP is empty — set it in config.env")
 	}
 
 	state, err := store.Load(appCfg.PeersDBPath)

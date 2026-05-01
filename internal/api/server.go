@@ -25,21 +25,12 @@ func NewServer(cfg *Config, s *store.State, m *wg.Manager) *http.Server {
 	mux.HandleFunc("/api/v1/request", rateLimit(h.SubmitRequest))
 	mux.HandleFunc("/api/v1/request/", h.RequestStatus)
 
-	// Admin: manage requests
-	listReqsHandler := AuthMiddleware(cfg.APIKey)(AdminOnlyMiddleware(h.ListRequests))
-	mux.Handle("/api/v1/requests", methodGuard(http.MethodGet, listReqsHandler))
-
-	reqManageHandler := AuthMiddleware(cfg.APIKey)(AdminOnlyMiddleware(h.ManageRequest))
-	mux.Handle("/api/v1/requests/", reqManageHandler)
-
-	listPeersHandler := AuthMiddleware(cfg.APIKey)(AdminOnlyMiddleware(h.ListPeers))
-	mux.Handle("/api/v1/peers", methodGuard(http.MethodGet, listPeersHandler))
-
-	deletePeerHandler := AuthMiddleware(cfg.APIKey)(AdminOnlyMiddleware(h.DeletePeer))
-	mux.Handle("/api/v1/peers/", methodGuard(http.MethodDelete, deletePeerHandler))
-
-	statusHandler := AuthMiddleware(cfg.APIKey)(AdminOnlyMiddleware(h.Status))
-	mux.Handle("/api/v1/status", methodGuard(http.MethodGet, statusHandler))
+	// Admin: localhost-only routes
+	mux.Handle("/api/v1/requests", methodGuard(http.MethodGet, AdminOnlyMiddleware(h.ListRequests)))
+	mux.Handle("/api/v1/requests/", AdminOnlyMiddleware(h.ManageRequest))
+	mux.Handle("/api/v1/peers", methodGuard(http.MethodGet, AdminOnlyMiddleware(h.ListPeers)))
+	mux.Handle("/api/v1/peers/", methodGuard(http.MethodDelete, AdminOnlyMiddleware(h.DeletePeer)))
+	mux.Handle("/api/v1/status", methodGuard(http.MethodGet, AdminOnlyMiddleware(h.Status)))
 
 	return &http.Server{
 		Addr:    cfg.MgmtListen,

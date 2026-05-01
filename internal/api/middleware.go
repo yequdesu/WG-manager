@@ -19,18 +19,29 @@ var (
 )
 
 func RateLimitMiddleware(maxPerMinute int) func(http.HandlerFunc) http.HandlerFunc {
+	go func() {
+		for {
+			time.Sleep(5 * time.Minute)
+			rateMutex.Lock()
+			now := time.Now()
+			for ip, e := range rateMap {
+				if now.Sub(e.window) > 2*time.Minute {
+					delete(rateMap, ip)
+				}
+			}
+			rateMutex.Unlock()
+		}
+	}()
 	return func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			host, _, err := net.SplitHostPort(r.RemoteAddr)
 			if err != nil {
 				host = r.RemoteAddr
 			}
-
 			if host == "127.0.0.1" || host == "::1" {
 				next(w, r)
 				return
 			}
-
 			rateMutex.Lock()
 			entry, ok := rateMap[host]
 			now := time.Now()
@@ -43,7 +54,6 @@ func RateLimitMiddleware(maxPerMinute int) func(http.HandlerFunc) http.HandlerFu
 			entry.count++
 			current := entry.count
 			rateMutex.Unlock()
-
 			if current > maxPerMinute {
 				writeJSON(w, http.StatusTooManyRequests, map[string]string{
 					"error": "rate limit exceeded, try again later",

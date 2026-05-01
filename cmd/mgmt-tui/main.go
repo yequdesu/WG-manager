@@ -142,6 +142,9 @@ func loadConfig() {
 	if cfg.APIURL == "" {
 		cfg.APIURL = "http://127.0.0.1:58880"
 	}
+	if cfg.AuditLog == "" {
+		cfg.AuditLog = "/var/log/wg-mgmt/audit.log"
+	}
 }
 
 func refresh() {
@@ -527,6 +530,8 @@ func renderPeers(b *strings.Builder, f frame) {
 	writeRow(b, f, row, fmt.Sprintf("%-4s %-20s %-14s %-7s %-5s",
 		"#", "Name", "IP", "Status", "HS"), false)
 	row++
+
+	listEnd := row
 	for i, p := range peers.Peers {
 		if row > f.ce { break }
 		ind := "  "
@@ -539,6 +544,26 @@ func renderPeers(b *strings.Builder, f frame) {
 				ind, i+1, trunc(sanitize(p.Name), 20), p.Address, on, hs),
 			i == sel)
 		row++
+	}
+	listEnd = row
+
+	// Detail panel for selected peer
+	if n > 0 && sel < n && listEnd+6 <= f.ce {
+		p := peers.Peers[sel]
+		writeRow(b, f, listEnd, "  ── Details ───────────────────────────────────────", false)
+		listEnd++
+		writeRow(b, f, listEnd, fmt.Sprintf("  Name:      %s", sanitize(p.Name)), false); listEnd++
+		writeRow(b, f, listEnd, fmt.Sprintf("  IP:        %s", p.Address), false); listEnd++
+		writeRow(b, f, listEnd, fmt.Sprintf("  PublicKey: %s", trunc(p.PublicKey, 50)), false); listEnd++
+		endpoint := p.Endpoint
+		if endpoint == "(none)" { endpoint = "—" }
+		writeRow(b, f, listEnd, fmt.Sprintf("  Endpoint:  %s", endpoint), false); listEnd++
+		hs := handshakeAgo(p.LatestHandshake)
+		rx := formatBytes(p.TransferRx); tx := formatBytes(p.TransferTx)
+		writeRow(b, f, listEnd, fmt.Sprintf("  HS: %s  rx:%s  tx:%s", hs, rx, tx), false); listEnd++
+		if p.DNS != "" {
+			writeRow(b, f, listEnd, fmt.Sprintf("  DNS: %s", p.DNS), false); listEnd++
+		}
 	}
 }
 
@@ -606,7 +631,7 @@ func renderLog(b *strings.Builder, f frame) {
 	if start > n-max && n > max { start = n - max }
 	row := f.cs
 	if n == 0 {
-		writeRow(b, f, row, "  (no log entries — run 'wg-mgmt-tui' as root, or check audit log path)", false)
+		writeRow(b, f, row, "  (no events yet — peer join or admin action to populate)", false)
 	} else {
 		for i := start; i < n && row <= f.ce; i++ {
 			prefix := "  "
