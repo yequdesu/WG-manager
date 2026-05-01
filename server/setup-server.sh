@@ -467,7 +467,8 @@ deploy_daemon() {
 [Unit]
 Description=WireGuard Management Daemon
 After=network-online.target wg-quick@wg0.service
-Wants=network-online.target
+Wants=network-online.target wg-quick@wg0.service
+Requires=wg-quick@wg0.service
 
 [Service]
 Type=simple

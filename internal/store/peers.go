@@ -161,6 +161,47 @@ func (s *State) AllPeers() []Peer {
 	return peers
 }
 
+func (s *State) PeerByPublicKey(pubKey string) (Peer, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, p := range s.Peers {
+		if p.PublicKey == pubKey {
+			return p, true
+		}
+	}
+	return Peer{}, false
+}
+
+func (s *State) ReconcileFromWG(wgPeers map[string]Peer) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	added := 0
+	for tag, wp := range wgPeers {
+		found := false
+		for _, p := range s.Peers {
+			if p.PublicKey == wp.PublicKey {
+				found = true
+				break
+			}
+		}
+		if !found {
+			name := "recovered-" + tag
+			if len(name) > 32 {
+				name = name[:32]
+			}
+			if wp.Keepalive == 0 {
+				wp.Keepalive = 25
+			}
+			if wp.CreatedAt == "" {
+				wp.CreatedAt = time.Now().UTC().Format(time.RFC3339)
+			}
+			s.Peers[name] = wp
+			added++
+		}
+	}
+	return added
+}
+
 func (s *State) NextAvailableIP(subnet string) (string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

@@ -176,6 +176,38 @@ func main() {
 
 	wgMgr := wg.NewManager()
 
+	if wgStatus, err := wgMgr.Show(appCfg.WGInterface); err == nil {
+		wgPeers := make(map[string]store.Peer)
+		for _, p := range wgStatus.Peers {
+			ip := "0.0.0.0"
+			if parts := strings.SplitN(p.AllowedIPs, "/", 2); len(parts) > 0 {
+				ip = parts[0]
+			}
+			wgPeers[p.PublicKey[:8]] = store.Peer{
+				Name:       "recovered-" + p.PublicKey[:8],
+				PublicKey:  p.PublicKey,
+				Address:    ip,
+				Keepalive:  appCfg.PeerKeepalive,
+			}
+		}
+		recovered := state.ReconcileFromWG(wgPeers)
+		if recovered > 0 {
+			log.Printf("Recovered %d peer(s) from live WireGuard interface", recovered)
+			peerMap := make(map[string]wg.PeerInfo)
+			for _, p := range state.AllPeers() {
+				peerMap[p.Name] = wg.PeerInfo{PubKey: p.PublicKey, Address: p.Address, Keepalive: p.Keepalive}
+			}
+			if err := wg.WriteFullConfig(appCfg.WGConfPath, appCfg.WGInterface, appCfg.WGPort, appCfg.PeerKeepalive, appCfg.WGServerIP, state.Server().PrivateKey, peerMap); err != nil {
+				log.Printf("WARNING: Failed to write config after recovery: %v", err)
+			}
+			if err := state.Save(); err != nil {
+				log.Printf("WARNING: Failed to save state after recovery: %v", err)
+			}
+		}
+	} else {
+		log.Printf("WARNING: Cannot access WireGuard interface %q: %v", appCfg.WGInterface, err)
+	}
+
 	apiCfg := &api.Config{
 		WGInterface:          appCfg.WGInterface,
 		WGPort:               appCfg.WGPort,
@@ -197,7 +229,11 @@ func main() {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 		sig := <-sigCh
-		log.Printf("Received signal %v, shutting down...", sig)
+		log.Printf("Received signal %v, saving state and shutting down...", sig)
+
+		if err := state.Save(); err != nil {
+			log.Printf("Failed to save state on exit: %v", err)
+		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()

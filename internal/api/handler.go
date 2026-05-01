@@ -87,7 +87,7 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ip, err := h.store.NextAvailableIP(h.config.WGSubnet)
+	ip, err := h.allocateSafeIP()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "no available IP addresses"})
 		return
@@ -244,7 +244,7 @@ func (h *Handler) serveDirectWin(w http.ResponseWriter, r *http.Request, name st
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate keys"})
 			return
 		}
-		ip, err = h.store.NextAvailableIP(h.config.WGSubnet)
+		ip, err = h.allocateSafeIP()
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "no available IP addresses"})
 			return
@@ -460,7 +460,7 @@ func (h *Handler) serveQR(w http.ResponseWriter, r *http.Request, mode, name str
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "keygen failed"})
 				return
 			}
-			ip, err = h.store.NextAvailableIP(h.config.WGSubnet)
+			ip, err = h.allocateSafeIP()
 			if err != nil {
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "no IP available"})
 				return
@@ -563,7 +563,7 @@ func (h *Handler) SubmitRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ip, err := h.store.NextAvailableIP(h.config.WGSubnet)
+	ip, err := h.allocateSafeIP()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "no available IP addresses"})
 		return
@@ -844,17 +844,19 @@ func (h *Handler) ListPeers(w http.ResponseWriter, r *http.Request) {
 		Name            string `json:"name"`
 		PublicKey       string `json:"public_key"`
 		Address         string `json:"address"`
-		DNS             string `json:"dns"`
+		DNS             string `json:"dns,omitempty"`
 		Keepalive       int    `json:"keepalive"`
-		CreatedAt       string `json:"created_at"`
+		CreatedAt       string `json:"created_at,omitempty"`
 		Endpoint        string `json:"endpoint,omitempty"`
 		LatestHandshake string `json:"latest_handshake,omitempty"`
 		TransferRx      string `json:"transfer_rx,omitempty"`
 		TransferTx      string `json:"transfer_tx,omitempty"`
 		Online          bool   `json:"online"`
+		Orphaned        bool   `json:"orphaned,omitempty"`
 	}
 
-	result := make([]peerInfo, 0, len(peers))
+	seenPubKeys := make(map[string]bool)
+	result := make([]peerInfo, 0, len(peers)+len(wgPeers))
 	for _, p := range peers {
 		pi := peerInfo{
 			Name:      p.Name,
@@ -871,7 +873,28 @@ func (h *Handler) ListPeers(w http.ResponseWriter, r *http.Request) {
 			pi.TransferTx = ws.TransferTx
 			pi.Online = ws.LatestHandshake != "0"
 		}
+		seenPubKeys[p.PublicKey] = true
 		result = append(result, pi)
+	}
+
+	for pubKey, ws := range wgPeers {
+		if !seenPubKeys[pubKey] {
+			ip := "0.0.0.0"
+			if parts := strings.SplitN(ws.AllowedIPs, "/", 2); len(parts) > 0 {
+				ip = parts[0]
+			}
+			result = append(result, peerInfo{
+				Name:            "(orphan)",
+				PublicKey:       pubKey,
+				Address:         ip,
+				Endpoint:        ws.Endpoint,
+				LatestHandshake: ws.LatestHandshake,
+				TransferRx:      ws.TransferRx,
+				TransferTx:      ws.TransferTx,
+				Online:          ws.LatestHandshake != "0",
+				Orphaned:        true,
+			})
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -879,6 +902,27 @@ func (h *Handler) ListPeers(w http.ResponseWriter, r *http.Request) {
 		"peer_count":      len(result),
 		"peers":           result,
 	})
+}
+
+func (h *Handler) allocateSafeIP() (string, error) {
+	ip, err := h.allocateSafeIP()
+	if err != nil {
+		return "", err
+	}
+	wgStatus, wgErr := h.wgMgr.Show(h.config.WGInterface)
+	if wgErr != nil {
+		return ip, nil
+	}
+	usedInWG := make(map[string]bool)
+	for _, p := range wgStatus.Peers {
+		if parts := strings.SplitN(p.AllowedIPs, "/", 2); len(parts) > 0 {
+			usedInWG[parts[0]] = true
+		}
+	}
+	if !usedInWG[ip] {
+		return ip, nil
+	}
+	return "", fmt.Errorf("IP %s is in use by an orphaned WireGuard peer — remove it via TUI first", ip)
 }
 
 func (h *Handler) DeletePeer(w http.ResponseWriter, r *http.Request) {
