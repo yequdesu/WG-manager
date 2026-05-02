@@ -34,6 +34,9 @@ testdata/wg0.conf
 testdata/test-config.env
 *.log
 
+# Rust / wg-tui
+wg-tui/target/
+
 # WireGuard keys (security)
 *.key
 *_private
