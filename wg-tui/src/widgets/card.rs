@@ -17,6 +17,16 @@ impl<'a> Card<'a> {
 
     pub fn render(self, frame: &mut Frame, area: Rect, lines: Vec<Line<'a>>) {
         let inner = self.render_block(frame, area);
+        // Fill inner area with spaces + surface bg to clear particles
+        if inner.width > 0 && inner.height > 0 {
+            let empty = " ".repeat(inner.width as usize);
+            for y in 0..inner.height {
+                frame.buffer_mut().set_string(
+                    inner.x, inner.y + y, &empty,
+                    Style::default().bg(DARK_THEME.surface),
+                );
+            }
+        }
         let content = Paragraph::new(lines)
             .style(Style::default().fg(DARK_THEME.text).bg(DARK_THEME.surface));
         frame.render_widget(content, inner);

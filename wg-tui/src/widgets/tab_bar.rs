@@ -62,12 +62,6 @@ pub fn render_tab_bar(frame: &mut Frame, area: Rect, active: Tab) {
 
     let tabs_widget = Tabs::new(tabs)
         .style(Style::default().bg(DARK_THEME.bg))
-        .highlight_style(
-            Style::default()
-                .fg(DARK_THEME.primary)
-                .bg(DARK_THEME.surface),
-        )
-        .select(0)
         .divider("");
 
     frame.render_widget(tabs_widget, area);

@@ -1,5 +1,5 @@
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
-use ratatui::style::{Style, Stylize};
+use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph, TableState};
 use ratatui::Frame;
@@ -241,14 +241,28 @@ impl App {
     }
 }
 
+fn fill_area(frame: &mut Frame, area: Rect, bg: Color) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let line = " ".repeat(area.width as usize);
+    for y in 0..area.height {
+        frame.buffer_mut().set_string(
+            area.x,
+            area.y + y,
+            &line,
+            Style::default().bg(bg),
+        );
+    }
+}
+
 pub fn render(frame: &mut Frame, app: &mut App) {
     let term = frame.area();
 
     // ═══════════════════════════════════════════════════════
     //  Layer 0: 背景层 (全屏 BG_OUTER + 粒子)
     // ═══════════════════════════════════════════════════════
-    let bg_outer = Block::default().style(Style::default().bg(DARK_THEME.bg_outer));
-    frame.render_widget(bg_outer, term);
+    fill_area(frame, term, DARK_THEME.bg_outer);
 
     app.particles.update(term, app.tick_count);
     frame.render_widget(&app.particles, term);
@@ -257,19 +271,16 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     //  Layer 1: 窗口层 (BG 填充覆盖粒子 + 双线边框 + 标题栏)
     // ═══════════════════════════════════════════════════════
     let win = app.window.compute(term);
+    fill_area(frame, win, DARK_THEME.bg);
 
-    let win_bg = Block::default()
-        .style(Style::default().bg(DARK_THEME.bg))
+    let win_border = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Double)
         .border_style(Style::default().fg(DARK_THEME.border).bg(DARK_THEME.bg));
-    frame.render_widget(win_bg, win);
+    frame.render_widget(win_border, win);
 
     let inner = win.inner(Margin::new(1, 0));
-    let title = format!(
-        " WG-TUI · {} ",
-        app.tab.label()
-    );
+    let title = format!(" WG-TUI · {} ", app.tab.label());
     let title_span = Span::styled(title.clone(), Style::default().fg(DARK_THEME.primary).bold());
     let decor = format!(
         "{}",
@@ -302,14 +313,14 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     };
 
     // ── Tab bar ──
+    fill_area(frame, chunks[0], DARK_THEME.bg);
     crate::widgets::tab_bar::render_tab_bar(frame, chunks[0], app.tab);
 
     // ═══════════════════════════════════════════════════════
     //  Layer 2+3: 内容区 (BG 填充 → 卡片 → 内容)
     // ═══════════════════════════════════════════════════════
     let content_area = chunks[1];
-    let content_bg = Block::default().style(Style::default().bg(DARK_THEME.bg));
-    frame.render_widget(content_bg, content_area);
+    fill_area(frame, content_area, DARK_THEME.bg);
 
     if app.show_help {
         ui::help::render_help(frame, content_area);
@@ -328,8 +339,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 }
 
 fn render_dashboard(frame: &mut Frame, area: Rect, app: &App) {
-    let bg = Block::default().style(Style::default().bg(DARK_THEME.bg));
-    frame.render_widget(bg, area);
+    fill_area(frame, area, DARK_THEME.bg);
 
     let chunks = Layout::vertical([
         Constraint::Length(6),
@@ -358,8 +368,7 @@ fn render_dashboard(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_peers(frame: &mut Frame, area: Rect, app: &mut App) {
-    let bg = Block::default().style(Style::default().bg(DARK_THEME.bg));
-    frame.render_widget(bg, area);
+    fill_area(frame, area, DARK_THEME.bg);
 
     let filtered: Vec<&PeerInfo> = if app.search_active && !app.search_query.is_empty() {
         app.peers.iter().filter(|p| {
@@ -425,8 +434,7 @@ fn render_peers(frame: &mut Frame, area: Rect, app: &mut App) {
 }
 
 fn render_requests(frame: &mut Frame, area: Rect, app: &mut App) {
-    let bg = Block::default().style(Style::default().bg(DARK_THEME.bg));
-    frame.render_widget(bg, area);
+    fill_area(frame, area, DARK_THEME.bg);
 
     use crate::widgets::card::Card;
     if app.requests.is_empty() {
@@ -453,8 +461,7 @@ fn render_requests(frame: &mut Frame, area: Rect, app: &mut App) {
 }
 
 fn render_logs(frame: &mut Frame, area: Rect, app: &App) {
-    let bg = Block::default().style(Style::default().bg(DARK_THEME.bg));
-    frame.render_widget(bg, area);
+    fill_area(frame, area, DARK_THEME.bg);
 
     use crate::widgets::card::Card;
     if app.logs.is_empty() {
@@ -470,6 +477,7 @@ fn render_logs(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
+    fill_area(frame, area, DARK_THEME.bg);
     let peer_count = format!("{} peers  {} online", app.peers.len(), app.status.peer_online);
     let req_count = format!("{} pending", app.requests.len());
 

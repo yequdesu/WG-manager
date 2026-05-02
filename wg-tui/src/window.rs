@@ -36,19 +36,14 @@ impl WindowState {
         if self.prev_w == 0 {
             self.x = ((term.width.saturating_sub(w)) / 2) as i16;
             self.y = ((term.height.saturating_sub(h)) / 2) as i16;
-            self.prev_w = term.width;
-            self.prev_h = term.height;
-            return Rect::new(self.x as u16, self.y as u16, w, h);
         }
 
-        if term.width != self.prev_w || term.height != self.prev_h {
-            let max_x = (term.width.saturating_sub(w)) as i16;
-            let max_y = (term.height.saturating_sub(h)) as i16;
-            self.x = self.x.clamp(0, max_x);
-            self.y = self.y.clamp(0, max_y);
-            self.prev_w = term.width;
-            self.prev_h = term.height;
-        }
+        let max_x = (term.width.saturating_sub(w)) as i16;
+        let max_y = (term.height.saturating_sub(h)) as i16;
+        self.x = self.x.clamp(0, max_x);
+        self.y = self.y.clamp(0, max_y);
+        self.prev_w = term.width;
+        self.prev_h = term.height;
 
         Rect::new(self.x as u16, self.y as u16, w, h)
     }
