@@ -92,9 +92,6 @@ fn run(
                         KeyCode::Down => app.window.move_by(0, 1),
                         KeyCode::Left => app.window.move_by(-2, 0),
                         KeyCode::Right => app.window.move_by(2, 0),
-                        KeyCode::Char('=') | KeyCode::Char('+') | KeyCode::Char('>') | KeyCode::Char('.') => app.window.zoom_in(),
-                        KeyCode::Char('-') | KeyCode::Char('<') | KeyCode::Char(',') => app.window.zoom_out(),
-                        KeyCode::Char('0') => app.window.reset(),
                         _ => {}
                     }
                     continue;
@@ -128,6 +125,9 @@ fn run(
                     KeyCode::Char('r') | KeyCode::Char('R') => {
                         app.refresh_data();
                     }
+                    KeyCode::Char('=') | KeyCode::Char('+') => app.window.zoom_in(),
+                    KeyCode::Char('-') => app.window.zoom_out(),
+                    KeyCode::Char('0') => app.window.reset(),
                     KeyCode::Char('/') => {
                         if app.tab == Tab::Peers {
                             app.search_active = !app.search_active;
