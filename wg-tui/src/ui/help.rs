@@ -10,11 +10,8 @@ pub fn render_help(frame: &mut Frame, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(DARK_THEME.primary))
-        .title(Span::styled(
-            " HELP ",
-            Style::default().fg(DARK_THEME.primary).bold(),
-        ))
-        .style(Style::default().bg(DARK_THEME.bg));
+        .style(Style::default().bg(DARK_THEME.bg))
+        .title(Span::styled(" HELP ", Style::default().fg(DARK_THEME.primary).bold()));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -22,26 +19,24 @@ pub fn render_help(frame: &mut Frame, area: Rect) {
     let lines = vec![
         Line::from(""),
         help_line("Tab / ←→", "Switch between tabs"),
-        help_line("j / k / ↑↓", "Navigate lists up/down"),
-        help_line("Enter", "Select / Confirm"),
-        help_line("a", "Approve selected request"),
-        help_line("d", "Delete peer / Deny request"),
-        help_line("r", "Force refresh all data"),
-        help_line("?", "Toggle this help"),
-        help_line("q / Esc", "Quit"),
+        help_line("j / k / ↑↓", "Navigate lists"),
+        help_line("/", "Search peers by name/IP"),
+        help_line("a", "Approve request"),
+        help_line("d", "Delete peer / Deny"),
+        help_line("r", "Refresh data"),
+        help_line("Ctrl+Arrows", "Move window"),
+        help_line("Ctrl+Scroll", "Resize window"),
+        help_line("Ctrl+0", "Reset window"),
+        help_line("q", "Quit"),
         Line::from(""),
-        Line::from(Span::styled(
-            "  WG-TUI v0.1.0  —  Ratatui Dashboard",
-            DARK_THEME.muted,
-        )),
+        Line::from(Span::styled("  WG-TUI v0.2.0  ·  Ratatui Dashboard", DARK_THEME.muted)),
     ];
 
-    let p = Paragraph::new(lines).style(Style::default().fg(DARK_THEME.text));
-    frame.render_widget(p, inner);
+    frame.render_widget(Paragraph::new(lines).style(Style::default().fg(DARK_THEME.text)), inner);
 }
 
 fn help_line(key: &str, desc: &str) -> Line<'static> {
-    let k = format!("  {:<12}", key);
+    let k = format!("  {:<14}", key);
     let d = desc.to_string();
     Line::from(vec![
         Span::styled(k, DARK_THEME.primary),

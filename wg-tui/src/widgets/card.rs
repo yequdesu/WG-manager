@@ -16,9 +16,17 @@ impl<'a> Card<'a> {
     }
 
     pub fn render(self, frame: &mut Frame, area: Rect, lines: Vec<Line<'a>>) {
+        let inner = self.render_block(frame, area);
+        let content = Paragraph::new(lines)
+            .style(Style::default().fg(DARK_THEME.text).bg(DARK_THEME.surface));
+        frame.render_widget(content, inner);
+    }
+
+    pub fn render_block(self, frame: &mut Frame, area: Rect) -> Rect {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(DARK_THEME.border))
+            .style(Style::default().bg(DARK_THEME.surface))
             .title(
                 Span::styled(
                     format!(" {} ", self.title),
@@ -26,13 +34,9 @@ impl<'a> Card<'a> {
                 ),
             )
             .title_bottom("");
-
         let inner = block.inner(area);
         frame.render_widget(block, area);
-
-        let content = Paragraph::new(lines)
-            .style(Style::default().fg(DARK_THEME.text).bg(DARK_THEME.bg));
-        frame.render_widget(content, inner);
+        inner
     }
 }
 

@@ -9,9 +9,11 @@ use std::sync::mpsc;
 use crate::api::{ApiClient, PeerInfo, RequestInfo, ServerStatus};
 use crate::config::Config;
 use crate::event::DataEvent;
+use crate::theme::DARK_THEME;
 use crate::ui;
 use crate::widgets::particles::ParticleSystem;
 use crate::widgets::tab_bar::Tab;
+use crate::window::WindowState;
 
 pub struct App {
     pub tab: Tab,
@@ -38,6 +40,7 @@ pub struct App {
     pub search_active: bool,
     pub search_query: String,
     pub log_scroll: usize,
+    pub window: WindowState,
 
     pub api: ApiClient,
     #[allow(dead_code)]
@@ -85,6 +88,7 @@ impl App {
             search_active: false,
             search_query: String::new(),
             log_scroll: 0,
+            window: WindowState::load(),
 
             api,
             config,
@@ -120,9 +124,7 @@ impl App {
                     self.peer_state.select(Some(self.peer_selected));
                 }
             }
-            DataEvent::PeersFetched(Err(e)) => {
-                self.error_msg = Some(format!("peers: {}", e));
-            }
+            DataEvent::PeersFetched(Err(e)) => self.error_msg = Some(e),
             DataEvent::RequestsFetched(Ok(resp)) => {
                 self.requests = resp.requests;
                 if self.request_selected >= self.requests.len() && !self.requests.is_empty() {
@@ -130,27 +132,17 @@ impl App {
                     self.request_state.select(Some(self.request_selected));
                 }
             }
-            DataEvent::RequestsFetched(Err(e)) => {
-                self.error_msg = Some(format!("requests: {}", e));
-            }
-            DataEvent::StatusFetched(Ok(status)) => {
-                self.status = status;
-            }
-            DataEvent::StatusFetched(Err(e)) => {
-                self.error_msg = Some(format!("status: {}", e));
-            }
+            DataEvent::RequestsFetched(Err(e)) => self.error_msg = Some(e),
+            DataEvent::StatusFetched(Ok(status)) => self.status = status,
+            DataEvent::StatusFetched(Err(e)) => self.error_msg = Some(e),
             DataEvent::RequestApproved(_) | DataEvent::RequestDenied(_) | DataEvent::PeerDeleted(_) => {
-                self.fetch_all_data();
+                self.refresh_data();
             }
         }
     }
 
     pub fn refresh_data(&mut self) {
-        self.fetch_all_data();
         self.logs = read_audit_log(&self.audit_log_path);
-    }
-
-    fn fetch_all_data(&mut self) {
         let api = self.api.clone();
         let tx = self.data_tx.clone();
         let rt = self.rt.clone();
@@ -158,10 +150,8 @@ impl App {
         rt.spawn(async move {
             let peers = api.get_peers().await;
             let _ = tx.send(DataEvent::PeersFetched(peers));
-
             let reqs = api.get_requests().await;
             let _ = tx.send(DataEvent::RequestsFetched(reqs));
-
             let status = api.get_status().await;
             let _ = tx.send(DataEvent::StatusFetched(status));
         });
@@ -173,12 +163,10 @@ impl App {
         let request_id = id.to_string();
         let rt = self.rt.clone();
         let tx = self.data_tx.clone();
-
         rt.spawn(async move {
             let result = api.approve_request(&request_id).await;
             let _ = tx.send(DataEvent::RequestApproved(result));
         });
-
         self.flash = Some((selected, ui::requests::FlashKind::Approve, 0));
     }
 
@@ -188,12 +176,10 @@ impl App {
         let request_id = id.to_string();
         let rt = self.rt.clone();
         let tx = self.data_tx.clone();
-
         rt.spawn(async move {
             let result = api.deny_request(&request_id).await;
             let _ = tx.send(DataEvent::RequestDenied(result));
         });
-
         self.flash = Some((selected, ui::requests::FlashKind::Deny, 0));
     }
 
@@ -202,7 +188,6 @@ impl App {
         let peer_name = name.to_string();
         let rt = self.rt.clone();
         let tx = self.data_tx.clone();
-
         rt.spawn(async move {
             let result = api.delete_peer(&peer_name).await;
             let _ = tx.send(DataEvent::PeerDeleted(result));
@@ -229,8 +214,7 @@ impl App {
             }
             Tab::Requests => {
                 if !self.requests.is_empty() {
-                    self.request_selected =
-                        (self.request_selected + 1).min(self.requests.len() - 1);
+                    self.request_selected = (self.request_selected + 1).min(self.requests.len() - 1);
                     self.request_state.select(Some(self.request_selected));
                 }
             }
@@ -251,138 +235,264 @@ impl App {
             _ => {}
         }
     }
+
+    pub fn on_shutdown(&mut self) {
+        self.window.save();
+    }
 }
 
 pub fn render(frame: &mut Frame, app: &mut App) {
-    let term_area = frame.area();
+    let term = frame.area();
 
-    app.particles.update(term_area, app.tick_count);
-    frame.render_widget(&app.particles, term_area);
+    // ═══════════════════════════════════════════════════════
+    //  Layer 0: 背景层 (全屏 BG_OUTER + 粒子)
+    // ═══════════════════════════════════════════════════════
+    let bg_outer = Block::default().style(Style::default().bg(DARK_THEME.bg_outer));
+    frame.render_widget(bg_outer, term);
 
-    let margin_h = 2u16;
-    let margin_v = 1u16;
-    let window_area = if term_area.width > margin_h * 4 && term_area.height > margin_v * 4 {
-        term_area.inner(Margin::new(margin_h, margin_v))
-    } else {
-        term_area
-    };
+    app.particles.update(term, app.tick_count);
+    frame.render_widget(&app.particles, term);
 
-    let border = Block::default()
+    // ═══════════════════════════════════════════════════════
+    //  Layer 1: 窗口层 (BG 填充覆盖粒子 + 双线边框 + 标题栏)
+    // ═══════════════════════════════════════════════════════
+    let win = app.window.compute(term);
+
+    let win_bg = Block::default()
+        .style(Style::default().bg(DARK_THEME.bg))
         .borders(Borders::ALL)
         .border_type(BorderType::Double)
-        .border_style(Style::default().fg(crate::theme::DARK_THEME.border));
-    frame.render_widget(&border, window_area);
+        .border_style(Style::default().fg(DARK_THEME.border));
+    frame.render_widget(win_bg, win);
 
-    let inner = window_area.inner(Margin::new(1, 0));
+    let inner = win.inner(Margin::new(1, 0));
+    let title = format!(
+        " WG-TUI · {} ",
+        app.tab.label()
+    );
+    let title_span = Span::styled(title.clone(), Style::default().fg(DARK_THEME.primary).bold());
+    let decor = format!(
+        "{}─ □ ×",
+        "─".repeat(inner.width.saturating_sub(title.len() as u16 + 6) as usize)
+    );
+    let decor_span = Span::styled(decor, Style::default().fg(DARK_THEME.muted));
+    let title_line = Line::from(vec![title_span, decor_span]);
+    frame.render_widget(
+        Paragraph::new(title_line).style(Style::default().bg(DARK_THEME.bg)),
+        Rect::new(win.x + 1, win.y, win.width.saturating_sub(2), 1),
+    );
 
-    let chunks = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(2),
-        Constraint::Min(0),
-        Constraint::Length(1),
-    ])
-    .split(inner);
+    // ═══════════════════════════════════════════════════════
+    //  Window internal layout
+    // ═══════════════════════════════════════════════════════
+    let chunks = if inner.height >= 6 {
+        Layout::vertical([
+            Constraint::Length(2),
+            Constraint::Min(4),
+            Constraint::Length(1),
+        ])
+        .split(inner)
+    } else {
+        Layout::vertical([
+            Constraint::Length(0),
+            Constraint::Min(2),
+            Constraint::Length(1),
+        ])
+        .split(inner)
+    };
 
-    render_header(frame, chunks[0]);
-    crate::widgets::tab_bar::render_tab_bar(frame, chunks[1], app.tab);
+    // ── Tab bar ──
+    crate::widgets::tab_bar::render_tab_bar(frame, chunks[0], app.tab);
+
+    // ═══════════════════════════════════════════════════════
+    //  Layer 2+3: 内容区 (BG 填充 → 卡片 → 内容)
+    // ═══════════════════════════════════════════════════════
+    let content_area = chunks[1];
+    let content_bg = Block::default().style(Style::default().bg(DARK_THEME.bg));
+    frame.render_widget(content_bg, content_area);
 
     if app.show_help {
-        ui::help::render_help(frame, chunks[2]);
+        ui::help::render_help(frame, content_area);
     } else {
         match app.tab {
-            Tab::Dashboard => {
-                ui::dashboard::render_dashboard(
-                    frame,
-                    chunks[2],
-                    app.status.daemon == "running",
-                    app.status.wireguard == "ok",
-                    &app.status.interface,
-                    &app.status.listen_port,
-                    app.status.peer_online,
-                    app.status.peer_total,
-                );
-            }
-            Tab::Peers => {
-                let filtered: Vec<&PeerInfo> = if app.search_active && !app.search_query.is_empty() {
-                    app.peers.iter().filter(|p| {
-                        p.name.to_lowercase().contains(&app.search_query.to_lowercase())
-                            || p.address.contains(&app.search_query)
-                    }).collect()
-                } else {
-                    app.peers.iter().collect()
-                };
-                ui::peers::render_peers(
-                    frame,
-                    chunks[2],
-                    &filtered,
-                    app.search_active,
-                    &app.search_query,
-                    &mut app.peer_state,
-                    app.peer_selected.min(filtered.len().saturating_sub(1)),
-                    app.tick_count,
-                );
-            }
-            Tab::Requests => {
-                ui::requests::render_requests(
-                    frame,
-                    chunks[2],
-                    &app.requests,
-                    &mut app.request_state,
-                    app.request_selected,
-                    app.flash,
-                );
-            }
-            Tab::Logs => {
-                ui::logs_view::render_logs(frame, chunks[2], &app.logs, app.log_scroll);
-            }
-            Tab::Help => {
-                ui::help::render_help(frame, chunks[2]);
-            }
+            Tab::Dashboard => render_dashboard(frame, content_area, app),
+            Tab::Peers => render_peers(frame, content_area, app),
+            Tab::Requests => render_requests(frame, content_area, app),
+            Tab::Logs => render_logs(frame, content_area, app),
+            Tab::Help => ui::help::render_help(frame, content_area),
         }
     }
 
-    render_status_bar(frame, chunks[3], app);
+    // ── Status bar ──
+    render_status_bar(frame, chunks[2], app);
 }
 
-fn render_header(frame: &mut Frame, area: Rect) {
-    let line = Line::from(Span::styled(
-        " ⚡ WG-TUI ".to_string(),
-        Style::default()
-            .fg(crate::theme::DARK_THEME.primary)
-            .bold(),
-    ));
-    frame.render_widget(Paragraph::new(line), area);
+fn render_dashboard(frame: &mut Frame, area: Rect, app: &App) {
+    let bg = Block::default().style(Style::default().bg(DARK_THEME.bg));
+    frame.render_widget(bg, area);
+
+    let chunks = Layout::vertical([
+        Constraint::Length(6),
+        Constraint::Length(6),
+        Constraint::Min(0),
+    ])
+    .split(area);
+
+    let top = Layout::horizontal([
+        Constraint::Ratio(1, 2),
+        Constraint::Ratio(1, 2),
+    ])
+    .split(chunks[0]);
+
+    ui::dashboard::card_server(
+        frame, top[0],
+        app.status.daemon == "running",
+        app.status.wireguard == "ok",
+        &app.status.interface,
+        &app.status.listen_port,
+        app.status.peer_online,
+        app.status.peer_total,
+    );
+    ui::dashboard::card_bindings(frame, top[1]);
+    ui::dashboard::card_welcome(frame, chunks[1]);
+}
+
+fn render_peers(frame: &mut Frame, area: Rect, app: &mut App) {
+    let bg = Block::default().style(Style::default().bg(DARK_THEME.bg));
+    frame.render_widget(bg, area);
+
+    let filtered: Vec<&PeerInfo> = if app.search_active && !app.search_query.is_empty() {
+        app.peers.iter().filter(|p| {
+            p.name.to_lowercase().contains(&app.search_query.to_lowercase())
+                || p.address.contains(&app.search_query)
+        }).collect()
+    } else {
+        app.peers.iter().collect()
+    };
+
+    use crate::widgets::card::Card;
+    if filtered.is_empty() {
+        let hint = if app.peers.is_empty() {
+            "No peers connected. Navigate to Requests tab to approve join requests."
+        } else {
+            "No peers match the filter."
+        };
+        let lines = vec![Line::from(Span::styled(hint, DARK_THEME.muted))];
+        Card::new("Peers").render(frame, area, lines);
+        return;
+    }
+
+    let layout = if app.search_active || !app.search_query.is_empty() {
+        Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Min(4),
+            Constraint::Length(6),
+        ])
+        .split(area)
+    } else {
+        Layout::vertical([Constraint::Min(4), Constraint::Length(6)]).split(area)
+    };
+
+    let list_area = if app.search_active || !app.search_query.is_empty() {
+        let hint = if app.search_active {
+            format!(" Search: {}▌ (Esc to clear)", app.search_query)
+        } else {
+            format!(" Filter: {}", app.search_query)
+        };
+        let search_line = Line::from(Span::styled(
+            hint,
+            Style::default().fg(DARK_THEME.warning).bg(DARK_THEME.bg),
+        ));
+        frame.render_widget(Paragraph::new(search_line), layout[0]);
+        layout[1]
+    } else {
+        layout[0]
+    };
+
+    let detail_area = layout[if app.search_active || !app.search_query.is_empty() { 2 } else { 1 }];
+
+    let sel = app.peer_selected.min(filtered.len().saturating_sub(1));
+    ui::peers::render_peer_list(
+        frame, list_area, &filtered,
+        &mut app.peer_state,
+        sel,
+        app.tick_count,
+    );
+
+    if let Some(peer) = filtered.get(sel) {
+        ui::peers::render_peer_detail(frame, detail_area, peer, app.tick_count);
+    }
+}
+
+fn render_requests(frame: &mut Frame, area: Rect, app: &mut App) {
+    let bg = Block::default().style(Style::default().bg(DARK_THEME.bg));
+    frame.render_widget(bg, area);
+
+    use crate::widgets::card::Card;
+    if app.requests.is_empty() {
+        let lines = vec![Line::from(Span::styled(
+            "No pending requests.",
+            DARK_THEME.muted,
+        ))];
+        Card::new("Pending Requests").render(frame, area, lines);
+        return;
+    }
+
+    let chunks = Layout::vertical([Constraint::Min(4), Constraint::Length(6)]).split(area);
+
+    ui::requests::render_request_list(
+        frame, chunks[0], &app.requests,
+        &mut app.request_state,
+        app.request_selected,
+        app.flash,
+    );
+
+    if let Some(req) = app.requests.get(app.request_selected) {
+        ui::requests::render_request_detail(frame, chunks[1], req);
+    }
+}
+
+fn render_logs(frame: &mut Frame, area: Rect, app: &App) {
+    let bg = Block::default().style(Style::default().bg(DARK_THEME.bg));
+    frame.render_widget(bg, area);
+
+    use crate::widgets::card::Card;
+    if app.logs.is_empty() {
+        let lines = vec![Line::from(Span::styled(
+            "No audit log entries. Events will appear here as peers connect or admin actions are taken.",
+            DARK_THEME.muted,
+        ))];
+        Card::new("Audit Log").render(frame, area, lines);
+        return;
+    }
+
+    ui::logs_view::render_logs(frame, area, &app.logs, app.log_scroll);
 }
 
 fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
-    let peer_count = format!(
-        "{} peers  {} online",
-        app.peers.len(),
-        app.status.peer_online
-    );
+    let peer_count = format!("{} peers  {} online", app.peers.len(), app.status.peer_online);
     let req_count = format!("{} pending", app.requests.len());
 
-    let help: String = match app.tab {
-        Tab::Peers => "[d] Del  [/] Search  [↑↓] Nav  ".into(),
-        Tab::Requests => "[a] Approve  [d] Deny  ".into(),
-        Tab::Logs => format!("[PgUp/PgDn] Scroll  {}/{}  ", app.log_scroll, app.logs.len()),
-        _ => String::new(),
+    let search_hint = if app.search_active {
+        "[Esc] exit search  ".to_string()
+    } else {
+        String::new()
     };
 
-    let error_hint = if app.error_msg.is_some() { "⚠ " } else { "" };
+    let tab_hint = match app.tab {
+        Tab::Peers => format!("{search_hint}[/] Search  [d] Delete  "),
+        Tab::Requests => format!("[a] Approve  [d] Deny  "),
+        Tab::Logs => format!("[PgUp/PgDn] Scroll  {}/{}  ", app.log_scroll, app.logs.len()),
+        _ => search_hint,
+    };
 
     let full = format!(
-        " {} │ {} │ {}{}{}[q] Quit  [tab] Switch  [r] Refresh  [?] Help",
-        peer_count, req_count, help,
-        error_hint,
-        if app.show_help { "[?] Close Help  " } else { "" },
+        " {} │ {} │ {}[q] Quit  [tab] Switch  [r] Refresh  [?] Help",
+        peer_count, req_count, tab_hint,
     );
 
-    let line = Line::from(Span::styled(
-        full,
-        Style::default().fg(crate::theme::DARK_THEME.muted),
-    ));
-    frame.render_widget(Paragraph::new(line), area);
+    let line = Line::from(Span::styled(full, Style::default().fg(DARK_THEME.muted)));
+    frame.render_widget(Paragraph::new(line).style(Style::default().bg(DARK_THEME.bg)), area);
 }
 
 fn read_audit_log(path: &str) -> Vec<String> {
@@ -392,10 +502,7 @@ fn read_audit_log(path: &str) -> Vec<String> {
     if let Ok(content) = std::fs::read_to_string(path) {
         let lines: Vec<&str> = content.lines().collect();
         let start = if lines.len() > 50 { lines.len() - 50 } else { 0 };
-        lines[start..]
-            .iter()
-            .map(|l| l.to_string())
-            .collect()
+        lines[start..].iter().map(|l| l.to_string()).collect()
     } else {
         Vec::new()
     }
@@ -413,7 +520,6 @@ fn find_audit_log_path() -> String {
             std::env::var("HOME").unwrap_or_else(|_| "/tmp".into())
         ),
     ];
-
     for p in &paths {
         if PathBuf::from(p).exists() {
             return p.clone();

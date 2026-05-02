@@ -5,11 +5,14 @@ mod event;
 mod theme;
 mod ui;
 mod widgets;
+mod window;
 
 use crossterm::cursor;
-use crossterm::event::{KeyCode, KeyEventKind};
+use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::ExecutableCommand;
+use crossterm::event::EnableMouseCapture;
+use crossterm::event::DisableMouseCapture;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::io;
@@ -22,7 +25,6 @@ use widgets::tab_bar::Tab;
 
 fn main() -> io::Result<()> {
     let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
-
     let (data_tx, data_rx) = mpsc::channel::<DataEvent>();
 
     let config = config::Config::load();
@@ -34,6 +36,7 @@ fn main() -> io::Result<()> {
     terminal::enable_raw_mode()?;
     stdout.execute(EnterAlternateScreen)?;
     stdout.execute(cursor::Hide)?;
+    stdout.execute(EnableMouseCapture)?;
 
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
@@ -45,7 +48,10 @@ fn main() -> io::Result<()> {
 
     let result = run(&mut terminal, &mut app, &event_handler);
 
+    app.on_shutdown();
+
     terminal::disable_raw_mode()?;
+    terminal.backend_mut().execute(DisableMouseCapture)?;
     terminal.backend_mut().execute(LeaveAlternateScreen)?;
     terminal.backend_mut().execute(cursor::Show)?;
 
@@ -73,19 +79,39 @@ fn run(
                 if key.kind != KeyEventKind::Press {
                     continue;
                 }
-                if app.show_help && key.code != KeyCode::Char('?') && key.code != KeyCode::Esc
-                {
+                if app.show_help && key.code != KeyCode::Char('?') && key.code != KeyCode::Esc {
                     app.show_help = false;
                     continue;
                 }
-                match key.code {
-                    KeyCode::Char('q') => {
-                        if app.search_active {
-                            app.search_query.push('q');
-                        } else {
-                            app.should_quit = true;
-                        }
+
+                let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+                if ctrl {
+                    match key.code {
+                        KeyCode::Up => app.window.move_by(0, -1),
+                        KeyCode::Down => app.window.move_by(0, 1),
+                        KeyCode::Left => app.window.move_by(-2, 0),
+                        KeyCode::Right => app.window.move_by(2, 0),
+                        KeyCode::Char('=') | KeyCode::Char('+') => app.window.zoom_in(),
+                        KeyCode::Char('-') => app.window.zoom_out(),
+                        KeyCode::Char('0') => app.window.reset(),
+                        _ => {}
                     }
+                    continue;
+                }
+
+                if app.search_active {
+                    match key.code {
+                        KeyCode::Esc => { app.search_active = false; app.search_query.clear(); }
+                        KeyCode::Backspace => { app.search_query.pop(); }
+                        KeyCode::Char(c) => { app.search_query.push(c); }
+                        _ => {}
+                    }
+                    continue;
+                }
+
+                match key.code {
+                    KeyCode::Char('q') => app.should_quit = true,
                     KeyCode::Esc => {
                         if app.search_active {
                             app.search_active = false;
@@ -100,59 +126,29 @@ fn run(
                     KeyCode::Left => app.prev_tab(),
                     KeyCode::Char('?') => app.show_help = !app.show_help,
                     KeyCode::Char('r') | KeyCode::Char('R') => {
-                        if !app.search_active {
-                            app.refresh_data();
-                            app.logs = app::read_audit_log_file(&app.audit_log_path);
-                        } else {
-                            app.search_query.push('r');
-                        }
+                        app.refresh_data();
                     }
                     KeyCode::Char('/') => {
                         if app.tab == Tab::Peers {
                             app.search_active = !app.search_active;
-                            if !app.search_active {
-                                app.search_query.clear();
-                            }
+                            if !app.search_active { app.search_query.clear(); }
                         }
                     }
-                    KeyCode::Backspace => {
-                        if app.search_active {
-                            app.search_query.pop();
-                        }
-                    }
-                    KeyCode::Char(c) if app.search_active => {
-                        app.search_query.push(c);
-                    }
-                    KeyCode::Down | KeyCode::Char('j') => {
-                        if app.search_active { continue; }
-                        app.select_down();
-                    }
-                    KeyCode::Up | KeyCode::Char('k') => {
-                        if app.search_active { continue; }
-                        app.select_up();
-                    }
+                    KeyCode::Down | KeyCode::Char('j') => app.select_down(),
+                    KeyCode::Up | KeyCode::Char('k') => app.select_up(),
                     KeyCode::PageDown => {
-                        if app.tab == Tab::Logs {
-                            app.log_scroll = app.log_scroll.saturating_add(20);
-                        }
+                        if app.tab == Tab::Logs { app.log_scroll = app.log_scroll.saturating_add(20); }
                     }
                     KeyCode::PageUp => {
-                        if app.tab == Tab::Logs {
-                            app.log_scroll = app.log_scroll.saturating_sub(20);
-                        }
+                        if app.tab == Tab::Logs { app.log_scroll = app.log_scroll.saturating_sub(20); }
                     }
                     KeyCode::Home => {
-                        if app.tab == Tab::Logs {
-                            app.log_scroll = 0;
-                        }
+                        if app.tab == Tab::Logs { app.log_scroll = 0; }
                     }
                     KeyCode::End => {
-                        if app.tab == Tab::Logs {
-                            app.log_scroll = app.logs.len().saturating_sub(10);
-                        }
+                        if app.tab == Tab::Logs { app.log_scroll = app.logs.len().saturating_sub(10); }
                     }
                     KeyCode::Char('d') | KeyCode::Char('D') => {
-                        if app.search_active { app.search_query.push('d'); continue; }
                         if app.tab == Tab::Peers && !app.peers.is_empty() {
                             let name = app.peers[app.peer_selected].name.clone();
                             app.delete_peer(&name);
@@ -162,7 +158,6 @@ fn run(
                         }
                     }
                     KeyCode::Char('a') | KeyCode::Char('A') => {
-                        if app.search_active { app.search_query.push('a'); continue; }
                         if app.tab == Tab::Requests && !app.requests.is_empty() {
                             let id = app.requests[app.request_selected].id.clone();
                             app.approve_request(&id);
@@ -175,13 +170,28 @@ fn run(
                     _ => {}
                 }
             }
-            Ok(Event::Tick) => {
-                app.on_tick();
+            Ok(Event::Mouse(mouse)) => {
+                match mouse.kind {
+                    MouseEventKind::ScrollDown => {
+                        if mouse.modifiers.contains(KeyModifiers::CONTROL) {
+                            app.window.zoom_out();
+                        } else if app.tab == Tab::Logs {
+                            app.log_scroll = app.log_scroll.saturating_add(3);
+                        }
+                    }
+                    MouseEventKind::ScrollUp => {
+                        if mouse.modifiers.contains(KeyModifiers::CONTROL) {
+                            app.window.zoom_in();
+                        } else if app.tab == Tab::Logs {
+                            app.log_scroll = app.log_scroll.saturating_sub(3);
+                        }
+                    }
+                    _ => {}
+                }
             }
+            Ok(Event::Tick) => app.on_tick(),
             Ok(_) => {}
-            Err(e) => {
-                app.error_msg = Some(e.to_string());
-            }
+            Err(e) => app.error_msg = Some(e.to_string()),
         }
 
         if app.should_quit {
@@ -196,6 +206,7 @@ fn panic_handler() -> impl Drop {
     impl Drop for PanicGuard {
         fn drop(&mut self) {
             let _ = terminal::disable_raw_mode();
+            let _ = io::stdout().execute(DisableMouseCapture);
             let _ = io::stdout().execute(LeaveAlternateScreen);
             let _ = io::stdout().execute(cursor::Show);
         }
@@ -203,6 +214,7 @@ fn panic_handler() -> impl Drop {
     let prev = panic::take_hook();
     panic::set_hook(Box::new(move |info| {
         let _ = terminal::disable_raw_mode();
+        let _ = io::stdout().execute(DisableMouseCapture);
         let _ = io::stdout().execute(LeaveAlternateScreen);
         let _ = io::stdout().execute(cursor::Show);
         prev(info);

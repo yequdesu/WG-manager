@@ -1,55 +1,22 @@
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Paragraph, Row, Table, TableState};
+use ratatui::widgets::{Row, Table, TableState};
 use ratatui::Frame;
 
 use crate::api::PeerInfo;
 use crate::theme::DARK_THEME;
 use crate::widgets::card::Card;
 
-pub fn render_peers(
+pub fn render_peer_list(
     frame: &mut Frame,
     area: Rect,
     peers: &[&PeerInfo],
-    search_active: bool,
-    search_query: &str,
     state: &mut TableState,
     selected_idx: usize,
     tick_count: u64,
 ) {
-    let has_search = search_active || !search_query.is_empty();
-    let (search_area, content_area, detail_area) = if has_search {
-        let chunks = Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Min(0),
-            Constraint::Length(8),
-        ])
-        .split(area);
-        (Some(chunks[0]), chunks[1], chunks[2])
-    } else {
-        let chunks = Layout::vertical([Constraint::Min(0), Constraint::Length(8)]).split(area);
-        (None, chunks[0], chunks[1])
-    };
-
-    if let Some(sa) = search_area {
-        let hint = if search_active {
-            format!(" Search: {}▌ (Esc to clear)", search_query)
-        } else {
-            format!(" Filter: {}", search_query)
-        };
-        let search_line = Line::from(Span::styled(
-            hint,
-            Style::default().fg(DARK_THEME.warning).bg(DARK_THEME.surface),
-        ));
-        frame.render_widget(Paragraph::new(search_line), sa);
-    }
-
-    let _header = Row::new(vec![
-        "  ", "Name", "IP", "Endpoint", "HS", "Transfer",
-    ])
-    .style(Style::default().fg(DARK_THEME.muted))
-    .height(1);
+    let inner = Card::new("Peers").render_block(frame, area);
 
     let rows: Vec<Row> = peers
         .iter()
@@ -62,33 +29,17 @@ pub fn render_peers(
             } else {
                 DARK_THEME.muted
             };
-            let name = truncate(&p.name, 20);
-            let endpoint = p
-                .endpoint
-                .as_ref()
-                .map(|e| e.as_str())
-                .unwrap_or("—");
-            let hs = p
-                .latest_handshake
-                .as_ref()
+            let name = truncate(&p.name, 22);
+            let endpoint = p.endpoint.as_ref().map(|e| e.as_str()).unwrap_or("—");
+            let hs = p.latest_handshake.as_ref()
                 .map(|h| format_handshake(h))
                 .unwrap_or_else(|| "—".to_string());
-            let tx = p
-                .transfer_tx
-                .as_ref()
-                .map(|t| format_bytes(t))
-                .unwrap_or_else(|| "—".to_string());
-            let rx = p
-                .transfer_rx
-                .as_ref()
-                .map(|t| format_bytes(t))
-                .unwrap_or_else(|| "—".to_string());
+            let rx = format_bytes(p.transfer_rx.as_ref().map(|s| s.as_str()).unwrap_or("0"));
+            let tx = format_bytes(p.transfer_tx.as_ref().map(|s| s.as_str()).unwrap_or("0"));
             let transfer = format!("↓{} ↑{}", rx, tx);
 
             let style = if i == selected_idx {
-                Style::default()
-                    .fg(DARK_THEME.text)
-                    .bg(DARK_THEME.primary)
+                Style::default().fg(DARK_THEME.text).bg(DARK_THEME.primary)
             } else {
                 Style::default().fg(DARK_THEME.text)
             };
@@ -97,62 +48,42 @@ pub fn render_peers(
                 Span::styled(dot, Style::default().fg(dot_color)).to_string(),
                 name,
                 p.address.clone(),
-                truncate(endpoint, 22),
+                truncate(endpoint, 24),
                 hs,
                 transfer,
             ])
             .style(style)
-            .height(1)
         })
         .collect();
 
     let widths = [
         Constraint::Length(3),
-        Constraint::Length(22),
-        Constraint::Length(14),
         Constraint::Length(24),
-        Constraint::Length(6),
+        Constraint::Length(14),
+        Constraint::Length(26),
+        Constraint::Length(8),
         Constraint::Min(0),
     ];
     let table = Table::new(rows, &widths);
-
-    frame.render_widget(Block::default(), content_area);
-    frame.render_stateful_widget(table, content_area, state);
-
-    if let Some(peer) = peers.get(selected_idx) {
-        render_detail(frame, detail_area, peer, tick_count);
-    }
+    frame.render_stateful_widget(table, inner, state);
 }
 
-fn render_detail(frame: &mut Frame, area: Rect, peer: &PeerInfo, tick_count: u64) {
-    let online = peer.online.unwrap_or(false);
-    let dot = if online { "●" } else { "○" };
-    let _dot_color = if online {
-        compute_dot_color(tick_count)
-    } else {
-        DARK_THEME.muted
-    };
-
+pub fn render_peer_detail(
+    frame: &mut Frame,
+    area: Rect,
+    peer: &PeerInfo,
+    _tick_count: u64,
+) {
     let endpoint = peer.endpoint.as_ref().map(|e| e.as_str()).unwrap_or("—");
-    let hs = peer
-        .latest_handshake
-        .as_ref()
+    let hs = peer.latest_handshake.as_ref()
         .map(|h| format_handshake(h))
         .unwrap_or_else(|| "—".to_string());
-    let rx = peer
-        .transfer_rx
-        .as_ref()
-        .map(|t| format_bytes(t))
-        .unwrap_or_else(|| "—".to_string());
-    let tx = peer
-        .transfer_tx
-        .as_ref()
-        .map(|t| format_bytes(t))
-        .unwrap_or_else(|| "—".to_string());
+    let rx = format_bytes(peer.transfer_rx.as_ref().map(|s| s.as_str()).unwrap_or("0"));
+    let tx = format_bytes(peer.transfer_tx.as_ref().map(|s| s.as_str()).unwrap_or("0"));
     let dns = peer.dns.as_ref().map(|d| d.as_str()).unwrap_or("—");
     let created = peer.created_at.as_ref().map(|c| c.as_str()).unwrap_or("—");
 
-    Card::new(&format!("{} {}", dot, peer.name)).render(
+    Card::new("Details").render(
         frame,
         area,
         vec![
@@ -185,60 +116,32 @@ fn render_detail(frame: &mut Frame, area: Rect, peer: &PeerInfo, tick_count: u64
 fn compute_dot_color(tick: u64) -> Color {
     let phase = tick as f32 * 0.12;
     let alpha = (phase.sin() * 0.25 + 0.75).clamp(0.0, 1.0);
-    Color::Rgb(
-        (63.0 * alpha) as u8,
-        (185.0 * alpha) as u8,
-        (80.0 * alpha) as u8,
-    )
+    Color::Rgb((63.0 * alpha) as u8, (185.0 * alpha) as u8, (80.0 * alpha) as u8)
 }
 
 fn format_handshake(raw: &str) -> String {
-    if raw == "0" {
-        return "—".into();
-    }
+    if raw == "0" { return "—".into(); }
     if let Ok(ts) = raw.parse::<i64>() {
-        let now = chrono::Utc::now().timestamp();
-        let diff = now - ts;
-        if diff < 0 {
-            return "now".into();
-        }
-        if diff < 60 {
-            format!("{}s", diff)
-        } else if diff < 3600 {
-            format!("{}m", diff / 60)
-        } else if diff < 86400 {
-            format!("{}h", diff / 3600)
-        } else {
-            format!("{}d", diff / 86400)
-        }
-    } else {
-        "—".into()
-    }
+        let diff = chrono::Utc::now().timestamp() - ts;
+        if diff < 0 { "now".into() }
+        else if diff < 60 { format!("{}s", diff) }
+        else if diff < 3600 { format!("{}m", diff / 60) }
+        else if diff < 86400 { format!("{}h", diff / 3600) }
+        else { format!("{}d", diff / 86400) }
+    } else { "—".into() }
 }
 
 fn format_bytes(raw: &str) -> String {
     if let Ok(n) = raw.parse::<u64>() {
-        if n == 0 {
-            return "0".into();
-        }
-        if n >= 1 << 30 {
-            format!("{:.1}G", n as f64 / (1u64 << 30) as f64)
-        } else if n >= 1 << 20 {
-            format!("{:.1}M", n as f64 / (1u64 << 20) as f64)
-        } else if n >= 1 << 10 {
-            format!("{:.1}K", n as f64 / (1u64 << 10) as f64)
-        } else {
-            format!("{}B", n)
-        }
-    } else {
-        "—".into()
-    }
+        if n == 0 { return "0".into(); }
+        if n >= 1 << 30 { format!("{:.1}G", n as f64 / (1u64 << 30) as f64) }
+        else if n >= 1 << 20 { format!("{:.1}M", n as f64 / (1u64 << 20) as f64) }
+        else if n >= 1 << 10 { format!("{:.1}K", n as f64 / (1u64 << 10) as f64) }
+        else { format!("{}B", n) }
+    } else { "—".into() }
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        format!("{}…", s.chars().take(max - 1).collect::<String>())
-    }
+    if s.chars().count() <= max { s.to_string() }
+    else { format!("{}…", s.chars().take(max - 1).collect::<String>()) }
 }
