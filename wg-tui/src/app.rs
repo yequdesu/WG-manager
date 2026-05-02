@@ -41,7 +41,6 @@ pub struct App {
     pub search_query: String,
     pub log_scroll: usize,
     pub window: WindowState,
-    pub just_refreshed: bool,
 
     pub api: ApiClient,
     #[allow(dead_code)]
@@ -90,7 +89,6 @@ impl App {
             search_query: String::new(),
             log_scroll: 0,
             window: WindowState::load(),
-            just_refreshed: false,
 
             api,
             config,
@@ -106,7 +104,6 @@ impl App {
         let now = chrono::Utc::now().timestamp();
         if now - self.last_refresh >= 5 {
             self.last_refresh = now;
-            self.just_refreshed = true;
             self.refresh_data();
         }
 
@@ -268,9 +265,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     fill_area(frame, term, DARK_THEME.bg_outer);
 
     let win = app.window.compute(term);
-    let refresh_happened = app.just_refreshed;
-    app.just_refreshed = false;
-    app.particles.update(term, win, app.tick_count, refresh_happened);
+    app.particles.update(term, win, app.tick_count);
     frame.render_widget(&app.particles, term);
 
     // ═══════════════════════════════════════════════════════
