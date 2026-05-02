@@ -79,19 +79,80 @@ fn run(
                     continue;
                 }
                 match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc => {
-                        app.should_quit = true;
+                    KeyCode::Char('q') => {
+                        if app.search_active {
+                            app.search_query.push('q');
+                        } else {
+                            app.should_quit = true;
+                        }
+                    }
+                    KeyCode::Esc => {
+                        if app.search_active {
+                            app.search_active = false;
+                            app.search_query.clear();
+                        } else if app.show_help {
+                            app.show_help = false;
+                        } else {
+                            app.should_quit = true;
+                        }
                     }
                     KeyCode::Tab | KeyCode::Right => app.next_tab(),
                     KeyCode::Left => app.prev_tab(),
                     KeyCode::Char('?') => app.show_help = !app.show_help,
                     KeyCode::Char('r') | KeyCode::Char('R') => {
-                        app.refresh_data();
-                        app.logs = app::read_audit_log_file(&app.audit_log_path);
+                        if !app.search_active {
+                            app.refresh_data();
+                            app.logs = app::read_audit_log_file(&app.audit_log_path);
+                        } else {
+                            app.search_query.push('r');
+                        }
                     }
-                    KeyCode::Down | KeyCode::Char('j') => app.select_down(),
-                    KeyCode::Up | KeyCode::Char('k') => app.select_up(),
+                    KeyCode::Char('/') => {
+                        if app.tab == Tab::Peers {
+                            app.search_active = !app.search_active;
+                            if !app.search_active {
+                                app.search_query.clear();
+                            }
+                        }
+                    }
+                    KeyCode::Backspace => {
+                        if app.search_active {
+                            app.search_query.pop();
+                        }
+                    }
+                    KeyCode::Char(c) if app.search_active => {
+                        app.search_query.push(c);
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        if app.search_active { continue; }
+                        app.select_down();
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        if app.search_active { continue; }
+                        app.select_up();
+                    }
+                    KeyCode::PageDown => {
+                        if app.tab == Tab::Logs {
+                            app.log_scroll = app.log_scroll.saturating_add(20);
+                        }
+                    }
+                    KeyCode::PageUp => {
+                        if app.tab == Tab::Logs {
+                            app.log_scroll = app.log_scroll.saturating_sub(20);
+                        }
+                    }
+                    KeyCode::Home => {
+                        if app.tab == Tab::Logs {
+                            app.log_scroll = 0;
+                        }
+                    }
+                    KeyCode::End => {
+                        if app.tab == Tab::Logs {
+                            app.log_scroll = app.logs.len().saturating_sub(10);
+                        }
+                    }
                     KeyCode::Char('d') | KeyCode::Char('D') => {
+                        if app.search_active { app.search_query.push('d'); continue; }
                         if app.tab == Tab::Peers && !app.peers.is_empty() {
                             let name = app.peers[app.peer_selected].name.clone();
                             app.delete_peer(&name);
@@ -101,6 +162,7 @@ fn run(
                         }
                     }
                     KeyCode::Char('a') | KeyCode::Char('A') => {
+                        if app.search_active { app.search_query.push('a'); continue; }
                         if app.tab == Tab::Requests && !app.requests.is_empty() {
                             let id = app.requests[app.request_selected].id.clone();
                             app.approve_request(&id);

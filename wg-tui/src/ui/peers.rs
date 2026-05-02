@@ -1,7 +1,7 @@
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Row, Table, TableState};
+use ratatui::widgets::{Block, Paragraph, Row, Table, TableState};
 use ratatui::Frame;
 
 use crate::api::PeerInfo;
@@ -11,13 +11,39 @@ use crate::widgets::card::Card;
 pub fn render_peers(
     frame: &mut Frame,
     area: Rect,
-    peers: &[PeerInfo],
+    peers: &[&PeerInfo],
+    search_active: bool,
+    search_query: &str,
     state: &mut TableState,
     selected_idx: usize,
     tick_count: u64,
 ) {
-    let chunks = Layout::vertical([Constraint::Min(0), Constraint::Length(8)])
+    let has_search = search_active || !search_query.is_empty();
+    let (search_area, content_area, detail_area) = if has_search {
+        let chunks = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Min(0),
+            Constraint::Length(8),
+        ])
         .split(area);
+        (Some(chunks[0]), chunks[1], chunks[2])
+    } else {
+        let chunks = Layout::vertical([Constraint::Min(0), Constraint::Length(8)]).split(area);
+        (None, chunks[0], chunks[1])
+    };
+
+    if let Some(sa) = search_area {
+        let hint = if search_active {
+            format!(" Search: {}▌ (Esc to clear)", search_query)
+        } else {
+            format!(" Filter: {}", search_query)
+        };
+        let search_line = Line::from(Span::styled(
+            hint,
+            Style::default().fg(DARK_THEME.warning).bg(DARK_THEME.surface),
+        ));
+        frame.render_widget(Paragraph::new(search_line), sa);
+    }
 
     let _header = Row::new(vec![
         "  ", "Name", "IP", "Endpoint", "HS", "Transfer",
@@ -31,7 +57,7 @@ pub fn render_peers(
         .map(|(i, p)| {
             let online = p.online.unwrap_or(false);
             let dot = if online { "●" } else { "○" };
-    let dot_color = if online {
+            let dot_color = if online {
                 compute_dot_color(tick_count + i as u64)
             } else {
                 DARK_THEME.muted
@@ -80,14 +106,21 @@ pub fn render_peers(
         })
         .collect();
 
-    let table = Table::new(rows, &[Constraint::Length(3), Constraint::Length(22), Constraint::Length(14), Constraint::Length(24), Constraint::Length(6), Constraint::Min(0)]);
+    let widths = [
+        Constraint::Length(3),
+        Constraint::Length(22),
+        Constraint::Length(14),
+        Constraint::Length(24),
+        Constraint::Length(6),
+        Constraint::Min(0),
+    ];
+    let table = Table::new(rows, &widths);
 
-    let list_area = chunks[0];
-    frame.render_widget(Block::default(), list_area);
-    frame.render_stateful_widget(table, list_area, state);
+    frame.render_widget(Block::default(), content_area);
+    frame.render_stateful_widget(table, content_area, state);
 
     if let Some(peer) = peers.get(selected_idx) {
-        render_detail(frame, chunks[1], peer, tick_count);
+        render_detail(frame, detail_area, peer, tick_count);
     }
 }
 

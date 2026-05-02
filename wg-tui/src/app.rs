@@ -10,6 +10,7 @@ use crate::api::{ApiClient, PeerInfo, RequestInfo, ServerStatus};
 use crate::config::Config;
 use crate::event::DataEvent;
 use crate::ui;
+use crate::widgets::particles::ParticleSystem;
 use crate::widgets::tab_bar::Tab;
 
 pub struct App {
@@ -33,6 +34,10 @@ pub struct App {
     pub last_refresh: i64,
 
     pub flash: Option<(usize, ui::requests::FlashKind, u64)>,
+    pub particles: ParticleSystem,
+    pub search_active: bool,
+    pub search_query: String,
+    pub log_scroll: usize,
 
     pub api: ApiClient,
     #[allow(dead_code)]
@@ -75,6 +80,11 @@ impl App {
             last_refresh: 0,
 
             flash: None,
+
+            particles: ParticleSystem::new(),
+            search_active: false,
+            search_query: String::new(),
+            log_scroll: 0,
 
             api,
             config,
@@ -246,6 +256,9 @@ impl App {
 pub fn render(frame: &mut Frame, app: &mut App) {
     let term_area = frame.area();
 
+    app.particles.update(term_area, app.tick_count);
+    frame.render_widget(&app.particles, term_area);
+
     let margin_h = 2u16;
     let margin_v = 1u16;
     let window_area = if term_area.width > margin_h * 4 && term_area.height > margin_v * 4 {
@@ -290,12 +303,22 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                 );
             }
             Tab::Peers => {
+                let filtered: Vec<&PeerInfo> = if app.search_active && !app.search_query.is_empty() {
+                    app.peers.iter().filter(|p| {
+                        p.name.to_lowercase().contains(&app.search_query.to_lowercase())
+                            || p.address.contains(&app.search_query)
+                    }).collect()
+                } else {
+                    app.peers.iter().collect()
+                };
                 ui::peers::render_peers(
                     frame,
                     chunks[2],
-                    &app.peers,
+                    &filtered,
+                    app.search_active,
+                    &app.search_query,
                     &mut app.peer_state,
-                    app.peer_selected,
+                    app.peer_selected.min(filtered.len().saturating_sub(1)),
                     app.tick_count,
                 );
             }
@@ -310,7 +333,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                 );
             }
             Tab::Logs => {
-                ui::logs_view::render_logs(frame, chunks[2], &app.logs, 0);
+                ui::logs_view::render_logs(frame, chunks[2], &app.logs, app.log_scroll);
             }
             Tab::Help => {
                 ui::help::render_help(frame, chunks[2]);
@@ -339,11 +362,11 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
     );
     let req_count = format!("{} pending", app.requests.len());
 
-    let help = match app.tab {
-        Tab::Peers => "[d] Delete  [↑↓] Navigate  ",
-        Tab::Requests => "[a] Approve  [d] Deny  ",
-        Tab::Logs => "[j/k] Scroll  ",
-        _ => "",
+    let help: String = match app.tab {
+        Tab::Peers => "[d] Del  [/] Search  [↑↓] Nav  ".into(),
+        Tab::Requests => "[a] Approve  [d] Deny  ".into(),
+        Tab::Logs => format!("[PgUp/PgDn] Scroll  {}/{}  ", app.log_scroll, app.logs.len()),
+        _ => String::new(),
     };
 
     let error_hint = if app.error_msg.is_some() { "⚠ " } else { "" };
