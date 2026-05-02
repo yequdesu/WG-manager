@@ -650,9 +650,14 @@ func renderLog(b *strings.Builder, f frame) {
 // ═══════════════════════════════════════════════════════════
 
 func padRight(s string, w int) string {
-	for len(s) < w { s += " " }
-	if len(s) > w { s = s[:w] }
-	return s
+	if utf8.RuneCountInString(s) >= w {
+		runes := []rune(s)
+		if len(runes) > w {
+			return string(runes[:w])
+		}
+		return s
+	}
+	return s + strings.Repeat(" ", w-utf8.RuneCountInString(s))
 }
 
 func fill(ch string, n int) string {

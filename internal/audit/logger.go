@@ -53,13 +53,12 @@ func Close() {
 
 func Log(event string, fields map[string]string) {
 	mu.Lock()
-	defer mu.Unlock()
-
 	if !ready || fd == nil {
 		if !warnedNoLog {
 			fmt.Fprintf(os.Stderr, "[wg-mgmt] audit log not initialized — events are not being recorded\n")
 			warnedNoLog = true
 		}
+		mu.Unlock()
 		return
 	}
 
@@ -74,7 +73,22 @@ func Log(event string, fields map[string]string) {
 		}
 	}
 	b.WriteString("\n")
+	line := b.String()
+	mu.Unlock()
 
-	fd.WriteString(b.String())
-	fd.Sync()
+	if _, err := fd.WriteString(line); err != nil {
+		mu.Lock()
+		fmt.Fprintf(os.Stderr, "[wg-mgmt] audit write failed: %v — disabling audit logging\n", err)
+		ready = false
+		warnedNoLog = false
+		mu.Unlock()
+		return
+	}
+	if err := fd.Sync(); err != nil {
+		mu.Lock()
+		fmt.Fprintf(os.Stderr, "[wg-mgmt] audit sync failed: %v — disabling audit logging\n", err)
+		ready = false
+		warnedNoLog = false
+		mu.Unlock()
+	}
 }

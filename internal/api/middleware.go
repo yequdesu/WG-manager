@@ -109,7 +109,7 @@ func KeyOrLocal(apiKey string) func(http.HandlerFunc) http.HandlerFunc {
 					keyOK = true
 				}
 			}
-	if !keyOK {
+			if !keyOK {
 				writeJSON(w, http.StatusUnauthorized, map[string]string{
 					"error": "invalid or missing API key",
 				})

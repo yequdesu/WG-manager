@@ -342,7 +342,9 @@ func (s *State) Save() error {
 
 	bakPath := s.path + ".bak"
 	if existing, err := os.ReadFile(s.path); err == nil && len(existing) > 0 {
-		os.WriteFile(bakPath, existing, 0600)
+		if err := os.WriteFile(bakPath, existing, 0600); err != nil {
+			fmt.Fprintf(os.Stderr, "WARNING: failed to write backup %s: %v\n", bakPath, err)
+		}
 	}
 
 	tmpPath := s.path + ".tmp"
@@ -446,34 +448,6 @@ func GenerateRequestID() string {
 	return hex.EncodeToString(b)
 }
 
-func (s *State) AddRequest(r Request) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if _, ok := s.Requests[r.ID]; ok {
-		return fmt.Errorf("request %q already exists", r.ID)
-	}
-
-	for _, existing := range s.Requests {
-		if existing.Hostname == r.Hostname && (existing.Status == "" || existing.Status == "pending") {
-			return fmt.Errorf("a pending request for %q already exists", r.Hostname)
-		}
-	}
-
-	if r.CreatedAt == "" {
-		r.CreatedAt = time.Now().UTC().Format(time.RFC3339)
-	}
-	if r.ExpiresAt == "" {
-		r.ExpiresAt = time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339)
-	}
-	if r.Keepalive == 0 {
-		r.Keepalive = 25
-	}
-
-	s.Requests[r.ID] = r
-	return nil
-}
-
 func (s *State) GetRequest(id string) (Request, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -544,6 +518,8 @@ func (s *State) Replace(other *State) {
 	defer s.mu.Unlock()
 	other.mu.RLock()
 	defer other.mu.RUnlock()
+	s.server = other.server
+	s.crypto = other.crypto
 	s.Peers = make(map[string]Peer)
 	for k, v := range other.Peers {
 		s.Peers[k] = v

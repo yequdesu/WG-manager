@@ -8,7 +8,7 @@ import (
 	"wire-guard-dev/internal/wg"
 )
 
-func NewServer(ctx context.Context, cfg *Config, s *store.State, m *wg.Manager) *http.Server {
+func NewServer(ctx context.Context, cfg *Config, s *store.State, m *wg.Manager) (*http.Server, *Handler) {
 	h := NewHandler(s, m, cfg)
 
 	mux := http.NewServeMux()
@@ -32,7 +32,7 @@ func NewServer(ctx context.Context, cfg *Config, s *store.State, m *wg.Manager) 
 	return &http.Server{
 		Addr:    cfg.MgmtListen,
 		Handler: mux,
-	}
+	}, h
 }
 
 func methodGuard(method string, handler http.Handler) http.Handler {

@@ -74,6 +74,8 @@ func loadConfig(path string) (*AppConfig, error) {
 		case "WG_PORT":
 			if p, err := strconv.Atoi(val); err == nil {
 				cfg.WGPort = p
+			} else {
+				log.Printf("Warning: invalid WG_PORT value %q: %v", val, err)
 			}
 		case "WG_SUBNET":
 			cfg.WGSubnet = val
@@ -90,6 +92,8 @@ func loadConfig(path string) (*AppConfig, error) {
 		case "PEER_KEEPALIVE":
 			if k, err := strconv.Atoi(val); err == nil {
 				cfg.PeerKeepalive = k
+			} else {
+				log.Printf("Warning: invalid PEER_KEEPALIVE value %q: %v", val, err)
 			}
 		case "PEERS_DB_PATH":
 			cfg.PeersDBPath = val
@@ -123,8 +127,11 @@ func detectPublicIP() string {
 			continue
 		}
 		buf := make([]byte, 64)
-		n, _ := resp.Body.Read(buf)
+		n, err := resp.Body.Read(buf)
 		resp.Body.Close()
+		if err != nil && err.Error() != "EOF" {
+			continue
+		}
 		ip := strings.TrimSpace(string(buf[:n]))
 		if net.ParseIP(ip) != nil {
 			return ip
@@ -133,7 +140,7 @@ func detectPublicIP() string {
 	return ""
 }
 
-func reloadConfig(path string, appCfg *AppConfig, apiCfg *api.Config, state *store.State, wgMgr *wg.Manager) error {
+func reloadConfig(path string, appCfg *AppConfig, handler *api.Handler, state *store.State, wgMgr *wg.Manager) error {
 	newCfg, err := loadConfig(path)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -162,14 +169,20 @@ func reloadConfig(path string, appCfg *AppConfig, apiCfg *api.Config, state *sto
 
 	*appCfg = *newCfg
 
-	apiCfg.LockReload()
-	apiCfg.APIKey = appCfg.APIKey
-	apiCfg.ServerPublicIP = appCfg.ServerPublicIP
-	apiCfg.DefaultDNS = appCfg.DefaultDNS
-	apiCfg.PeerKeepalive = appCfg.PeerKeepalive
-	apiCfg.WGConfPath = appCfg.WGConfPath
-	apiCfg.PeersDBPath = appCfg.PeersDBPath
-	apiCfg.UnlockReload()
+	newApiCfg := &api.Config{
+		WGInterface:    appCfg.WGInterface,
+		WGPort:         appCfg.WGPort,
+		WGSubnet:       appCfg.WGSubnet,
+		WGServerIP:     appCfg.WGServerIP,
+		MgmtListen:     appCfg.MgmtListen,
+		APIKey:         appCfg.APIKey,
+		ServerPublicIP: appCfg.ServerPublicIP,
+		DefaultDNS:     appCfg.DefaultDNS,
+		PeerKeepalive:  appCfg.PeerKeepalive,
+		PeersDBPath:    appCfg.PeersDBPath,
+		WGConfPath:     appCfg.WGConfPath,
+	}
+	handler.ReloadConfig(newApiCfg)
 
 	var crypto *store.Crypto
 	if appCfg.APIKey != "" {
@@ -262,7 +275,7 @@ func main() {
 		for _, p := range wgStatus.Peers {
 			wgPubKeySet[p.PublicKey] = true
 			ip := "0.0.0.0"
-			if parts := strings.SplitN(p.AllowedIPs, "/", 2); len(parts) > 0 {
+			if parts := strings.SplitN(p.AllowedIPs, "/", 2); parts[0] != "" {
 				ip = parts[0]
 			}
 			wgPeers[p.PublicKey] = store.Peer{
@@ -307,20 +320,20 @@ func main() {
 	}
 
 	apiCfg := &api.Config{
-		WGInterface:          appCfg.WGInterface,
-		WGPort:               appCfg.WGPort,
-		WGSubnet:             appCfg.WGSubnet,
-		WGServerIP:           appCfg.WGServerIP,
-		MgmtListen:           appCfg.MgmtListen,
-		APIKey:               appCfg.APIKey,
-		ServerPublicIP:       appCfg.ServerPublicIP,
-		DefaultDNS:           appCfg.DefaultDNS,
-		PeerKeepalive:        appCfg.PeerKeepalive,
-		PeersDBPath:          appCfg.PeersDBPath,
-		WGConfPath:           appCfg.WGConfPath,
+		WGInterface:    appCfg.WGInterface,
+		WGPort:         appCfg.WGPort,
+		WGSubnet:       appCfg.WGSubnet,
+		WGServerIP:     appCfg.WGServerIP,
+		MgmtListen:     appCfg.MgmtListen,
+		APIKey:         appCfg.APIKey,
+		ServerPublicIP: appCfg.ServerPublicIP,
+		DefaultDNS:     appCfg.DefaultDNS,
+		PeerKeepalive:  appCfg.PeerKeepalive,
+		PeersDBPath:    appCfg.PeersDBPath,
+		WGConfPath:     appCfg.WGConfPath,
 	}
 
-	srv := api.NewServer(ctx, apiCfg, state, wgMgr)
+	srv, handler := api.NewServer(ctx, apiCfg, state, wgMgr)
 
 	idleConnsClosed := make(chan struct{})
 	go func() {
@@ -332,7 +345,7 @@ func main() {
 			switch sig {
 			case syscall.SIGHUP:
 				log.Println("Received SIGHUP, reloading configuration...")
-				if err := reloadConfig(configPath, appCfg, apiCfg, state, wgMgr); err != nil {
+				if err := reloadConfig(configPath, appCfg, handler, state, wgMgr); err != nil {
 					log.Printf("Config reload failed: %v", err)
 				} else {
 					audit.Log("config_reloaded", nil)

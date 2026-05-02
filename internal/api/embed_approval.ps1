@@ -4,7 +4,7 @@ param(
     [string]$ServerIp = "__SERVER_IP__",
     [int]$MgmtPort = __MGMT_PORT__,
     [string]$PeerName = "",
-    [string]$Dns = "1.1.1.1,8.8.8.8",
+    [string]$Dns = "__DEFAULT_DNS__",
     [int]$PollInterval = 3,
     [int]$PollTimeout = 300
 )

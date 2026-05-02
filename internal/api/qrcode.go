@@ -12,7 +12,6 @@ func generateQR(data string) string {
 	cmd := exec.Command("qrencode", "-s", "8", "-o", "-", "-t", "SVG", "--", data)
 	var out bytes.Buffer
 	cmd.Stdout = &out
-	cmd.Stderr = nil
 	if err := cmd.Run(); err != nil {
 		return qrFallback(data)
 	}
@@ -27,9 +26,4 @@ func qrFallback(data string) string {
 <text x="200" y="140" text-anchor="middle" font-family="monospace" font-size="10" fill="gray">WireGuard config:</text>
 <text x="200" y="165" text-anchor="middle" font-family="monospace" font-size="9" fill="gray">` + data[:min(len(data), 80)] + `...</text>
 </svg>`
-}
-
-func min(a, b int) int {
-	if a < b { return a }
-	return b
 }
