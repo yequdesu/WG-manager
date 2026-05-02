@@ -41,6 +41,7 @@ pub struct App {
     pub search_query: String,
     pub log_scroll: usize,
     pub window: WindowState,
+    pub just_refreshed: bool,
 
     pub api: ApiClient,
     #[allow(dead_code)]
@@ -89,6 +90,7 @@ impl App {
             search_query: String::new(),
             log_scroll: 0,
             window: WindowState::load(),
+            just_refreshed: false,
 
             api,
             config,
@@ -104,6 +106,7 @@ impl App {
         let now = chrono::Utc::now().timestamp();
         if now - self.last_refresh >= 5 {
             self.last_refresh = now;
+            self.just_refreshed = true;
             self.refresh_data();
         }
 
@@ -264,7 +267,10 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     // ═══════════════════════════════════════════════════════
     fill_area(frame, term, DARK_THEME.bg_outer);
 
-    app.particles.update(term, app.tick_count);
+    let win = app.window.compute(term);
+    let refresh_happened = app.just_refreshed;
+    app.just_refreshed = false;
+    app.particles.update(term, win, app.tick_count, refresh_happened);
     frame.render_widget(&app.particles, term);
 
     // ═══════════════════════════════════════════════════════
@@ -342,8 +348,8 @@ fn render_dashboard(frame: &mut Frame, area: Rect, app: &App) {
     fill_area(frame, area, DARK_THEME.bg);
 
     let chunks = Layout::vertical([
-        Constraint::Length(6),
-        Constraint::Length(6),
+        Constraint::Length(12),
+        Constraint::Length(8),
         Constraint::Min(0),
     ])
     .split(area);

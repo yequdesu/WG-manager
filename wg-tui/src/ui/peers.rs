@@ -23,7 +23,7 @@ pub fn render_peer_list(
         .enumerate()
         .map(|(i, p)| {
             let online = p.online.unwrap_or(false);
-            let dot = if online { "●" } else { "○" };
+            let dot = format!("  {}", if online { "●" } else { "○" });
             let dot_color = if online {
                 compute_dot_color(tick_count + i as u64)
             } else {
@@ -57,7 +57,7 @@ pub fn render_peer_list(
         .collect();
 
     let widths = [
-        Constraint::Length(3),
+        Constraint::Length(4),   // dot
         Constraint::Length(24),
         Constraint::Length(14),
         Constraint::Length(26),

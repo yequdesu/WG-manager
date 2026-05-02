@@ -39,20 +39,36 @@ pub fn card_bindings(frame: &mut Frame, area: Rect) {
         area,
         vec![
             Line::from(vec![
-                Span::styled("  Tab / ←→  ", DARK_THEME.primary),
+                Span::styled("  Tab / ←→    ", DARK_THEME.primary),
                 Span::styled("Switch tabs", DARK_THEME.text),
             ]),
             Line::from(vec![
-                Span::styled("  j/k/↑↓    ", DARK_THEME.primary),
+                Span::styled("  j/k / ↑↓    ", DARK_THEME.primary),
                 Span::styled("Navigate lists", DARK_THEME.text),
             ]),
             Line::from(vec![
-                Span::styled("  a / d     ", DARK_THEME.primary),
+                Span::styled("  /            ", DARK_THEME.primary),
+                Span::styled("Search peers", DARK_THEME.text),
+            ]),
+            Line::from(vec![
+                Span::styled("  a / d        ", DARK_THEME.primary),
                 Span::styled("Approve / Deny", DARK_THEME.text),
             ]),
             Line::from(vec![
-                Span::styled("  r         ", DARK_THEME.primary),
-                Span::styled("Force refresh", DARK_THEME.text),
+                Span::styled("  Ctrl+Arrows  ", DARK_THEME.primary),
+                Span::styled("Move window", DARK_THEME.text),
+            ]),
+            Line::from(vec![
+                Span::styled("  Ctrl+= / -   ", DARK_THEME.primary),
+                Span::styled("Resize window", DARK_THEME.text),
+            ]),
+            Line::from(vec![
+                Span::styled("  Ctrl+0       ", DARK_THEME.primary),
+                Span::styled("Reset window", DARK_THEME.text),
+            ]),
+            Line::from(vec![
+                Span::styled("  r / q / ?    ", DARK_THEME.primary),
+                Span::styled("Refresh / Quit / Help", DARK_THEME.text),
             ]),
         ],
     );

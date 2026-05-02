@@ -92,8 +92,8 @@ fn run(
                         KeyCode::Down => app.window.move_by(0, 1),
                         KeyCode::Left => app.window.move_by(-2, 0),
                         KeyCode::Right => app.window.move_by(2, 0),
-                        KeyCode::Char('>') | KeyCode::Char('.') => app.window.zoom_in(),
-                        KeyCode::Char('<') | KeyCode::Char(',') => app.window.zoom_out(),
+                        KeyCode::Char('=') | KeyCode::Char('+') | KeyCode::Char('>') | KeyCode::Char('.') => app.window.zoom_in(),
+                        KeyCode::Char('-') | KeyCode::Char('<') | KeyCode::Char(',') => app.window.zoom_out(),
                         KeyCode::Char('0') => app.window.reset(),
                         _ => {}
                     }
