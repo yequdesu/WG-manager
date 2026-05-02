@@ -84,7 +84,7 @@ $peerConf = $null
                 "`n[Peer]`n" +
                 "PublicKey = $($statusResp.peer.server_public_key)`n" +
                 "Endpoint = $($statusResp.peer.server_endpoint)`n" +
-                "AllowedIPs = 10.0.0.0/24`n" +
+                "AllowedIPs = __WG_ALLOWED_IPS__`n" +
                 "PersistentKeepalive = $($statusResp.peer.keepalive)"
             Write-Host "[+] Request APPROVED!" -ForegroundColor Green
             break poll

@@ -505,23 +505,9 @@ deploy_daemon() {
 
     # ── 3. Write / update systemd unit ──
     log "Writing systemd service..."
-    cat > /etc/systemd/system/wg-mgmt.service << SYSTEMD
-[Unit]
-Description=WireGuard Management Daemon
-After=network-online.target wg-quick@wg0.service
-Wants=network-online.target wg-quick@wg0.service
-Requires=wg-quick@wg0.service
-
-[Service]
-Type=simple
-User=root
-ExecStart=$bin_dst --config=$CONFIG_FILE
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-SYSTEMD
+    sed -e "s|__BIN_PATH__|$bin_dst|g" \
+        -e "s|__CONFIG_PATH__|$CONFIG_FILE|g" \
+        "$SCRIPT_DIR/wg-mgmt.service" > /etc/systemd/system/wg-mgmt.service
 
     systemctl daemon-reload
     systemctl enable wg-mgmt --quiet

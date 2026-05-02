@@ -90,6 +90,10 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 	if dns == "" {
 		dns = h.config.DefaultDNS
 	}
+	if err := validateDNS(dns); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 
 	privateKey, publicKey, err := h.wgMgr.GenKeyPair()
 	if err != nil {
@@ -106,30 +110,14 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
 	}
 
-	ip, err := h.store.AllocateIPAndAddPeer(&peer, h.config.WGSubnet, h.getWGPeerIPs(publicKey))
+	_, err = h.store.AllocateIPAndAddPeer(&peer, h.config.WGSubnet, h.getWGPeerIPs(publicKey))
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "no available IP addresses"})
 		return
 	}
 
-	allowedIP := fmt.Sprintf("%s/32", ip)
-		if err := h.wgMgr.AddPeerLive(h.config.WGInterface, peer.PublicKey, allowedIP, peer.Keepalive); err != nil {
-			h.store.RemovePeer(peer.Name)
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to add peer to wireguard"})
-			return
-		}
-
-	if err := h.writeConfigToDisk(); err != nil {
-		h.wgMgr.RemovePeerByKey(h.config.WGInterface, peer.PublicKey)
-		h.store.RemovePeer(peer.Name)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to write config"})
-		return
-	}
-
-	if err := h.store.Save(); err != nil {
-		h.wgMgr.RemovePeerByKey(h.config.WGInterface, peer.PublicKey)
-		h.store.RemovePeer(peer.Name)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist state"})
+	if err := h.commitPeerToWG(peer.Name); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 
@@ -202,9 +190,7 @@ func (h *Handler) serveDirectBash(w http.ResponseWriter, r *http.Request, name s
 	script = strings.ReplaceAll(script, "__API_KEY__", h.config.APIKey)
 	script = strings.ReplaceAll(script, "__DEFAULT_DNS__", h.config.DefaultDNS)
 	script = strings.ReplaceAll(script, "__WG_ALLOWED_IPS__", h.config.WGSubnet)
-	if name != "" {
-		script = strings.ReplaceAll(script, "__PEER_NAME__", name)
-	}
+	script = strings.ReplaceAll(script, "__PEER_NAME__", name)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(script))
@@ -215,9 +201,7 @@ func (h *Handler) serveApprovalBash(w http.ResponseWriter, r *http.Request, name
 	script = strings.ReplaceAll(script, "__SERVER_IP__", h.config.ServerPublicIP)
 	script = strings.ReplaceAll(script, "__MGMT_PORT__", portStr(h.config.MgmtListen))
 	script = strings.ReplaceAll(script, "__WG_ALLOWED_IPS__", h.config.WGSubnet)
-	if name != "" {
-		script = strings.ReplaceAll(script, "__PEER_NAME__", name)
-	}
+	script = strings.ReplaceAll(script, "__PEER_NAME__", name)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(script))
@@ -238,6 +222,10 @@ func (h *Handler) serveDirectWin(w http.ResponseWriter, r *http.Request, name st
 	dns := strings.TrimSpace(q.Get("dns"))
 	if dns == "" {
 		dns = h.config.DefaultDNS
+	}
+	if err := validateDNS(dns); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
 	}
 
 	var privateKey, publicKey, ip string
@@ -262,25 +250,11 @@ func (h *Handler) serveDirectWin(w http.ResponseWriter, r *http.Request, name st
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "no available IP addresses"})
 			return
 		}
-		allowedIP := fmt.Sprintf("%s/32", ip)
-		if err := h.wgMgr.AddPeerLive(h.config.WGInterface, publicKey, allowedIP, h.config.PeerKeepalive); err != nil {
-				h.store.RemovePeer(name)
-				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to add peer"})
-				return
-			}
-			if err := h.writeConfigToDisk(); err != nil {
-				h.wgMgr.RemovePeerByKey(h.config.WGInterface, publicKey)
-				h.store.RemovePeer(name)
-				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to write config"})
-				return
-			}
-			if err := h.store.Save(); err != nil {
-				h.wgMgr.RemovePeerByKey(h.config.WGInterface, publicKey)
-				h.store.RemovePeer(name)
-				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist state"})
-				return
-			}
-			audit.Log("peer_registered", auditFields("name", name, "ip", ip, "source", remoteIP(r)))
+		if err := h.commitPeerToWG(name); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		audit.Log("peer_registered", auditFields("name", name, "ip", ip, "source", remoteIP(r)))
 	}
 
 	conf := fmt.Sprintf(`[Interface]
@@ -305,6 +279,7 @@ func (h *Handler) serveApprovalPS1(w http.ResponseWriter, r *http.Request) {
 	script := embedApprovalPs1
 	script = strings.ReplaceAll(script, "__SERVER_IP__", h.config.ServerPublicIP)
 	script = strings.ReplaceAll(script, "__MGMT_PORT__", portStr(h.config.MgmtListen))
+	script = strings.ReplaceAll(script, "__WG_ALLOWED_IPS__", h.config.WGSubnet)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(script))
@@ -397,16 +372,16 @@ a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
 
 <div id="mobile" class="section">
   <div class="box">
-    <h3>Generate QR on Server</h3>
-    <p class="hint">Admin runs this on the server to create a QR image for a device:</p>
+    <h3>Generate QR on Server <span class="badge badge-yellow">direct only</span></h3>
+    <p class="hint">Admin runs this on the server to create a QR image for a device (direct mode only):</p>
     <pre>curl -s "http://localhost:` + p + `/connect?qrcode&mode=direct&name=phone1" -o phone1.svg</pre>
     <p class="hint">Send phone1.svg to the mobile device → WireGuard App → Scan from QR code</p>
   </div>
   <div class="box">
     <h3>QR from Browser</h3>
-    <p class="hint">Scan a direct-registration QR directly (API key embedded):</p>
+    <p class="hint">Direct-registration QR (API key embedded, mobile only):</p>
     <pre>http://` + ip + `:` + p + `/connect?qrcode&mode=direct&name=phone1</pre>
-    <p class="hint">Open this URL in a browser to see the QR code, or use WireGuard's built-in scanner.</p>
+    <p class="hint">Open in browser to see the QR, then scan with WireGuard app. For approval flow, use desktop /connect.</p>
   </div>
 </div>
 
@@ -444,57 +419,59 @@ DELETE /api/v1/requests/{id}           Reject request (server-local)</pre>
 
 func (h *Handler) serveQR(w http.ResponseWriter, r *http.Request, mode, name string) {
 	isDirect := mode == "direct"
-	var content string
 
-	if isDirect {
-		if name == "" { name = "mobile" }
-		q := r.URL.Query()
-		dns := q.Get("dns")
-		if dns == "" { dns = h.config.DefaultDNS }
+	if !isDirect {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error":   "QR codes are only available in direct mode",
+			"message": "Use mode=direct to generate a WireGuard config QR. For approval flow, open /connect in a browser.",
+			"hint":    fmt.Sprintf("http://%s:%s/connect", h.config.ServerPublicIP, portStr(h.config.MgmtListen)),
+		})
+		return
+	}
 
-		var privateKey, publicKey, ip string
-		if existing, ok := h.store.GetPeer(name); ok {
-			privateKey = existing.PrivateKey
-			publicKey = existing.PublicKey
-			ip = existing.Address
-		} else {
-			var err error
-			privateKey, publicKey, err = h.wgMgr.GenKeyPair()
-			if err != nil {
-				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "keygen failed"})
-				return
-			}
-			peer := store.Peer{
-				Name: name, PublicKey: publicKey, PrivateKey: privateKey,
-				DNS: dns, Keepalive: h.config.PeerKeepalive,
-				CreatedAt: time.Now().UTC().Format(time.RFC3339),
-			}
-			ip, err = h.store.AllocateIPAndAddPeer(&peer, h.config.WGSubnet, h.getWGPeerIPs(publicKey))
-			if err != nil {
-				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "no IP available"})
-				return
-			}
-			allowedIP := fmt.Sprintf("%s/32", ip)
-			if err := h.wgMgr.AddPeerLive(h.config.WGInterface, publicKey, allowedIP, h.config.PeerKeepalive); err != nil {
-				h.store.RemovePeer(name)
-				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "wg add failed"})
-				return
-			}
-			if err := h.writeConfigToDisk(); err != nil {
-				h.wgMgr.RemovePeerByKey(h.config.WGInterface, publicKey)
-				h.store.RemovePeer(name)
-				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to write config"})
-				return
-			}
-			if err := h.store.Save(); err != nil {
-				h.wgMgr.RemovePeerByKey(h.config.WGInterface, publicKey)
-				h.store.RemovePeer(name)
-				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist state"})
-				return
-			}
-			audit.Log("peer_registered", auditFields("name", name, "ip", ip, "source", "qr"))
+	if name == "" {
+		name = "mobile"
+	}
+	q := r.URL.Query()
+	dns := q.Get("dns")
+	if dns == "" {
+		dns = h.config.DefaultDNS
+	}
+	if err := validateDNS(dns); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	var privateKey, publicKey, ip string
+	if existing, ok := h.store.GetPeer(name); ok {
+		privateKey = existing.PrivateKey
+		publicKey = existing.PublicKey
+		ip = existing.Address
+	} else {
+		var err error
+		privateKey, publicKey, err = h.wgMgr.GenKeyPair()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "keygen failed"})
+			return
 		}
-		content = fmt.Sprintf(`[Interface]
+		peer := store.Peer{
+			Name: name, PublicKey: publicKey, PrivateKey: privateKey,
+			DNS: dns, Keepalive: h.config.PeerKeepalive,
+			CreatedAt: time.Now().UTC().Format(time.RFC3339),
+		}
+		ip, err = h.store.AllocateIPAndAddPeer(&peer, h.config.WGSubnet, h.getWGPeerIPs(publicKey))
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "no IP available"})
+			return
+		}
+		if err := h.commitPeerToWG(peer.Name); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		audit.Log("peer_registered", auditFields("name", name, "ip", ip, "source", "qr"))
+	}
+
+	content := fmt.Sprintf(`[Interface]
 Address = %s/24
 PrivateKey = %s
 DNS = %s
@@ -505,9 +482,6 @@ Endpoint = %s
 AllowedIPs = %s
 PersistentKeepalive = %d
 `, ip, privateKey, dns, h.store.Server().PublicKey, h.config.ServerEndpoint(), h.config.WGSubnet, h.config.PeerKeepalive)
-	} else {
-		content = fmt.Sprintf("http://%s:%s/connect", h.config.ServerPublicIP, portStr(h.config.MgmtListen))
-	}
 
 	svg := generateQR(content)
 	w.Header().Set("Content-Type", "image/svg+xml")
@@ -559,6 +533,10 @@ func (h *Handler) SubmitRequest(w http.ResponseWriter, r *http.Request) {
 	dns := req.DNS
 	if dns == "" {
 		dns = h.config.DefaultDNS
+	}
+	if err := validateDNS(dns); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
 	}
 
 	privateKey, publicKey, err := h.wgMgr.GenKeyPair()
@@ -717,24 +695,8 @@ func (h *Handler) ApproveRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	allowedIP := fmt.Sprintf("%s/32", peer.Address)
-	if err := h.wgMgr.AddPeerLive(h.config.WGInterface, peer.PublicKey, allowedIP, peer.Keepalive); err != nil {
-		h.store.RemovePeer(peer.Name)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to add peer to wireguard"})
-		return
-	}
-
-	if err := h.writeConfigToDisk(); err != nil {
-		h.wgMgr.RemovePeerByKey(h.config.WGInterface, peer.PublicKey)
-		h.store.RemovePeer(peer.Name)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to write config"})
-		return
-	}
-
-	if err := h.store.Save(); err != nil {
-		h.wgMgr.RemovePeerByKey(h.config.WGInterface, peer.PublicKey)
-		h.store.RemovePeer(peer.Name)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist state"})
+	if err := h.commitPeerToWG(peer.Name); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 
@@ -1020,6 +982,34 @@ func (h *Handler) writeConfigToDisk() error {
 	)
 }
 
+func (h *Handler) commitPeerToWG(name string) error {
+	peer, ok := h.store.GetPeer(name)
+	if !ok {
+		return fmt.Errorf("peer %q not found in store", name)
+	}
+
+	allowedIP := fmt.Sprintf("%s/32", peer.Address)
+
+	if err := h.wgMgr.AddPeerLive(h.config.WGInterface, peer.PublicKey, allowedIP, peer.Keepalive); err != nil {
+		h.store.RemovePeer(name)
+		return fmt.Errorf("failed to add peer to wireguard: %w", err)
+	}
+
+	if err := h.writeConfigToDisk(); err != nil {
+		h.wgMgr.RemovePeerByKey(h.config.WGInterface, peer.PublicKey)
+		h.store.RemovePeer(name)
+		return fmt.Errorf("failed to write config: %w", err)
+	}
+
+	if err := h.store.Save(); err != nil {
+		h.wgMgr.RemovePeerByKey(h.config.WGInterface, peer.PublicKey)
+		h.store.RemovePeer(name)
+		return fmt.Errorf("failed to persist state: %w", err)
+	}
+
+	return nil
+}
+
 func portStr(addr string) string {
 	_, p, err := net.SplitHostPort(addr)
 	if err != nil { return "58880" }
@@ -1050,6 +1040,19 @@ func validatePeerName(name string) error {
 	for _, ch := range name {
 		if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-') {
 			return fmt.Errorf("peer name contains invalid characters (use a-z, A-Z, 0-9, -)")
+		}
+	}
+	return nil
+}
+
+func validateDNS(dns string) error {
+	if dns == "" {
+		return nil
+	}
+	for _, addr := range strings.Split(dns, ",") {
+		addr = strings.TrimSpace(addr)
+		if net.ParseIP(addr) == nil {
+			return fmt.Errorf("invalid DNS server: %q (must be an IP address)", addr)
 		}
 	}
 	return nil
