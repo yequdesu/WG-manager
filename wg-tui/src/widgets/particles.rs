@@ -6,8 +6,8 @@ use ratatui::style::Color;
 use ratatui::widgets::Widget;
 use rand::Rng;
 
-const MAX_PARTICLES: usize = 80;
-const MIN_PARTICLES: usize = 40;
+const MAX_PARTICLES: usize = 120;
+const MIN_PARTICLES: usize = 60;
 const MAX_ASTEROIDS: usize = 3;
 const FRICTION: f32 = 0.985;
 const STOP_THRESHOLD: f32 = 0.05;
@@ -192,14 +192,14 @@ impl ParticleSystem {
             vx,
             vy,
             ch: P_CHARS[self.rng.random_range(0..P_CHARS.len())],
-            base_alpha: self.rng.random_range(0.12..0.45),
+            base_alpha: self.rng.random_range(0.25..0.55),
         });
     }
 
     fn spawn_asteroid(&mut self, area: Rect) {
         let radius = self.rng.random_range(4..11usize);
         let edge: u8 = self.rng.random_range(0..4);
-        let speed = self.rng.random_range(1.5..4.0);
+        let speed = self.rng.random_range(0.8..2.0);
         let (ax, ay, avx, avy): (f32, f32, f32, f32) = match edge {
             0 => (self.rng.random_range(0.0..area.width as f32), -(radius as f32) * 2.0, 0.0, speed),
             1 => (self.rng.random_range(0.0..area.width as f32), area.height as f32 + (radius as f32) * 2.0, 0.0, -speed),
@@ -219,7 +219,7 @@ impl ParticleSystem {
 
         for dy in 0..size {
             for dx in 0..size {
-                let dist = ((dx as f32 - center).powi(2) + (dy as f32 - center).powi(2)).sqrt();
+                let dist = ((dx as f32 - center).powi(2) + ((dy as f32 - center) * 2.0).powi(2)).sqrt();
                 if dist <= r + 0.3 {
                     let ch = if dist <= r * 0.35 {
                         '█'
@@ -308,7 +308,7 @@ fn render_asteroid(buf: &mut Buffer, area: Rect, a: &Asteroid) {
                     continue;
                 }
                 let dist = ((dx as f32 - a.radius as f32).powi(2)
-                    + (dy as f32 - a.radius as f32).powi(2))
+                    + ((dy as f32 - a.radius as f32) * 2.0).powi(2))
                 .sqrt();
                 let alpha = (1.0 - dist / a.radius as f32).clamp(0.08, 0.28);
                 if let Some(cell) = buf.cell_mut((area.x + gx as u16, area.y + gy as u16)) {
@@ -321,16 +321,16 @@ fn render_asteroid(buf: &mut Buffer, area: Rect, a: &Asteroid) {
 }
 
 fn particle_color(alpha: f32) -> Color {
-    let a = (alpha * 0.45).clamp(0.06, 0.45);
+    let a = (alpha * 0.55).clamp(0.10, 0.55);
     Color::Rgb(
-        (200.0 * a) as u8,
-        (214.0 * a) as u8,
+        (210.0 * a) as u8,
+        (224.0 * a) as u8,
         (255.0 * a) as u8,
     )
 }
 
 fn asteroid_color(alpha: f32) -> Color {
-    let a = alpha.clamp(0.06, 0.30);
+    let a = alpha.clamp(0.10, 0.35);
     Color::Rgb(
         (180.0 * a) as u8,
         (200.0 * a) as u8,
