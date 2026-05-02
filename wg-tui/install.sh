@@ -81,7 +81,22 @@ case "$USE_MIRROR" in
     tuna)    setup_tuna_mirror ;;
 esac
 
-# ── 2. Check Rust toolchain ─────────────────────────
+# ── 2. Detect real user (sudo preserves wrong HOME) ──
+REAL_USER="${SUDO_USER:-$USER}"
+REAL_HOME="$(eval echo ~"$REAL_USER")"
+
+ensure_cargo_path() {
+    if [[ -f "$REAL_HOME/.cargo/bin/cargo" ]]; then
+        export PATH="$REAL_HOME/.cargo/bin:$PATH"
+        export HOME="$REAL_HOME"
+        # shellcheck disable=SC1090
+        source "$REAL_HOME/.cargo/env" 2>/dev/null || true
+    fi
+}
+
+ensure_cargo_path
+
+# ── 3. Check Rust toolchain ──────────────────────────
 if ! command -v cargo &>/dev/null; then
     warn "Rust toolchain not found."
     read -p "$(echo -e "${BOLD}  Install Rust via rustup? [Y/n]: ${NC}")" ans
@@ -91,12 +106,14 @@ if ! command -v cargo &>/dev/null; then
     fi
     log "Installing Rust..."
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-    # shellcheck disable=SC1090
     source "$HOME/.cargo/env"
     log "Rust installed: $(rustc --version)"
 else
     log "Rust found: $(rustc --version)"
 fi
+
+# Re-ensure cargo path after potential new install
+ensure_cargo_path
 
 # ── 3. Build ─────────────────────────────────────────
 cd "$SCRIPT_DIR"

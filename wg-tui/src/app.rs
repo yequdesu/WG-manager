@@ -1,7 +1,7 @@
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Paragraph, TableState};
+use ratatui::widgets::{Block, BorderType, Borders, Paragraph, TableState};
 use ratatui::Frame;
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -35,6 +35,7 @@ pub struct App {
     pub flash: Option<(usize, ui::requests::FlashKind, u64)>,
 
     pub api: ApiClient,
+    #[allow(dead_code)]
     pub config: Config,
     pub audit_log_path: String,
     pub rt: tokio::runtime::Handle,
@@ -243,15 +244,31 @@ impl App {
 }
 
 pub fn render(frame: &mut Frame, app: &mut App) {
-    let area = frame.area();
+    let term_area = frame.area();
+
+    let margin_h = 2u16;
+    let margin_v = 1u16;
+    let window_area = if term_area.width > margin_h * 4 && term_area.height > margin_v * 4 {
+        term_area.inner(Margin::new(margin_h, margin_v))
+    } else {
+        term_area
+    };
+
+    let border = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Double)
+        .border_style(Style::default().fg(crate::theme::DARK_THEME.border));
+    frame.render_widget(&border, window_area);
+
+    let inner = window_area.inner(Margin::new(1, 0));
 
     let chunks = Layout::vertical([
         Constraint::Length(1),
-        Constraint::Length(4),
+        Constraint::Length(2),
         Constraint::Min(0),
         Constraint::Length(1),
     ])
-    .split(area);
+    .split(inner);
 
     render_header(frame, chunks[0]);
     crate::widgets::tab_bar::render_tab_bar(frame, chunks[1], app.tab);

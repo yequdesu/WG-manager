@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crossterm::event::{self, Event as CrosstermEvent, KeyEvent, MouseEvent};
 use std::sync::mpsc;
 use std::time::Duration;

@@ -1,6 +1,7 @@
+#![allow(dead_code)]
+
 use ratatui::style::Color;
 
-#[allow(dead_code)]
 pub struct Theme {
     pub bg: Color,
     pub surface: Color,
