@@ -4,9 +4,11 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, TableState};
 use ratatui::Frame;
 use std::path::PathBuf;
+use std::sync::mpsc;
 
 use crate::api::{ApiClient, PeerInfo, RequestInfo, ServerStatus};
 use crate::config::Config;
+use crate::event::DataEvent;
 use crate::ui;
 use crate::widgets::tab_bar::Tab;
 
@@ -36,10 +38,11 @@ pub struct App {
     pub config: Config,
     pub audit_log_path: String,
     pub rt: tokio::runtime::Handle,
+    pub data_tx: mpsc::Sender<DataEvent>,
 }
 
 impl App {
-    pub fn new(config: Config, rt: tokio::runtime::Handle) -> Self {
+    pub fn new(config: Config, rt: tokio::runtime::Handle, data_tx: mpsc::Sender<DataEvent>) -> Self {
         let api = ApiClient::new(config.api_url.clone(), config.api_key.clone());
         let audit_log = find_audit_log_path();
 
@@ -76,6 +79,7 @@ impl App {
             config,
             audit_log_path: audit_log,
             rt,
+            data_tx,
         }
     }
 
@@ -86,7 +90,6 @@ impl App {
         if now - self.last_refresh >= 5 {
             self.last_refresh = now;
             self.refresh_data();
-            self.logs = read_audit_log(&self.audit_log_path);
         }
 
         if let Some((_, _, ref mut count)) = self.flash {
@@ -97,14 +100,59 @@ impl App {
         }
     }
 
+    pub fn apply_data_event(&mut self, event: DataEvent) {
+        match event {
+            DataEvent::PeersFetched(Ok(resp)) => {
+                self.peers = resp.peers;
+                if self.peer_selected >= self.peers.len() && !self.peers.is_empty() {
+                    self.peer_selected = self.peers.len() - 1;
+                    self.peer_state.select(Some(self.peer_selected));
+                }
+            }
+            DataEvent::PeersFetched(Err(e)) => {
+                self.error_msg = Some(format!("peers: {}", e));
+            }
+            DataEvent::RequestsFetched(Ok(resp)) => {
+                self.requests = resp.requests;
+                if self.request_selected >= self.requests.len() && !self.requests.is_empty() {
+                    self.request_selected = self.requests.len() - 1;
+                    self.request_state.select(Some(self.request_selected));
+                }
+            }
+            DataEvent::RequestsFetched(Err(e)) => {
+                self.error_msg = Some(format!("requests: {}", e));
+            }
+            DataEvent::StatusFetched(Ok(status)) => {
+                self.status = status;
+            }
+            DataEvent::StatusFetched(Err(e)) => {
+                self.error_msg = Some(format!("status: {}", e));
+            }
+            DataEvent::RequestApproved(_) | DataEvent::RequestDenied(_) | DataEvent::PeerDeleted(_) => {
+                self.fetch_all_data();
+            }
+        }
+    }
+
     pub fn refresh_data(&mut self) {
+        self.fetch_all_data();
+        self.logs = read_audit_log(&self.audit_log_path);
+    }
+
+    fn fetch_all_data(&mut self) {
         let api = self.api.clone();
+        let tx = self.data_tx.clone();
         let rt = self.rt.clone();
 
         rt.spawn(async move {
-            let _ = api.get_peers().await;
-            let _ = api.get_requests().await;
-            let _ = api.get_status().await;
+            let peers = api.get_peers().await;
+            let _ = tx.send(DataEvent::PeersFetched(peers));
+
+            let reqs = api.get_requests().await;
+            let _ = tx.send(DataEvent::RequestsFetched(reqs));
+
+            let status = api.get_status().await;
+            let _ = tx.send(DataEvent::StatusFetched(status));
         });
     }
 
@@ -113,9 +161,11 @@ impl App {
         let api = self.api.clone();
         let request_id = id.to_string();
         let rt = self.rt.clone();
+        let tx = self.data_tx.clone();
 
         rt.spawn(async move {
-            let _ = api.approve_request(&request_id).await;
+            let result = api.approve_request(&request_id).await;
+            let _ = tx.send(DataEvent::RequestApproved(result));
         });
 
         self.flash = Some((selected, ui::requests::FlashKind::Approve, 0));
@@ -126,9 +176,11 @@ impl App {
         let api = self.api.clone();
         let request_id = id.to_string();
         let rt = self.rt.clone();
+        let tx = self.data_tx.clone();
 
         rt.spawn(async move {
-            let _ = api.deny_request(&request_id).await;
+            let result = api.deny_request(&request_id).await;
+            let _ = tx.send(DataEvent::RequestDenied(result));
         });
 
         self.flash = Some((selected, ui::requests::FlashKind::Deny, 0));
@@ -138,9 +190,11 @@ impl App {
         let api = self.api.clone();
         let peer_name = name.to_string();
         let rt = self.rt.clone();
+        let tx = self.data_tx.clone();
 
         rt.spawn(async move {
-            let _ = api.delete_peer(&peer_name).await;
+            let result = api.delete_peer(&peer_name).await;
+            let _ = tx.send(DataEvent::PeerDeleted(result));
         });
     }
 
@@ -275,9 +329,12 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
         _ => "",
     };
 
+    let error_hint = if app.error_msg.is_some() { "⚠ " } else { "" };
+
     let full = format!(
-        " {} │ {} │ {}{}[q] Quit  [tab] Switch  [r] Refresh  [?] Help",
+        " {} │ {} │ {}{}{}[q] Quit  [tab] Switch  [r] Refresh  [?] Help",
         peer_count, req_count, help,
+        error_hint,
         if app.show_help { "[?] Close Help  " } else { "" },
     );
 

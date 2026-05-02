@@ -14,16 +14,19 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::io;
 use std::panic;
+use std::sync::mpsc;
 
 use app::App;
-use event::{Event, EventHandler};
+use event::{DataEvent, Event, EventHandler};
 use widgets::tab_bar::Tab;
 
 fn main() -> io::Result<()> {
     let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
 
+    let (data_tx, data_rx) = mpsc::channel::<DataEvent>();
+
     let config = config::Config::load();
-    let mut app = App::new(config, rt.handle().clone());
+    let mut app = App::new(config, rt.handle().clone(), data_tx);
 
     let _guard = panic_handler();
 
@@ -35,7 +38,7 @@ fn main() -> io::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let event_handler = EventHandler::new(50, 5000);
+    let event_handler = EventHandler::new(50, data_rx);
 
     app.refresh_data();
     app.logs = app::read_audit_log_file(&app.audit_log_path);
@@ -59,6 +62,10 @@ fn run(
     handler: &EventHandler,
 ) -> io::Result<()> {
     loop {
+        while let Some(data_event) = handler.try_recv_data() {
+            app.apply_data_event(data_event);
+        }
+
         terminal.draw(|frame| app::render(frame, app))?;
 
         match handler.next() {
@@ -88,18 +95,15 @@ fn run(
                         if app.tab == Tab::Peers && !app.peers.is_empty() {
                             let name = app.peers[app.peer_selected].name.clone();
                             app.delete_peer(&name);
-                            app.refresh_data();
                         } else if app.tab == Tab::Requests && !app.requests.is_empty() {
                             let id = app.requests[app.request_selected].id.clone();
                             app.deny_request(&id);
-                            app.refresh_data();
                         }
                     }
                     KeyCode::Char('a') | KeyCode::Char('A') => {
                         if app.tab == Tab::Requests && !app.requests.is_empty() {
                             let id = app.requests[app.request_selected].id.clone();
                             app.approve_request(&id);
-                            app.refresh_data();
                         }
                     }
                     KeyCode::Char('1') => app.tab = Tab::Dashboard,
