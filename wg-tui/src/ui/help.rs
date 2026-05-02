@@ -9,7 +9,7 @@ use crate::theme::DARK_THEME;
 pub fn render_help(frame: &mut Frame, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(DARK_THEME.primary))
+        .border_style(Style::default().fg(DARK_THEME.primary).bg(DARK_THEME.bg))
         .style(Style::default().bg(DARK_THEME.bg))
         .title(Span::styled(" HELP ", Style::default().fg(DARK_THEME.primary).bold()));
 

@@ -25,7 +25,7 @@ impl<'a> Card<'a> {
     pub fn render_block(self, frame: &mut Frame, area: Rect) -> Rect {
         let block = Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(DARK_THEME.border))
+            .border_style(Style::default().fg(DARK_THEME.border).bg(DARK_THEME.surface))
             .style(Style::default().bg(DARK_THEME.surface))
             .title(
                 Span::styled(

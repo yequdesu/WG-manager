@@ -92,8 +92,8 @@ fn run(
                         KeyCode::Down => app.window.move_by(0, 1),
                         KeyCode::Left => app.window.move_by(-2, 0),
                         KeyCode::Right => app.window.move_by(2, 0),
-                        KeyCode::Char('=') | KeyCode::Char('+') => app.window.zoom_in(),
-                        KeyCode::Char('-') => app.window.zoom_out(),
+                        KeyCode::Char('>') | KeyCode::Char('.') => app.window.zoom_in(),
+                        KeyCode::Char('<') | KeyCode::Char(',') => app.window.zoom_out(),
                         KeyCode::Char('0') => app.window.reset(),
                         _ => {}
                     }
@@ -173,16 +173,12 @@ fn run(
             Ok(Event::Mouse(mouse)) => {
                 match mouse.kind {
                     MouseEventKind::ScrollDown => {
-                        if mouse.modifiers.contains(KeyModifiers::CONTROL) {
-                            app.window.zoom_out();
-                        } else if app.tab == Tab::Logs {
+                        if app.tab == Tab::Logs {
                             app.log_scroll = app.log_scroll.saturating_add(3);
                         }
                     }
                     MouseEventKind::ScrollUp => {
-                        if mouse.modifiers.contains(KeyModifiers::CONTROL) {
-                            app.window.zoom_in();
-                        } else if app.tab == Tab::Logs {
+                        if app.tab == Tab::Logs {
                             app.log_scroll = app.log_scroll.saturating_sub(3);
                         }
                     }

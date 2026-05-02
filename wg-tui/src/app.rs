@@ -262,7 +262,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         .style(Style::default().bg(DARK_THEME.bg))
         .borders(Borders::ALL)
         .border_type(BorderType::Double)
-        .border_style(Style::default().fg(DARK_THEME.border));
+        .border_style(Style::default().fg(DARK_THEME.border).bg(DARK_THEME.bg));
     frame.render_widget(win_bg, win);
 
     let inner = win.inner(Margin::new(1, 0));
@@ -272,8 +272,8 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     );
     let title_span = Span::styled(title.clone(), Style::default().fg(DARK_THEME.primary).bold());
     let decor = format!(
-        "{}─ □ ×",
-        "─".repeat(inner.width.saturating_sub(title.len() as u16 + 6) as usize)
+        "{}",
+        "─".repeat(inner.width.saturating_sub(title.len() as u16) as usize)
     );
     let decor_span = Span::styled(decor, Style::default().fg(DARK_THEME.muted));
     let title_line = Line::from(vec![title_span, decor_span]);
