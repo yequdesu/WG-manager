@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # WG-TUI Installer — Ratatui Dashboard for WG-Manager
-# Usage: bash install.sh
+# Usage: bash install.sh [--mirror cn|ustc|tuna]
 
 BOLD='\033[1m'
 GREEN='\033[0;32m'
@@ -23,7 +23,65 @@ echo ""
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# 1. Check Rust toolchain
+# ── Parse args ──────────────────────────────────────
+USE_MIRROR=""
+for arg in "$@"; do
+    case "$arg" in
+        --mirror=*) USE_MIRROR="${arg#*=}" ;;
+        --mirror)   USE_MIRROR="cn" ;;
+        --cn)       USE_MIRROR="cn" ;;
+        --ustc)     USE_MIRROR="ustc" ;;
+        --tuna)     USE_MIRROR="tuna" ;;
+    esac
+done
+
+# ── Mirror helpers ──────────────────────────────────
+setup_ustc_mirror() {
+    export RUSTUP_DIST_SERVER="https://mirrors.ustc.edu.cn/rust-static"
+    export RUSTUP_UPDATE_ROOT="https://mirrors.ustc.edu.cn/rust-static/rustup"
+    local cargo_config="${HOME}/.cargo/config.toml"
+    mkdir -p "$(dirname "$cargo_config")"
+    cat > "$cargo_config" << 'CARGO_CONF'
+[source.crates-io]
+replace-with = 'ustc'
+
+[source.ustc]
+registry = "sparse+https://mirrors.ustc.edu.cn/crates.io-index/"
+CARGO_CONF
+    log "Using USTC mirrors (mirrors.ustc.edu.cn)"
+}
+
+setup_tuna_mirror() {
+    export RUSTUP_DIST_SERVER="https://mirrors.tuna.tsinghua.edu.cn/rustup"
+    export RUSTUP_UPDATE_ROOT="https://mirrors.tuna.tsinghua.edu.cn/rustup/rustup"
+    local cargo_config="${HOME}/.cargo/config.toml"
+    mkdir -p "$(dirname "$cargo_config")"
+    cat > "$cargo_config" << 'CARGO_CONF'
+[source.crates-io]
+replace-with = 'tuna'
+
+[source.tuna]
+registry = "sparse+https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/"
+CARGO_CONF
+    log "Using Tsinghua TUNA mirrors (mirrors.tuna.tsinghua.edu.cn)"
+}
+
+# ── 1. Mirror prompt ────────────────────────────────
+if [[ -z "$USE_MIRROR" ]]; then
+    read -p "$(echo -e "${BOLD}  Use China mirror for faster downloads? [y/N/cn=tuna/ustc]: ${NC}")" ans
+    case "$ans" in
+        [Yy]|yes|cn) USE_MIRROR="cn" ;;
+        ustc)        USE_MIRROR="ustc" ;;
+        tuna)        USE_MIRROR="tuna" ;;
+    esac
+fi
+
+case "$USE_MIRROR" in
+    cn|ustc) setup_ustc_mirror ;;
+    tuna)    setup_tuna_mirror ;;
+esac
+
+# ── 2. Check Rust toolchain ─────────────────────────
 if ! command -v cargo &>/dev/null; then
     warn "Rust toolchain not found."
     read -p "$(echo -e "${BOLD}  Install Rust via rustup? [Y/n]: ${NC}")" ans
@@ -33,16 +91,18 @@ if ! command -v cargo &>/dev/null; then
     fi
     log "Installing Rust..."
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    # shellcheck disable=SC1090
     source "$HOME/.cargo/env"
     log "Rust installed: $(rustc --version)"
 else
     log "Rust found: $(rustc --version)"
 fi
 
-# 2. Build
+# ── 3. Build ─────────────────────────────────────────
 cd "$SCRIPT_DIR"
 log "Building wg-tui (release, optimized)..."
-cargo build --release 2>&1 | tail -5
+export CARGO_NET_GIT_FETCH_WITH_CLI=true
+cargo build --release
 
 BIN="target/release/wg-tui"
 if [[ ! -f "$BIN" ]]; then
@@ -50,7 +110,7 @@ if [[ ! -f "$BIN" ]]; then
     exit 1
 fi
 
-# 3. Install
+# ── 4. Install ──────────────────────────────────────
 DEST="${HOME}/.local/bin/wg-tui"
 if [[ -w /usr/local/bin ]]; then
     DEST="/usr/local/bin/wg-tui"
@@ -59,7 +119,7 @@ mkdir -p "$(dirname "$DEST")"
 cp "$BIN" "$DEST"
 chmod +x "$DEST"
 
-# 4. Verify
+# ── 5. Verify ───────────────────────────────────────
 echo ""
 log "Installed to: ${BOLD}$DEST${NC}"
 echo ""
@@ -70,7 +130,6 @@ info "Make sure the WG-Manager daemon is running on localhost."
 echo "  The TUI reads config from ./config.env or ~/WG-manager/config.env"
 echo ""
 
-# Check if in PATH
 if command -v wg-tui &>/dev/null; then
     log "Ready: wg-tui is in your PATH"
 else
