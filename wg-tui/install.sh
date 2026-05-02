@@ -97,7 +97,24 @@ ensure_cargo_path() {
 ensure_cargo_path
 
 # ── 3. Check Rust toolchain ──────────────────────────
-if ! command -v cargo &>/dev/null; then
+_rust_ok=false
+
+if command -v rustc &>/dev/null && rustc --version &>/dev/null 2>&1; then
+    log "Rust found: $(rustc --version)"
+    _rust_ok=true
+fi
+
+if command -v rustup &>/dev/null && ! $_rust_ok; then
+    log "rustup found but no toolchain installed. Installing stable..."
+    if rustup default stable; then
+        log "Rust installed: $(rustc --version)"
+        _rust_ok=true
+    else
+        warn "rustup toolchain install failed."
+    fi
+fi
+
+if ! $_rust_ok; then
     warn "Rust toolchain not found."
     read -p "$(echo -e "${BOLD}  Install Rust via rustup? [Y/n]: ${NC}")" ans
     if [[ "$ans" =~ ^[Nn] ]]; then
@@ -105,11 +122,9 @@ if ! command -v cargo &>/dev/null; then
         exit 1
     fi
     log "Installing Rust..."
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
     source "$HOME/.cargo/env"
     log "Rust installed: $(rustc --version)"
-else
-    log "Rust found: $(rustc --version)"
 fi
 
 # Re-ensure cargo path after potential new install
