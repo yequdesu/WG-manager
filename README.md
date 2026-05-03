@@ -308,20 +308,6 @@ bash install.sh --ustc          # Use USTC mirror in China
 bash install.sh                  # Default
 ```
 
-### Features
-
-| Feature | Description |
-|---------|-------------|
-| **4-tab layout** | Dashboard, Peers, Requests, Logs |
-| **Card-based UI** | All data displayed in styled cards with unified theming |
-| **Particle physics** | 180-360 particles with Lissajous drift, edge bounce, window repulsion |
-| **Asteroids** | Large multi-character spheres fly in from edges, scatter particles |
-| **Window management** | `Ctrl+Arrows` move, `=`/`-` resize, `0` reset |
-| **Peer search** | Press `/` to filter peers by name/IP |
-| **Delete confirmation** | Two-step `d`→`d`/`y` with 3s auto-cancel |
-| **Easter eggs** | `Y`/`C` on Dashboard → named asteroids |
-| **Persistence** | Window position/size saved to `~/.config/wg-tui/` |
-
 ### Keyboard Shortcuts
 
 | Key | Action |
@@ -379,16 +365,6 @@ The log rotates at 100 MB (keeps 10 archives). Routine TUI polling (GET requests
 
 ```bash
 tail -f /var/log/wg-mgmt/wg-mgmt.log
-```
-
-### DeepSeek AI Analysis
-
-```bash
-# Edit scripts/analyze-logs.sh — fill in your API_KEY
-vim scripts/analyze-logs.sh
-
-# Run analysis
-bash scripts/analyze-logs.sh /var/log/wg-mgmt/wg-mgmt.log
 ```
 
 ---

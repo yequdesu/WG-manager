@@ -308,20 +308,6 @@ bash install.sh --ustc          # 中国地区使用 USTC 镜像
 bash install.sh                  # 默认
 ```
 
-### 特性
-
-| 特性 | 说明 |
-|------|------|
-| **4 标签页** | Dashboard、Peers、Requests、Logs |
-| **卡片式界面** | 所有数据以统一样式的卡片呈现 |
-| **粒子物理** | 180-360 个粒子 Lissajous 漂移、边缘弹跳、窗口排斥 |
-| **小行星** | 大型多字符球体从边缘飞入，撞击粒子飞散 |
-| **窗口管理** | `Ctrl+Arrows` 移动，`=`/`-` 缩放，`0` 重置 |
-| **Peer 搜索** | 按 `/` 按名称/IP 过滤 |
-| **删除确认** | 两步确认 `d`→`d`/`y`，3 秒自动取消 |
-| **彩蛋** | Dashboard 界面按 `Y`/`C` 召唤署名小行星 |
-| **状态持久** | 窗口位置/大小保存到 `~/.config/wg-tui/` |
-
 ### 快捷键
 
 | 按键 | 操作 |
@@ -379,16 +365,6 @@ ssh user@server 'chmod +x ~/.local/bin/wg-tui-ratatui'
 
 ```bash
 tail -f /var/log/wg-mgmt/wg-mgmt.log
-```
-
-### DeepSeek AI 分析
-
-```bash
-# 编辑 scripts/analyze-logs.sh — 填入你的 API_KEY
-vim scripts/analyze-logs.sh
-
-# 运行分析
-bash scripts/analyze-logs.sh /var/log/wg-mgmt/wg-mgmt.log
 ```
 
 ---
