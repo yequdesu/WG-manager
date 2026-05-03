@@ -41,6 +41,8 @@ pub struct App {
     pub search_query: String,
     pub log_scroll: usize,
     pub window: WindowState,
+    pub confirm_delete: bool,
+    pub confirm_timer: u16,
 
     pub api: ApiClient,
     #[allow(dead_code)]
@@ -89,6 +91,8 @@ impl App {
             search_query: String::new(),
             log_scroll: 0,
             window: WindowState::load(),
+            confirm_delete: false,
+            confirm_timer: 0,
 
             api,
             config,
@@ -111,6 +115,14 @@ impl App {
             *count += 1;
             if *count > 30 {
                 self.flash = None;
+            }
+        }
+
+        if self.confirm_delete {
+            self.confirm_timer += 1;
+            if self.confirm_timer > 60 {
+                self.confirm_delete = false;
+                self.confirm_timer = 0;
             }
         }
     }
@@ -479,6 +491,18 @@ fn render_logs(frame: &mut Frame, area: Rect, app: &App) {
 
 fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
     fill_area(frame, area, DARK_THEME.bg);
+
+    if app.confirm_delete {
+        let msg = Line::from(Span::styled(
+            format!(" Delete '{}'? [d] confirm  [any other key] cancel  (auto-cancel in {}s)",
+                app.peers.get(app.peer_selected).map(|p| p.name.as_str()).unwrap_or("?"),
+                (60 - app.confirm_timer) / 20 + 1),
+            Style::default().fg(DARK_THEME.danger).bg(DARK_THEME.bg),
+        ));
+        frame.render_widget(Paragraph::new(msg), area);
+        return;
+    }
+
     let peer_count = format!("{} peers  {} online", app.peers.len(), app.status.peer_online);
     let req_count = format!("{} pending", app.requests.len());
 

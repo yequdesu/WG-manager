@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -198,12 +199,12 @@ func reloadConfig(path string, appCfg *AppConfig, handler *api.Handler, state *s
 			len(newState.AllPeers()), len(newState.PendingRequests()), appCfg.PeersDBPath)
 	}
 
-	if appCfg.AuditLogPath != "" && appCfg.AuditLogPath != audit.CurrentPath() {
+	if appCfg.AuditLogPath != "" {
 		audit.Close()
 		if err := audit.Init(appCfg.AuditLogPath); err != nil {
 			log.Printf("Warning: audit re-init to %s: %v", appCfg.AuditLogPath, err)
 		} else {
-			log.Printf("Audit log path changed to %s", appCfg.AuditLogPath)
+			log.Printf("Audit log reopened at %s", appCfg.AuditLogPath)
 		}
 	}
 
@@ -234,6 +235,18 @@ func main() {
 	appCfg, err := loadConfig(configPath)
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
+	}
+
+	// Convert relative paths to absolute so daemon works from any working directory
+	if !filepath.IsAbs(appCfg.PeersDBPath) {
+		if abs, err := filepath.Abs(appCfg.PeersDBPath); err == nil {
+			appCfg.PeersDBPath = abs
+		}
+	}
+	if !filepath.IsAbs(appCfg.AuditLogPath) {
+		if abs, err := filepath.Abs(appCfg.AuditLogPath); err == nil {
+			appCfg.AuditLogPath = abs
+		}
 	}
 
 		ctx, cancel := context.WithCancel(context.Background())

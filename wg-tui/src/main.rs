@@ -110,7 +110,10 @@ fn run(
                 match key.code {
                     KeyCode::Char('q') => app.should_quit = true,
                     KeyCode::Esc => {
-                        if app.search_active {
+                        if app.confirm_delete {
+                            app.confirm_delete = false;
+                            app.confirm_timer = 0;
+                        } else if app.search_active {
                             app.search_active = false;
                             app.search_query.clear();
                         } else if app.show_help {
@@ -150,11 +153,26 @@ fn run(
                     }
                     KeyCode::Char('d') | KeyCode::Char('D') => {
                         if app.tab == Tab::Peers && !app.peers.is_empty() {
-                            let name = app.peers[app.peer_selected].name.clone();
-                            app.delete_peer(&name);
+                            if app.confirm_delete {
+                                let name = app.peers[app.peer_selected].name.clone();
+                                app.delete_peer(&name);
+                                app.confirm_delete = false;
+                                app.confirm_timer = 0;
+                            } else {
+                                app.confirm_delete = true;
+                                app.confirm_timer = 0;
+                            }
                         } else if app.tab == Tab::Requests && !app.requests.is_empty() {
                             let id = app.requests[app.request_selected].id.clone();
                             app.deny_request(&id);
+                        }
+                    }
+                    KeyCode::Char('y') | KeyCode::Char('Y') => {
+                        if app.confirm_delete && app.tab == Tab::Peers && !app.peers.is_empty() {
+                            let name = app.peers[app.peer_selected].name.clone();
+                            app.delete_peer(&name);
+                            app.confirm_delete = false;
+                            app.confirm_timer = 0;
                         }
                     }
                     KeyCode::Char('a') | KeyCode::Char('A') => {
@@ -167,7 +185,9 @@ fn run(
                     KeyCode::Char('2') => app.tab = Tab::Peers,
                     KeyCode::Char('3') => app.tab = Tab::Requests,
                     KeyCode::Char('4') => app.tab = Tab::Logs,
-                    _ => {}
+                    _ => {
+                        if app.confirm_delete { app.confirm_delete = false; app.confirm_timer = 0; }
+                    }
                 }
             }
             Ok(Event::Mouse(mouse)) => {
