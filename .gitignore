@@ -33,6 +33,7 @@ testdata/
 
 # Rust / wg-tui
 wg-tui/target/
+TUI-template/target/
 
 # WireGuard keys (security)
 *.key
