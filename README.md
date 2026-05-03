@@ -1,6 +1,8 @@
 # WG-Manager
 
-WireGuard management layer — star-topology VPN with zero-touch client provisioning. A single Go daemon handles all peer lifecycle, with clients joining via one command. Supports Linux / macOS / WSL / Windows / Mobile (QR).
+WireGuard management layer — star-topology VPN with zero-touch client provisioning. A single Go daemon handles all peer lifecycle, with clients joining via one command. Includes an optional enhanced TUI dashboard built with Ratatui (Rust).
+
+Supports **Linux / macOS / WSL / Windows / Mobile (QR)**.
 
 ---
 
@@ -12,6 +14,8 @@ WireGuard management layer — star-topology VPN with zero-touch client provisio
   - [2. Open Ports](#2-open-ports)
   - [3. Clients Join](#3-clients-join)
   - [4. Admin Operations](#4-admin-operations)
+- [Enhanced TUI Dashboard](#enhanced-tui-dashboard)
+- [Logging & Diagnostics](#logging--diagnostics)
 - [API Reference](#api-reference)
 - [Updating](#updating)
 - [Building](#building)
@@ -132,12 +136,6 @@ The script automatically:
 curl -sSf "http://118.178.171.166:58880/connect?name=my-device" | sudo bash
 ```
 
-**Download first for interactive name prompt:**
-```bash
-curl -sSf http://118.178.171.166:58880/connect -o join.sh
-sudo bash join.sh
-```
-
 ##### Windows PowerShell
 
 ```powershell
@@ -177,28 +175,15 @@ curl -o wg0.conf "http://118.178.171.166:58880/connect?mode=direct&name=MYPC"
 
 ##### Mobile (QR Code)
 
-WireGuard's official app has a built-in "Scan from QR code" feature. WG-Manager provides QR codes in two ways:
+WireGuard's official app has a built-in "Scan from QR code" feature. QR codes work in **direct mode** only:
 
-**Scenario A: Printed after PC approval**
-
-When an approval completes on Linux / WSL / PowerShell, the terminal prints a QR command:
-
+**Admin generates QR on server:**
 ```bash
-# After approval on Linux/WSL:
-# Mobile: curl "http://118.178.171.166:58880/connect?qrcode&mode=direct&name=DEVICE" -o qr.svg
-#   → scan with WireGuard app
+# Auto-registers peer "phone1" and outputs QR (phone scans directly)
+curl -s "http://localhost:58880/connect?qrcode&mode=direct&name=phone1" -o phone1.svg
 ```
 
-Run that command to get an SVG file. Send it to the phone → WireGuard App → Scan QR → tunnel imports directly.
-
-**Scenario B: Admin generates directly on server**
-
-```bash
-# Auto-registers peer "alice-phone" and outputs QR
-curl -s "http://localhost:58880/connect?qrcode&mode=direct&name=alice-phone" -o alice.svg
-```
-
-Share `alice.svg` with the user → WireGuard App → Scan QR → connected.
+Share `phone1.svg` with the user → WireGuard App → Scan QR → connected.
 
 ---
 
@@ -209,7 +194,6 @@ Share `alice.svg` with the user → WireGuard App → Scan QR → connected.
 The API Key is on the server only:
 ```bash
 grep MGMT_API_KEY ~/WG-manager/config.env
-# MGMT_API_KEY=9c4a9e609690eef456f5ae6014e981cf22e6c01ad6f96df632b187e0376ac31d
 ```
 
 ##### Linux / macOS / WSL
@@ -260,8 +244,11 @@ All management is done on the server.
 #### 4.1 TUI Dashboard (recommended)
 
 ```bash
-wg-mgmt-tui
+wg-tui                 # Enhanced (if installed) or Legacy
+wg-tui --legacy        # Force Legacy TUI
 ```
+
+**Legacy TUI** (always available):
 
 | Tab | Content | Actions |
 |-----|---------|---------|
@@ -293,7 +280,7 @@ curl -s -X DELETE http://127.0.0.1:58880/api/v1/requests/<id> \
 #### 4.3 Delete a Peer
 
 ```bash
-# TUI: Peers tab → ↑↓ select → d
+# TUI: Peers tab → ↑↓ select → d (confirm with d/y)
 
 # CLI:
 curl -s -X DELETE http://127.0.0.1:58880/api/v1/peers/<name> \
@@ -305,7 +292,103 @@ curl -s -X DELETE http://127.0.0.1:58880/api/v1/peers/<name> \
 ```bash
 bash ~/WG-manager/scripts/health-check.sh
 bash ~/WG-manager/scripts/list-peers.sh
-tail -f /var/log/wg-mgmt/audit.log
+```
+
+---
+
+## Enhanced TUI Dashboard
+
+An optional enhanced TUI built with **Rust + Ratatui**, featuring a beautiful particle-physics background and smooth animations.
+
+### Install
+
+```bash
+cd ~/WG-manager/wg-tui
+bash install.sh --ustc          # Use USTC mirror in China
+bash install.sh                  # Default
+```
+
+### Features
+
+| Feature | Description |
+|---------|-------------|
+| **4-tab layout** | Dashboard, Peers, Requests, Logs |
+| **Card-based UI** | All data displayed in styled cards with unified theming |
+| **Particle physics** | 180-360 particles with Lissajous drift, edge bounce, window repulsion |
+| **Asteroids** | Large multi-character spheres fly in from edges, scatter particles |
+| **Window management** | `Ctrl+Arrows` move, `=`/`-` resize, `0` reset |
+| **Peer search** | Press `/` to filter peers by name/IP |
+| **Delete confirmation** | Two-step `d`→`d`/`y` with 3s auto-cancel |
+| **Easter eggs** | `Y`/`C` on Dashboard → named asteroids |
+| **Persistence** | Window position/size saved to `~/.config/wg-tui/` |
+
+### Keyboard Shortcuts
+
+| Key | Action |
+|-----|--------|
+| `Tab` / `←→` | Switch tabs |
+| `↑↓` / `j` `k` | Navigate lists |
+| `/` | Search peers |
+| `a` | Approve request |
+| `d` / `y` | Delete peer / Deny request |
+| `r` | Refresh data |
+| `=` / `-` / `0` | Zoom in / out / reset |
+| `Ctrl+Arrows` | Move window |
+| `?` | Help overlay |
+| `q` | Quit |
+
+### Cross-Compilation (Windows → Linux)
+
+```bash
+# One-time setup
+rustup target add x86_64-unknown-linux-musl
+
+# Build Linux binary from any platform
+cd wg-tui
+bash build-linux.sh
+
+# Deploy
+scp wg-tui-ratatui-linux user@server:~/.local/bin/wg-tui-ratatui
+ssh user@server 'chmod +x ~/.local/bin/wg-tui-ratatui'
+```
+
+---
+
+## Logging & Diagnostics
+
+### Unified Log
+
+All events are written to `/var/log/wg-mgmt/wg-mgmt.log` with three modules:
+
+| Module | Events |
+|--------|--------|
+| `[DAEMON]` | daemon started/stopped, peer registered/deleted, request lifecycle, config reloaded |
+| `[WG]` | peer connected/disconnected, handshake complete, endpoint changed, keypair rotation, transfer milestones |
+| `[HTTP]` | API write operations: POST/PUT/DELETE requests, non-localhost requests |
+
+**Format:**
+```
+2026-05-03T15:00:00.123456Z [DAEMON] daemon_started version=1.0.0
+2026-05-03T15:00:10.000000Z [WG] peer_connected peer=RoJ7SRMQC7Zu endpoint=112.49.240.57:16262
+2026-05-03T15:00:15.456789Z [DAEMON] request_approved name=phone1 ip=10.0.0.7
+```
+
+The log rotates at 100 MB (keeps 10 archives). Routine TUI polling (GET requests from localhost) is filtered out.
+
+### View Logs
+
+```bash
+tail -f /var/log/wg-mgmt/wg-mgmt.log
+```
+
+### DeepSeek AI Analysis
+
+```bash
+# Edit scripts/analyze-logs.sh — fill in your API_KEY
+vim scripts/analyze-logs.sh
+
+# Run analysis
+bash scripts/analyze-logs.sh /var/log/wg-mgmt/wg-mgmt.log
 ```
 
 ---
@@ -317,7 +400,7 @@ Base URL: `http://IP:58880`
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `GET` | `/connect` | None | Dispatch: bash/ps1/conf/HTML/QR by User-Agent |
-| `GET` | `/connect?qrcode` | None | SVG QR code |
+| `GET` | `/connect?qrcode` | None | SVG QR code (direct mode only) |
 | `POST` | `/register` | KeyOrLocal | Register peer, return config |
 | `POST` | `/request` | Rate-limited | Submit approval request |
 | `GET` | `/request/{id}` | None | Poll status: pending / approved / rejected |
@@ -331,7 +414,7 @@ Base URL: `http://IP:58880`
 
 Auth explained:
 - `LocalOnly` = accessible only from `127.0.0.1` (server local)
-- `KeyOrLocal` = localhost bypass, or remote with `Authorization: Bearer <KEY>` / `?key=<KEY>`
+- `KeyOrLocal` = localhost bypass, or remote with `Authorization: Bearer <KEY>`
 
 ---
 
@@ -340,6 +423,9 @@ Auth explained:
 ```bash
 cd ~/WG-manager && git pull
 sudo bash server/setup-server.sh   # Y to reuse config, auto-rebuilds if source changed
+
+# Optional: rebuild enhanced TUI
+cd wg-tui && bash install.sh
 ```
 
 Existing WireGuard connections are **not interrupted** during updates.
@@ -348,11 +434,21 @@ Existing WireGuard connections are **not interrupted** during updates.
 
 ## Building
 
+### Go Daemon + Legacy TUI
+
 ```bash
 make build      # Daemon → bin/wg-mgmt-daemon
-make build-tui  # TUI → bin/wg-mgmt-tui
+make build-tui  # Legacy TUI → bin/wg-tui-legacy
 make build-all  # Both
 make vet        # go vet
+```
+
+### Enhanced TUI (Rust)
+
+```bash
+cd wg-tui
+cargo build --release    # → target/release/wg-tui(.exe)
+bash build-linux.sh      # Cross-compile for Linux (musl static binary)
 ```
 
 ---
@@ -368,8 +464,10 @@ make vet        # go vet
 | "Binary is up to date" but changes missing | `sudo rm -f /usr/local/bin/wg-mgmt-daemon` then re-run setup-server.sh |
 | Daemon fails to start | `journalctl -u wg-mgmt -n 20` |
 | WG interface missing | `modprobe wireguard && ip link add wg0 type wireguard` |
-| Pipe mode no prompt | Append `?name=MYNAME` to URL, or download script first: `curl -o t.sh ...; sudo bash t.sh` |
-| Config port corrupted | `sed -i 's/MGMT_LISTEN=.*/MGMT_LISTEN=0.0.0.0:58880/' config.env; systemctl restart wg-mgmt` |
+| `?name=` not working | Daemon binary may be stale — run `sudo bash server/setup-server.sh` |
+| Audit log empty | Logrotate rotated the file — run `sudo systemctl kill -s HUP wg-mgmt` |
+| Rust not found (wg-tui) | Install Rust: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
+| `wg-tui` command not found | Both TUI variants share `/usr/local/bin/wg-tui` launcher — re-run setup |
 
 ---
 
