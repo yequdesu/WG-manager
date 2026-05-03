@@ -1,0 +1,12 @@
+#!/bin/bash
+# WG-TUI Launcher — dispatches to enhanced (Ratatui) or legacy (Go) TUI
+# Always named /usr/local/bin/wg-tui
+
+if [ "${1:-}" = "--legacy" ]; then
+    shift
+    exec wg-tui-legacy "$@"
+elif command -v wg-tui-ratatui &>/dev/null; then
+    exec wg-tui-ratatui "$@"
+else
+    exec wg-tui-legacy "$@"
+fi

@@ -1,7 +1,7 @@
 .PHONY: build build-tui build-all clean run dev help
 
 BINARY_NAME := wg-mgmt-daemon
-TUI_NAME    := wg-mgmt-tui
+TUI_NAME    := wg-tui-legacy
 OUTPUT_DIR  := bin
 CMD_DIR     := ./cmd/mgmt-daemon
 TUI_DIR     := ./cmd/mgmt-tui

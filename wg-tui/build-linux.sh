@@ -15,7 +15,7 @@ cd "$SCRIPT_DIR"
 
 TARGET="x86_64-unknown-linux-musl"
 BIN="target/${TARGET}/release/wg-tui"
-OUT="${SCRIPT_DIR}/wg-tui-linux"
+OUT="${SCRIPT_DIR}/wg-tui-ratatui-linux"
 
 echo "=== wg-tui cross-compiler ==="
 echo "Target: ${TARGET}"

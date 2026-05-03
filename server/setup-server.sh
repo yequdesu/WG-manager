@@ -477,8 +477,8 @@ deploy_daemon() {
         log "Binary is up to date (commit $installed_hash)"
     fi
 
-    # ── 2b. Build and deploy TUI ──
-    local tui_dst="/usr/local/bin/wg-mgmt-tui"
+    # ── 2b. Build and deploy legacy TUI ──
+    local tui_dst="/usr/local/bin/wg-tui-legacy"
     local tui_src_hash=""
     local tui_installed_hash=""
 
@@ -492,18 +492,27 @@ deploy_daemon() {
 
     if [[ -n "$tui_src_hash" ]] && { [[ -z "$tui_installed_hash" ]] || [[ "$tui_src_hash" != "$tui_installed_hash" ]]; }; then
         cd "$PROJECT_DIR"
-        log "Rebuilding TUI..."
+        log "Rebuilding legacy TUI..."
         go build -ldflags="-s -w" -o "$tui_dst" ./cmd/mgmt-tui/
         chmod +x "$tui_dst"
         echo "$tui_src_hash" > "${tui_dst}.version"
-        log "TUI build complete"
+        log "Legacy TUI build complete"
     elif $needs_rebuild && [[ ! -f "$tui_dst" ]]; then
         cd "$PROJECT_DIR"
-        log "Building TUI (first time)..."
+        log "Building legacy TUI (first time)..."
         go build -ldflags="-s -w" -o "$tui_dst" ./cmd/mgmt-tui/
         chmod +x "$tui_dst"
         [[ -n "$tui_src_hash" ]] && echo "$tui_src_hash" > "${tui_dst}.version"
-        log "TUI build complete"
+        log "Legacy TUI build complete"
+    fi
+
+    # ── 2c. Install TUI launcher wrapper ──
+    local wrapper_dst="/usr/local/bin/wg-tui"
+    local wrapper_src="$PROJECT_DIR/server/wg-tui.wrapper"
+    if [[ -f "$wrapper_src" ]]; then
+        cp "$wrapper_src" "$wrapper_dst"
+        chmod +x "$wrapper_dst"
+        log "TUI launcher installed: $wrapper_dst"
     fi
 
     # ── 3. Write / update systemd unit ──
@@ -582,7 +591,8 @@ print_summary() {
     echo ""
 
     echo -e "  ${BOLD}${CYAN}Server Management${NC}"
-    echo -e "    ${BOLD}wg-mgmt-tui${NC}                              Interactive dashboard"
+    echo -e "    ${BOLD}wg-tui${NC}                                 Interactive dashboard (enhanced or legacy)"
+    echo -e "    ${BOLD}wg-tui --legacy${NC}                        Legacy TUI only"
     echo -e "    ${BOLD}bash scripts/health-check.sh${NC}            System health check"
     echo -e "    ${BOLD}bash scripts/list-peers.sh${NC}             View all peers"
     echo -e "    ${BOLD}tail -f /var/log/wg-mgmt/audit.log${NC}     Live audit trail"

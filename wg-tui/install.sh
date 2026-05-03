@@ -142,29 +142,40 @@ if [[ ! -f "$BIN" ]]; then
     exit 1
 fi
 
-# ── 4. Install ──────────────────────────────────────
-DEST="${HOME}/.local/bin/wg-tui"
-if [[ -w /usr/local/bin ]]; then
-    DEST="/usr/local/bin/wg-tui"
+# ── 4. Install enhanced TUI ────────────────────────
+DEST="/usr/local/bin/wg-tui-ratatui"
+if [[ ! -w /usr/local/bin ]]; then
+    DEST="${HOME}/.local/bin/wg-tui-ratatui"
 fi
 mkdir -p "$(dirname "$DEST")"
 cp "$BIN" "$DEST"
 chmod +x "$DEST"
 
+# ── 4b. Install launcher wrapper ────────────────────
+WRAPPER="/usr/local/bin/wg-tui"
+if [[ ! -w /usr/local/bin ]]; then
+    WRAPPER="${HOME}/.local/bin/wg-tui"
+fi
+cat > "$WRAPPER" << 'WRAPPER_EOF'
+#!/bin/bash
+if [ "${1:-}" = "--legacy" ]; then
+    shift
+    exec wg-tui-legacy "$@"
+elif command -v wg-tui-ratatui &>/dev/null; then
+    exec wg-tui-ratatui "$@"
+else
+    exec wg-tui-legacy "$@"
+fi
+WRAPPER_EOF
+chmod +x "$WRAPPER"
+
 # ── 5. Verify ───────────────────────────────────────
 echo ""
 log "Installed to: ${BOLD}$DEST${NC}"
+log "Launcher: ${BOLD}$WRAPPER${NC}"
 echo ""
 info "Usage:"
-echo "  ${BOLD}wg-tui${NC}"
+echo "  ${BOLD}wg-tui${NC}              Enhanced Ratatui TUI"
+echo "  ${BOLD}wg-tui --legacy${NC}     Original Go TUI"
 echo ""
 info "Make sure the WG-Manager daemon is running on localhost."
-echo "  The TUI reads config from ./config.env or ~/WG-manager/config.env"
-echo ""
-
-if command -v wg-tui &>/dev/null; then
-    log "Ready: wg-tui is in your PATH"
-else
-    warn "Add ${DEST%/*} to your PATH:"
-    echo "  export PATH=\"${DEST%/*}:\$PATH\""
-fi
