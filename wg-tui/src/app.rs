@@ -43,6 +43,7 @@ pub struct App {
     pub window: WindowState,
     pub confirm_delete: bool,
     pub confirm_timer: u16,
+    pub pending_text_asteroid: Option<String>,
 
     pub api: ApiClient,
     #[allow(dead_code)]
@@ -93,6 +94,7 @@ impl App {
             window: WindowState::load(),
             confirm_delete: false,
             confirm_timer: 0,
+            pending_text_asteroid: None,
 
             api,
             config,
@@ -277,6 +279,10 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     fill_area(frame, term, DARK_THEME.bg_outer);
 
     let win = app.window.compute(term);
+    if let Some(ref text) = app.pending_text_asteroid.take() {
+        let text_copy = text.clone();
+        app.particles.spawn_text_asteroid(term, &text_copy);
+    }
     app.particles.update(term, win, app.tick_count);
     frame.render_widget(&app.particles, term);
 

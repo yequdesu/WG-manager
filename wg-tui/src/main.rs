@@ -173,6 +173,13 @@ fn run(
                             app.delete_peer(&name);
                             app.confirm_delete = false;
                             app.confirm_timer = 0;
+                        } else if app.tab == Tab::Dashboard {
+                            app.pending_text_asteroid = Some("YeQuDesu".into());
+                        }
+                    }
+                    KeyCode::Char('c') | KeyCode::Char('C') => {
+                        if app.tab == Tab::Dashboard {
+                            app.pending_text_asteroid = Some("CyDlen".into());
                         }
                     }
                     KeyCode::Char('a') | KeyCode::Char('A') => {

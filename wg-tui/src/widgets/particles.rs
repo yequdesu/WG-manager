@@ -6,8 +6,8 @@ use ratatui::style::Color;
 use ratatui::widgets::Widget;
 use rand::Rng;
 
-const MAX_PARTICLES: usize = 120;
-const MIN_PARTICLES: usize = 60;
+const MAX_PARTICLES: usize = 360;
+const MIN_PARTICLES: usize = 180;
 const MAX_ASTEROIDS: usize = 3;
 const FRICTION: f32 = 0.985;
 const STOP_THRESHOLD: f32 = 0.05;
@@ -30,6 +30,7 @@ struct Asteroid {
     vy: f32,
     radius: usize,
     cells: Vec<Vec<Option<char>>>,
+    text: Option<String>,
 }
 
 pub struct ParticleSystem {
@@ -220,7 +221,26 @@ impl ParticleSystem {
             vx,
             vy,
             ch: P_CHARS[self.rng.random_range(0..P_CHARS.len())],
-            base_alpha: self.rng.random_range(0.25..0.55),
+            base_alpha: self.rng.random_range(0.10..0.70),
+        });
+    }
+
+    pub fn spawn_text_asteroid(&mut self, area: Rect, text: &str) {
+        let edge: u8 = self.rng.random_range(0..4);
+        let speed = self.rng.random_range(0.8..1.5);
+        let text_len = text.chars().count().max(3);
+        let radius = text_len.max(5);
+        let (ax, ay, avx, avy): (f32, f32, f32, f32) = match edge {
+            0 => (self.rng.random_range(0.0..area.width as f32), -(radius as f32) * 2.0, 0.0, speed),
+            1 => (self.rng.random_range(0.0..area.width as f32), area.height as f32 + (radius as f32) * 2.0, 0.0, -speed),
+            2 => (-(radius as f32) * 2.0, self.rng.random_range(0.0..area.height as f32), speed, 0.0),
+            _ => (area.width as f32 + (radius as f32) * 2.0, self.rng.random_range(0.0..area.height as f32), -speed, 0.0),
+        };
+
+        let cells = Self::build_asteroid_cells(radius);
+        self.asteroids.push(Asteroid {
+            x: ax, y: ay, vx: avx, vy: avy, radius, cells,
+            text: Some(text.to_string()),
         });
     }
 
@@ -236,7 +256,7 @@ impl ParticleSystem {
         };
 
         let cells = Self::build_asteroid_cells(radius);
-        self.asteroids.push(Asteroid { x: ax, y: ay, vx: avx, vy: avy, radius, cells });
+        self.asteroids.push(Asteroid { x: ax, y: ay, vx: avx, vy: avy, radius, cells, text: None });
     }
 
     fn build_asteroid_cells(radius: usize) -> Vec<Vec<Option<char>>> {
@@ -346,10 +366,25 @@ fn render_asteroid(buf: &mut Buffer, area: Rect, a: &Asteroid) {
             }
         }
     }
+
+    if let Some(ref text) = a.text {
+        let text_x = a.x as i32 - (text.chars().count() as i32 / 2);
+        let text_y = a.y as i32;
+        for (i, ch) in text.chars().enumerate() {
+            let gx = text_x + i as i32;
+            if gx < 0 || gx >= area.width as i32 || text_y < 0 || text_y >= area.height as i32 {
+                continue;
+            }
+            if let Some(cell) = buf.cell_mut((area.x + gx as u16, area.y + text_y as u16)) {
+                cell.set_char(ch);
+                cell.set_fg(Color::Rgb(255, 255, 255));
+            }
+        }
+    }
 }
 
 fn particle_color(alpha: f32) -> Color {
-    let a = (alpha * 0.55).clamp(0.10, 0.55);
+    let a = (alpha * 0.70).clamp(0.08, 0.70);
     Color::Rgb(
         (210.0 * a) as u8,
         (224.0 * a) as u8,
