@@ -553,16 +553,19 @@ pub fn read_audit_log_file(path: &str) -> Vec<String> {
 
 fn find_audit_log_path() -> String {
     let paths = [
+        "/var/log/wg-mgmt/wg-mgmt.log".to_string(),
         "/var/log/wg-mgmt/audit.log".to_string(),
         format!(
             "{}/WG-manager/audit.log",
             std::env::var("HOME").unwrap_or_else(|_| "/tmp".into())
         ),
     ];
+
     for p in &paths {
         if PathBuf::from(p).exists() {
             return p.clone();
         }
     }
-    String::new()
+    // Return new path as default even if it doesn't exist yet
+    paths[0].clone()
 }

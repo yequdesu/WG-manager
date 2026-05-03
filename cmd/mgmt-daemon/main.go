@@ -53,7 +53,7 @@ func loadConfig(path string) (*AppConfig, error) {
 		PeerKeepalive:        25,
 		PeersDBPath:          "./server/peers.json",
 		WGConfPath:           "/etc/wireguard/wg0.conf",
-		AuditLogPath:         "/var/log/wg-mgmt/audit.log",
+		AuditLogPath:         "/var/log/wg-mgmt/wg-mgmt.log",
 	}
 
 	lines := strings.Split(string(data), "\n")
@@ -348,6 +348,72 @@ func main() {
 
 	srv, handler := api.NewServer(ctx, apiCfg, state, wgMgr)
 
+	// ── WireGuard state poll goroutine ──
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		var prevStatus *wg.InterfaceStatus
+		// Prime the initial state after a short delay
+		time.Sleep(2 * time.Second)
+		if s, err := wgMgr.Show(appCfg.WGInterface); err == nil {
+			prevStatus = s
+		}
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				cur, err := wgMgr.Show(appCfg.WGInterface)
+				if err != nil || prevStatus == nil {
+					prevStatus = cur
+					continue
+				}
+				// Map previous peers by public key
+				prevMap := make(map[string]wg.PeerStatus)
+				for _, p := range prevStatus.Peers {
+					prevMap[p.PublicKey] = p
+				}
+				curMap := make(map[string]wg.PeerStatus)
+				for _, p := range cur.Peers {
+					curMap[p.PublicKey] = p
+				}
+				ep := appCfg.ServerPublicIP + ":" + strconv.Itoa(appCfg.WGPort)
+				for pk, cp := range curMap {
+					if pp, ok := prevMap[pk]; ok {
+						// Handshake occurred
+						if pp.LatestHandshake == "0" && cp.LatestHandshake != "0" {
+							audit.Write("WG", "peer_connected",
+								map[string]string{"peer": pk[:12], "endpoint": cp.Endpoint})
+						} else if pp.LatestHandshake != cp.LatestHandshake && cp.LatestHandshake != "0" {
+							audit.Write("WG", "handshake_complete",
+								map[string]string{"peer": pk[:12], "endpoint": cp.Endpoint})
+						}
+						// Endpoint changed
+						if pp.Endpoint != cp.Endpoint && cp.Endpoint != "(none)" && pp.Endpoint != "(none)" {
+							audit.Write("WG", "endpoint_changed",
+								map[string]string{"peer": pk[:12], "old": pp.Endpoint, "new": cp.Endpoint})
+						}
+						// Transfer threshold (log every ~1MB change)
+						if rxDiff(cp.TransferRx, pp.TransferRx) > 1_000_000 || txDiff(cp.TransferTx, pp.TransferTx) > 1_000_000 {
+							audit.Write("WG", "transfer_update",
+								map[string]string{"peer": pk[:12], "endpoint": ep})
+						}
+					} else {
+						audit.Write("WG", "peer_added",
+							map[string]string{"peer": pk[:12], "endpoint": cp.Endpoint})
+					}
+				}
+				for pk := range prevMap {
+					if _, ok := curMap[pk]; !ok {
+						audit.Write("WG", "peer_removed",
+							map[string]string{"peer": pk[:12]})
+					}
+				}
+				prevStatus = cur
+			}
+		}
+	}()
+
 	idleConnsClosed := make(chan struct{})
 	go func() {
 		sigCh := make(chan os.Signal, 1)
@@ -402,4 +468,23 @@ func main() {
 
 	<-idleConnsClosed
 	log.Println("Daemon stopped")
+}
+
+func rxDiff(cur, prev string) int64 {
+	return parseInt64(cur) - parseInt64(prev)
+}
+
+func txDiff(cur, prev string) int64 {
+	return parseInt64(cur) - parseInt64(prev)
+}
+
+func parseInt64(s string) int64 {
+	if s == "" {
+		return 0
+	}
+	v, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return v
 }

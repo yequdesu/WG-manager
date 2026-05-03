@@ -407,22 +407,25 @@ CONFIGEOF
     chmod 600 "$CONFIG_FILE"
     log "config.env synced"
 
-    # ── Set up audit log ──
+    # ── Set up unified log ──
     local log_dir="/var/log/wg-mgmt"
     mkdir -p "$log_dir"
     chmod 750 "$log_dir"
     cat > /etc/logrotate.d/wg-mgmt << LOGROTATE
-$log_dir/audit.log {
-    daily
-    rotate 30
+$log_dir/wg-mgmt.log {
+    size 100M
+    rotate 10
     missingok
     notifempty
     compress
     delaycompress
     create 0640 root root
+    postrotate
+        systemctl kill -s HUP wg-mgmt 2>/dev/null || true
+    endscript
 }
 LOGROTATE
-    log "Audit log configured: $log_dir/audit.log"
+    log "Unified log configured: $log_dir/wg-mgmt.log"
 }
 
 deploy_daemon() {

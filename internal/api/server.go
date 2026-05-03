@@ -2,8 +2,12 @@ package api
 
 import (
 	"context"
+	"fmt"
+	"net"
 	"net/http"
+	"time"
 
+	"wire-guard-dev/internal/audit"
 	"wire-guard-dev/internal/store"
 	"wire-guard-dev/internal/wg"
 )
@@ -29,10 +33,50 @@ func NewServer(ctx context.Context, cfg *Config, s *store.State, m *wg.Manager) 
 	mux.Handle("/api/v1/peers/", methodGuard(http.MethodDelete, LocalOnly(h.DeletePeer)))
 	mux.Handle("/api/v1/status", methodGuard(http.MethodGet, LocalOnly(h.Status)))
 
+	loggedMux := requestLogger(mux)
+
 	return &http.Server{
 		Addr:    cfg.MgmtListen,
-		Handler: mux,
+		Handler: loggedMux,
 	}, h
+}
+
+func requestLogger(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		lw := &loggingResponseWriter{ResponseWriter: w, statusCode: 200}
+		next.ServeHTTP(lw, r)
+		duration := time.Since(start)
+
+		src := r.RemoteAddr
+		if host, _, err := net.SplitHostPort(src); err == nil {
+			src = host
+		}
+
+		audit.Write("HTTP", "request",
+			map[string]string{
+				"status":   itoa(lw.statusCode),
+				"method":   r.Method,
+				"path":     r.URL.Path,
+				"source":   src,
+				"duration": duration.String(),
+			},
+		)
+	})
+}
+
+type loggingResponseWriter struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (lw *loggingResponseWriter) WriteHeader(code int) {
+	lw.statusCode = code
+	lw.ResponseWriter.WriteHeader(code)
+}
+
+func itoa(n int) string {
+	return fmt.Sprintf("%d", n)
 }
 
 func methodGuard(method string, handler http.Handler) http.Handler {
