@@ -105,7 +105,12 @@ if command -v rustc &>/dev/null && rustc --version &>/dev/null 2>&1; then
 fi
 
 if command -v rustup &>/dev/null && ! $_rust_ok; then
-    log "rustup found but no toolchain installed. Installing stable..."
+    log "rustup found but no toolchain installed."
+    read -p "$(echo -e "${BOLD}  Install stable Rust toolchain? [Y/n]: ${NC}")" ans
+    if [[ "$ans" =~ ^[Nn] ]]; then
+        err "Rust toolchain is required. Exiting."
+        exit 1
+    fi
     if rustup default stable; then
         log "Rust installed: $(rustc --version)"
         _rust_ok=true

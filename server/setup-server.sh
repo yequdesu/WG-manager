@@ -8,6 +8,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 CONFIG_FILE="$PROJECT_DIR/config.env"
 
+export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a
+
 export GOPROXY="${GOPROXY:-https://goproxy.cn,direct}"
 
 RED='\033[0;31m'
@@ -22,6 +25,28 @@ warn()   { echo -e "${YELLOW}[!]${NC} $*"; }
 error()  { echo -e "${RED}[x]${NC} $*"; }
 info()   { echo -e "${CYAN}[i]${NC} $*"; }
 header() { echo -e "\n${BOLD}${CYAN}=== $* ===${NC}\n"; }
+
+# ── Interactive install helper ──
+# Usage: confirm_install "<packages>" "<description>" [required=true|false]
+confirm_install() {
+    local pkg="$1"
+    local desc="$2"
+    local required="${3:-true}"
+
+    read -p "$(echo -e "${BOLD}  Install ${pkg} (${desc})? [Y/n]: ${NC}")" ans
+    if [[ "$ans" =~ ^[Nn] ]]; then
+        if [[ "$required" == "true" ]]; then
+            error "${pkg} is required — cannot continue without it."
+            exit 1
+        fi
+        warn "Skipped ${pkg} — related features may not work."
+        return 1
+    fi
+    log "Installing ${pkg}..."
+    apt-get update -qq
+    apt-get install -y ${pkg}
+    return 0
+}
 
 # ──────────────────────────────────────────────────────
 
@@ -58,16 +83,13 @@ check_wireguard() {
     if command -v wg &>/dev/null; then
         log "WireGuard tools already installed ($(wg --version 2>&1 | head -1))"
     else
-        warn "WireGuard not installed. Installing..."
-        apt-get update -qq
-        apt-get install -y wireguard wireguard-tools
-        log "WireGuard installed successfully"
+        confirm_install "wireguard wireguard-tools" "WireGuard VPN kernel module + tools" "true"
     fi
 
     if command -v qrencode &>/dev/null; then
         log "qrencode available (QR code support)"
     else
-        apt-get install -y qrencode 2>/dev/null || log "qrencode optional (QR codes use fallback text)"
+        confirm_install "qrencode" "QR code generation" "false"
     fi
 }
 
@@ -111,8 +133,7 @@ check_environment() {
         gov=$(go version 2>/dev/null | awk '{print $3}' || echo "unknown")
         log "Go: $gov"
     else
-        warn "Go not installed — daemon cannot be built"
-        warn "  Install: sudo apt install golang-go"
+        confirm_install "golang-go" "Go build tool (required to compile daemon)" "true"
     fi
 
     if command -v python3 &>/dev/null; then
@@ -127,8 +148,7 @@ check_environment() {
     elif command -v python3 &>/dev/null; then
         log "jq: not installed (python3 fallback available)"
     else
-        warn "Neither jq nor python3 available — JSON parsing will use basic shell fallback"
-        warn "  Install jq for best results: sudo apt install jq"
+        confirm_install "jq" "JSON parser (recommended)" "false"
     fi
 
     if command -v curl &>/dev/null; then log "curl: available"; else warn "curl not found"; fi
@@ -344,7 +364,22 @@ WGCONF
             log "WireGuard interface wg0 is up"
         else
             error "Failed to start WireGuard interface wg0"
-            exit 1
+            info "Trying manual interface creation..."
+            modprobe wireguard 2>/dev/null || true
+            ip link add wg0 type wireguard 2>/dev/null && {
+                ip addr add 10.0.0.1/24 dev wg0
+                ip link set wg0 up
+                wg set wg0 private-key /etc/wireguard/wg0_private.key 2>/dev/null || true
+                wg set wg0 listen-port 51820
+                log "WireGuard interface wg0 created manually"
+            } || {
+                error "Manual creation also failed. Diagnostic info:"
+                info "  wg-quick path: $(command -v wg-quick 2>/dev/null || echo 'NOT FOUND')"
+                info "  wg path: $(command -v wg 2>/dev/null || echo 'NOT FOUND')"
+                info "  Journal (last 30 lines):"
+                journalctl -u wg-quick@wg0 --no-pager -n 30 2>/dev/null || true
+                exit 1
+            }
         fi
 
         local api_key
@@ -445,8 +480,7 @@ deploy_daemon() {
     local needs_rebuild=false
 
     if ! command -v go &>/dev/null; then
-        error "Go is not installed. Please install golang-go: sudo apt install golang-go"
-        exit 1
+        confirm_install "golang-go" "Go build tool (required to compile daemon)" "true"
     fi
 
     local src_hash=""
