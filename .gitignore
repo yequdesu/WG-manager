@@ -28,10 +28,7 @@ Thumbs.db
 
 # Project specific
 server/peers.json
-testdata/peers.json
-testdata/server_*
-testdata/wg0.conf
-testdata/test-config.env
+testdata/
 *.log
 
 # Rust / wg-tui
