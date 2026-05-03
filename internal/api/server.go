@@ -48,6 +48,16 @@ func requestLogger(next http.Handler) http.Handler {
 		next.ServeHTTP(lw, r)
 		duration := time.Since(start)
 
+		if r.Method == http.MethodGet && r.URL.Path == "/api/v1/health" {
+			return
+		}
+		if r.Method == http.MethodGet && isLocal(r.RemoteAddr) {
+			return
+		}
+		if r.URL.Path == "/connect" {
+			return
+		}
+
 		src := r.RemoteAddr
 		if host, _, err := net.SplitHostPort(src); err == nil {
 			src = host
@@ -63,6 +73,14 @@ func requestLogger(next http.Handler) http.Handler {
 			},
 		)
 	})
+}
+
+func isLocal(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	return host == "127.0.0.1" || host == "::1"
 }
 
 type loggingResponseWriter struct {
