@@ -73,14 +73,42 @@ impl ParticleSystem {
         }
 
         // ── Particle physics ──
+        let win_l = window.x as f32;
+        let win_r = (window.x + window.width) as f32;
+        let win_t = window.y as f32;
+        let win_b = (window.y + window.height) as f32;
+
         for p in &mut self.particles {
             p.vx *= FRICTION;
             p.vy *= FRICTION;
             p.x += p.vx;
             p.y += p.vy;
 
+            // ── Window edge bounce ──
+            if p.x >= win_l && p.x < win_r && p.y >= win_t && p.y < win_b {
+                let dl = (p.x - win_l).abs();
+                let dr = (win_r - p.x).abs();
+                let dt = (p.y - win_t).abs();
+                let db = (win_b - p.y).abs();
+                let min = dl.min(dr).min(dt).min(db);
+
+                if min == dl {
+                    p.x = win_l - 0.5;
+                    p.vx = -p.vx * 0.6;
+                } else if min == dr {
+                    p.x = win_r + 0.5;
+                    p.vx = -p.vx * 0.6;
+                } else if min == dt {
+                    p.y = win_t - 0.5;
+                    p.vy = -p.vy * 0.6;
+                } else {
+                    p.y = win_b + 0.5;
+                    p.vy = -p.vy * 0.6;
+                }
+            }
+
+            // ── Screen edge bounce ──
             if p.x < 0.0 {
-                p.x = 0.0;
                 p.vx = -p.vx * 0.5;
             }
             if p.x >= area.width as f32 - 0.01 {
