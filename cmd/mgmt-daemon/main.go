@@ -35,6 +35,7 @@ type AppConfig struct {
 	WGConfPath       string
 	AuditLogPath     string
 	CleanPeersOnExit bool
+	BootstrapOwnerPassword string
 }
 
 func loadConfig(path string) (*AppConfig, error) {
@@ -104,6 +105,8 @@ func loadConfig(path string) (*AppConfig, error) {
 			cfg.AuditLogPath = val
 		case "CLEAN_PEERS_ON_EXIT":
 			cfg.CleanPeersOnExit = strings.EqualFold(val, "true") || val == "1"
+		case "BOOTSTRAP_OWNER_PASSWORD":
+			cfg.BootstrapOwnerPassword = val
 		}
 	}
 
@@ -259,7 +262,7 @@ func main() {
 		log.Fatal("SERVER_PUBLIC_IP is empty — set it in config.env")
 	}
 	if appCfg.APIKey == "" {
-		log.Fatal("MGMT_API_KEY is empty — set it in config.env")
+		log.Printf("WARNING: MGMT_API_KEY is empty — set it in config.env (session-auth will be the primary auth)")
 	}
 
 	var crypto *store.Crypto
@@ -279,6 +282,21 @@ func main() {
 		audit.Log("daemon_started", map[string]string{"version": "1.0.0"})
 	}
 	defer audit.Close()
+
+	// Bootstrap owner on first run if password is set and no users exist.
+	if !state.HasUsers() && appCfg.BootstrapOwnerPassword != "" {
+		ownerHash, err := store.HashPassword(appCfg.BootstrapOwnerPassword)
+		if err != nil {
+			log.Printf("WARNING: failed to hash bootstrap password: %v", err)
+		} else if err := state.BootstrapOwner(ownerHash); err != nil {
+			log.Printf("WARNING: bootstrap owner creation: %v", err)
+		} else {
+			log.Printf("Bootstrap owner 'admin' created")
+			if err := state.Save(); err != nil {
+				log.Printf("WARNING: failed to save bootstrap owner: %v", err)
+			}
+		}
+	}
 
 	wgMgr := wg.NewManager()
 

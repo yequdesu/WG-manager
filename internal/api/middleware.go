@@ -2,11 +2,15 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"net"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
+
+	"wire-guard-dev/internal/store"
 )
 
 type rateEntry struct {
@@ -116,6 +120,68 @@ func KeyOrLocal(apiKey string) func(http.HandlerFunc) http.HandlerFunc {
 				return
 			}
 			next(w, r)
+		}
+	}
+}
+
+// contextKey is an unexported type for context keys to avoid collisions.
+type contextKey string
+
+const (
+	ContextKeyUser contextKey = "auth_user"
+	ContextKeyRole contextKey = "auth_role"
+)
+
+// RequireRole returns middleware that checks for a valid session token or
+// falls back to the MGMT_API_KEY. The caller specifies which roles are allowed.
+func RequireRole(st *store.State, apiKey string, roles ...store.Role) func(http.HandlerFunc) http.HandlerFunc {
+	return func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			token := getTokenFromRequest(r)
+
+			// Try session token first.
+			if token != "" {
+				sum := sha256.Sum256([]byte(token))
+				tokenHash := hex.EncodeToString(sum[:])
+
+				if sess, ok := st.GetSessionByTokenHash(tokenHash); ok {
+					expiresAt, err := time.Parse(time.RFC3339, sess.ExpiresAt)
+					if err == nil && time.Now().UTC().Before(expiresAt) {
+						// Check against required roles.
+						allowed := false
+						for _, role := range roles {
+							if sess.Role == role {
+								allowed = true
+								break
+							}
+						}
+						if allowed {
+							ctx := context.WithValue(r.Context(), ContextKeyUser, sess.UserName)
+							ctx = context.WithValue(ctx, ContextKeyRole, sess.Role)
+							next(w, r.WithContext(ctx))
+							return
+						}
+					}
+				}
+			}
+
+			// Fall back to API key check.
+			if apiKey != "" {
+				auth := r.Header.Get("Authorization")
+				if auth != "" {
+					parts := strings.SplitN(auth, " ", 2)
+					if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") && parts[1] == apiKey {
+						ctx := context.WithValue(r.Context(), ContextKeyUser, "apikey")
+						ctx = context.WithValue(ctx, ContextKeyRole, "apikey")
+						next(w, r.WithContext(ctx))
+						return
+					}
+				}
+			}
+
+			writeJSON(w, http.StatusUnauthorized, map[string]string{
+				"error": "unauthorized: valid session or API key required",
+			})
 		}
 	}
 }

@@ -2,6 +2,8 @@ package api
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -812,6 +814,87 @@ func auditFields(pairs ...string) map[string]string {
 		m[pairs[i]] = pairs[i+1]
 	}
 	return m
+}
+
+func getTokenFromRequest(r *http.Request) string {
+	auth := r.Header.Get("Authorization")
+	if strings.HasPrefix(auth, "Bearer ") {
+		return strings.TrimPrefix(auth, "Bearer ")
+	}
+	return ""
+}
+
+func tokenHashFromBearer(r *http.Request) (string, bool) {
+	token := getTokenFromRequest(r)
+	if token == "" {
+		return "", false
+	}
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:]), true
+}
+
+func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	var req struct {
+		Name     string `json:"name"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name == "" || req.Password == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name and password are required"})
+		return
+	}
+
+	user, ok := h.store.AuthenticateUser(req.Name, req.Password)
+	if !ok {
+		src := remoteIP(r)
+		audit.Log("login_failed", auditFields("name", req.Name, "source", src, "reason", "invalid_credentials"))
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid credentials"})
+		return
+	}
+
+	token, err := h.store.CreateSession(user.Name, user.Role, 24*time.Hour)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create session"})
+		return
+	}
+
+	src := remoteIP(r)
+	audit.Log("login_success", auditFields("name", user.Name, "source", src))
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"token": token,
+		"role":  string(user.Role),
+	})
+}
+
+func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
+	tokenHash, ok := tokenHashFromBearer(r)
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing or invalid Authorization header"})
+		return
+	}
+
+	if err := h.store.DeleteSession(tokenHash); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "session not found"})
+		return
+	}
+
+	src := remoteIP(r)
+	audit.Log("logout", auditFields("source", src))
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+	})
 }
 
 func (h *Handler) ListPeers(w http.ResponseWriter, r *http.Request) {

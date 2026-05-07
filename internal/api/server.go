@@ -33,6 +33,9 @@ func NewServer(ctx context.Context, cfg *Config, s *store.State, m *wg.Manager) 
 	mux.Handle("/api/v1/peers/", methodGuard(http.MethodDelete, LocalOnly(h.DeletePeer)))
 	mux.Handle("/api/v1/status", methodGuard(http.MethodGet, LocalOnly(h.Status)))
 
+	mux.HandleFunc("/api/v1/login", rateLimit(h.Login))
+	mux.HandleFunc("/api/v1/logout", h.Logout)
+
 	loggedMux := requestLogger(mux)
 
 	return &http.Server{
