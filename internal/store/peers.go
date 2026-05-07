@@ -49,6 +49,8 @@ type State struct {
 	server   ServerConfig
 	Peers    map[string]Peer    `json:"peers"`
 	Requests map[string]Request `json:"requests,omitempty"`
+	Users    map[string]User    `json:"users,omitempty"`
+	Sessions map[string]Session `json:"sessions,omitempty"`
 
 	mu     sync.RWMutex `json:"-"`
 	path   string       `json:"-"`
@@ -59,6 +61,8 @@ func NewState(path string, crypto *Crypto) *State {
 	return &State{
 		Peers:    make(map[string]Peer),
 		Requests: make(map[string]Request),
+		Users:    make(map[string]User),
+		Sessions: make(map[string]Session),
 		path:     path,
 		crypto:   crypto,
 	}
@@ -66,22 +70,28 @@ func NewState(path string, crypto *Crypto) *State {
 
 func (s *State) MarshalJSON() ([]byte, error) {
 	type Alias struct {
-		Server   ServerConfig      `json:"server"`
-		Peers    map[string]Peer   `json:"peers"`
+		Server   ServerConfig       `json:"server"`
+		Peers    map[string]Peer    `json:"peers"`
 		Requests map[string]Request `json:"requests,omitempty"`
+		Users    map[string]User    `json:"users,omitempty"`
+		Sessions map[string]Session `json:"sessions,omitempty"`
 	}
 	return json.Marshal(&Alias{
 		Server:   s.server,
 		Peers:    s.Peers,
 		Requests: s.Requests,
+		Users:    s.Users,
+		Sessions: s.Sessions,
 	})
 }
 
 func (s *State) UnmarshalJSON(data []byte) error {
 	type Alias struct {
-		Server   ServerConfig      `json:"server"`
-		Peers    map[string]Peer   `json:"peers"`
+		Server   ServerConfig       `json:"server"`
+		Peers    map[string]Peer    `json:"peers"`
 		Requests map[string]Request `json:"requests,omitempty"`
+		Users    map[string]User    `json:"users,omitempty"`
+		Sessions map[string]Session `json:"sessions,omitempty"`
 	}
 	var alias Alias
 	if err := json.Unmarshal(data, &alias); err != nil {
@@ -90,11 +100,19 @@ func (s *State) UnmarshalJSON(data []byte) error {
 	s.server = alias.Server
 	s.Peers = alias.Peers
 	s.Requests = alias.Requests
+	s.Users = alias.Users
+	s.Sessions = alias.Sessions
 	if s.Peers == nil {
 		s.Peers = make(map[string]Peer)
 	}
 	if s.Requests == nil {
 		s.Requests = make(map[string]Request)
+	}
+	if s.Users == nil {
+		s.Users = make(map[string]User)
+	}
+	if s.Sessions == nil {
+		s.Sessions = make(map[string]Session)
 	}
 	return nil
 }
@@ -362,6 +380,8 @@ func Load(path string, crypto *Crypto) (*State, error) {
 	s := &State{
 		Peers:    make(map[string]Peer),
 		Requests: make(map[string]Request),
+		Users:    make(map[string]User),
+		Sessions: make(map[string]Session),
 		path:     path,
 		crypto:   crypto,
 	}
@@ -431,6 +451,12 @@ unmarshal:
 	}
 	if s.Requests == nil {
 		s.Requests = make(map[string]Request)
+	}
+	if s.Users == nil {
+		s.Users = make(map[string]User)
+	}
+	if s.Sessions == nil {
+		s.Sessions = make(map[string]Session)
 	}
 
 	return s, nil
@@ -527,6 +553,14 @@ func (s *State) Replace(other *State) {
 	s.Requests = make(map[string]Request)
 	for k, v := range other.Requests {
 		s.Requests[k] = v
+	}
+	s.Users = make(map[string]User)
+	for k, v := range other.Users {
+		s.Users[k] = v
+	}
+	s.Sessions = make(map[string]Session)
+	for k, v := range other.Sessions {
+		s.Sessions[k] = v
 	}
 }
 
