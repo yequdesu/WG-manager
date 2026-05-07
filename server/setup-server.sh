@@ -267,7 +267,7 @@ collect_info() {
     info "  Public IP:     $SERVER_PUBLIC_IP"
     info "  WG Port:       $WG_PORT"
     info "  VPN Subnet:    $WG_SUBNET"
-    info "  Management:    0.0.0.0:$MGMT_PORT"
+	info "  Management:    127.0.0.1:$MGMT_PORT"
     info "  Default DNS:   $DEFAULT_DNS"
     echo ""
 
@@ -416,11 +416,19 @@ sync_config_env() {
     if [[ -f "$CONFIG_FILE" ]]; then
         api_key=$(grep MGMT_API_KEY "$CONFIG_FILE" 2>/dev/null | cut -d= -f2 || echo "")
     fi
-    if [[ -z "$api_key" ]]; then
-        api_key=$(openssl rand -hex 32 2>/dev/null || python3 -c "import secrets; print(secrets.token_hex(32))")
-    fi
+	if [[ -z "$api_key" ]]; then
+		api_key=$(openssl rand -hex 32 2>/dev/null || python3 -c "import secrets; print(secrets.token_hex(32))")
+	fi
 
-    local mgmt_listen="0.0.0.0:$MGMT_PORT"
+	local owner_pw
+	if [[ -f "$CONFIG_FILE" ]]; then
+		owner_pw=$(grep BOOTSTRAP_OWNER_PASSWORD "$CONFIG_FILE" 2>/dev/null | cut -d= -f2 || echo "")
+	fi
+	if [[ -z "$owner_pw" ]]; then
+		owner_pw=$(openssl rand -hex 16 2>/dev/null || python3 -c "import secrets; print(secrets.token_hex(16))")
+	fi
+
+	local mgmt_listen="127.0.0.1:$MGMT_PORT"
     local server_address="${WG_SUBNET%.*}.1/24"
 
     cat > "$CONFIG_FILE" << CONFIGEOF
@@ -432,6 +440,7 @@ WG_SERVER_IP=$server_address
 SERVER_PUBLIC_IP=$SERVER_PUBLIC_IP
 MGMT_LISTEN=$mgmt_listen
 MGMT_API_KEY=$api_key
+BOOTSTRAP_OWNER_PASSWORD=$owner_pw
 DEFAULT_DNS=$DEFAULT_DNS
 PEER_KEEPALIVE=25
 PEERS_DB_PATH=$PROJECT_DIR/server/peers.json
@@ -635,7 +644,7 @@ print_summary() {
     echo ""
 
     echo -e "    ${BOLD}Mobile QR${NC} (generate on server)"
-    echo -e "      curl -s \"http://localhost:${mgmt_port}/connect?qrcode&token=TOKEN&name=phone1\" -o phone1.svg"
+    echo -e "      curl -s \"http://localhost:${mgmt_port}/api/v1/invites/qrcode?token=TOKEN&name=phone1\" -o phone1.svg"
     echo -e "      Send phone1.svg to device -> WireGuard App -> Scan from QR code"
     echo ""
 
