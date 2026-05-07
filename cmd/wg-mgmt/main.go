@@ -2,12 +2,13 @@ package main
 
 import (
 	"bufio"
-	"errors"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -262,7 +263,7 @@ func cmdPeerDelete(c *cli.Client, args []string) error {
 func runInvite(c *cli.Client, args []string) error {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "Usage: wg-mgmt invite <subcommand>")
-		fmt.Fprintln(os.Stderr, "Subcommands: create, list, revoke, delete, qrcode")
+		fmt.Fprintln(os.Stderr, "Subcommands: create, list, revoke, delete, force-delete, link, qrcode")
 		fmt.Fprintln(os.Stderr, "Try: wg-mgmt invite create --help")
 		return nil
 	}
@@ -278,6 +279,10 @@ func runInvite(c *cli.Client, args []string) error {
 		return cmdInviteRevoke(c, subArgs)
 	case "delete":
 		return cmdInviteDelete(c, subArgs)
+	case "force-delete":
+		return cmdInviteForceDelete(c, subArgs)
+	case "link":
+		return cmdInviteLink(c, subArgs)
 	case "qrcode":
 		return cmdInviteQRCode(c, subArgs)
 	default:
@@ -293,6 +298,7 @@ type inviteCreateResponse struct {
 	Token        string `json:"token"`
 	ExpiresAt    string `json:"expires_at"`
 	BootstrapURL string `json:"bootstrap_url"`
+	Command      string `json:"command,omitempty"`
 	Message      string `json:"message"`
 }
 
@@ -404,7 +410,11 @@ func cmdInviteCreate(c *cli.Client, args []string) error {
 	fmt.Printf("  %s\n", resp.BootstrapURL)
 	fmt.Println()
 	fmt.Println("Copy-and-paste command:")
-	fmt.Printf("  curl -sSf \"%s\" | sudo bash\n", resp.BootstrapURL)
+	if resp.Command != "" {
+		fmt.Printf("  %s\n", resp.Command)
+	} else {
+		fmt.Printf("  curl -sSf \"%s\" | sudo bash\n", resp.BootstrapURL)
+	}
 	fmt.Println()
 	fmt.Printf("%s\n", resp.Message)
 	return nil
@@ -519,6 +529,105 @@ func cmdInviteDelete(c *cli.Client, args []string) error {
 	var resp inviteActionResponse
 	if err := c.DeleteJSON(path, &resp); err != nil {
 		return fmt.Errorf("delete invite: %w", err)
+	}
+
+	fmt.Fprintln(os.Stdout, resp.Message)
+	return nil
+}
+
+type inviteLinkResponse struct {
+	InviteID     string `json:"invite_id"`
+	Status       string `json:"status"`
+	BootstrapURL string `json:"bootstrap_url"`
+	Command      string `json:"command,omitempty"`
+	Inspect      string `json:"inspect,omitempty"`
+	Note         string `json:"note,omitempty"`
+}
+
+// ── invite link ────────────────────────────────────────────────────────
+
+func cmdInviteLink(c *cli.Client, args []string) error {
+	fs := flag.NewFlagSet("link", flag.ExitOnError)
+	id := fs.String("id", "", "invite ID or raw token")
+	name := fs.String("name", "my-device", "device name for the bootstrap URL")
+	format := fs.String("format", "human", "output format (human|json)")
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *id == "" {
+		return fmt.Errorf("--id (invite ID or raw token) is required")
+	}
+
+	if *format != "human" && *format != "json" {
+		return fmt.Errorf("unsupported format %q", *format)
+	}
+
+	path := fmt.Sprintf("/api/v1/invites/%s/link?name=%s", url.PathEscape(*id), url.QueryEscape(*name))
+	var resp inviteLinkResponse
+	if err := c.GetJSON(path, &resp); err != nil {
+		return fmt.Errorf("get invite link: %w", err)
+	}
+
+	if *format == "json" {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(resp)
+	}
+
+	if resp.Note != "" {
+		fmt.Println(resp.Note)
+	}
+
+	if resp.BootstrapURL != "" {
+		fmt.Println("Bootstrap URL:")
+		fmt.Printf("  %s\n", resp.BootstrapURL)
+		fmt.Println()
+		fmt.Println("Copy-and-paste command:")
+		if resp.Command != "" {
+			fmt.Printf("  %s\n", resp.Command)
+		} else {
+			fmt.Printf("  curl -sSf \"%s\" | sudo bash\n", resp.BootstrapURL)
+		}
+	}
+
+	if resp.Inspect != "" {
+		fmt.Println()
+		fmt.Println("Inspect before running:")
+		fmt.Printf("  %s\n", resp.Inspect)
+	}
+
+	return nil
+}
+
+// ── invite force-delete ────────────────────────────────────────────────
+
+func cmdInviteForceDelete(c *cli.Client, args []string) error {
+	fs := flag.NewFlagSet("force-delete", flag.ExitOnError)
+	id := fs.String("id", "", "invite ID to permanently delete")
+	confirm := fs.String("confirm", "", "confirmation: must match --id value exactly")
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *id == "" {
+		return fmt.Errorf("--id is required for force-delete")
+	}
+
+	if *confirm == "" {
+		return fmt.Errorf("--confirm is required for force-delete: use --confirm <same-id> to confirm permanent deletion")
+	}
+
+	if *confirm != *id {
+		return fmt.Errorf("confirmation mismatch: --confirm value %q does not match --id %q", *confirm, *id)
+	}
+
+	path := fmt.Sprintf("/api/v1/invites/%s?action=force-delete", url.PathEscape(*id))
+	var resp inviteActionResponse
+	if err := c.DeleteJSON(path, &resp); err != nil {
+		return fmt.Errorf("force-delete invite: %w", err)
 	}
 
 	fmt.Fprintln(os.Stdout, resp.Message)
