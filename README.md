@@ -95,7 +95,7 @@ Three fixed roles: owner, admin, user. No custom roles.
 
 ### 1. Server Setup
 
-**Prerequisites:** Ubuntu/Debian Linux server with Git installed, a domain name pointing to the server (for HTTPS).
+**Prerequisites:** Ubuntu/Debian Linux server with Git installed. A domain name is optional but recommended (enables automatic HTTPS).
 
 ```bash
 git clone git@github.com:yequdesu/WG-manager.git ~/WG-manager
@@ -104,7 +104,7 @@ cd ~/WG-manager
 # Install Go if needed
 sudo apt install -y golang-go
 
-# One-shot setup
+# One-shot setup (installs daemon + CLI + systemd service)
 sudo bash server/setup-server.sh
 ```
 
@@ -113,19 +113,16 @@ The script prompts for:
 | Prompt | Description | Example |
 |--------|-------------|---------|
 | `Server Public IP` | Auto-detected, press Enter to confirm | `118.178.171.166` |
+| `Server Domain (optional)` | Domain for HTTPS; press Enter to skip (uses IP + HTTP) | `vpn.example.com` |
 | `WireGuard Port` | WG listen port | `51820` (Enter for default) |
 | `VPN Subnet` | VPN internal subnet | `10.0.0.0/24` (Enter for default) |
 | `Management API Port` | Daemon HTTP port | `58880` (Enter for default) |
 | `Default Client DNS` | Client DNS | `1.1.1.1,8.8.8.8` (Enter for default) |
 
-After completion, the summary shows the bootstrap owner password and instructions for next steps.
-
-**To upgrade the server later:**
-```bash
-cd ~/WG-manager && git pull
-sudo bash server/setup-server.sh
-# "Use existing configuration? [Y/n]" -> Y + Enter
-```
+After completion:
+- The CLI `wg-mgmt` is installed at `/usr/local/bin/wg-mgmt`
+- The daemon `wg-mgmt-daemon` runs as a systemd service
+- The summary shows the bootstrap owner password and next steps
 
 #### Address Pools
 
@@ -178,14 +175,16 @@ curl -s -X POST http://127.0.0.1:58880/api/v1/invites \
   -d '{}'
 ```
 
-Response includes the invite token and a bootstrap URL:
+Response includes the invite token and a ready-to-use bootstrap URL (scheme and host depend on your server configuration):
 
 ```json
 {
   "token": "inv_abc123...",
-  "url": "https://vpn.example.com/bootstrap?token=inv_abc123..."
+  "url": "https://YOUR_DOMAIN/bootstrap?token=inv_abc123..."
 }
 ```
+
+If you configured a domain, the URL uses `https://YOUR_DOMAIN/`. Without a domain, it falls back to `http://YOUR_SERVER_IP/`.
 
 **Via TUI:**
 Open the TUI dashboard, navigate to the Invites tab, and create a new invite.
@@ -198,8 +197,10 @@ Share the bootstrap URL with the user. The token is one-time use and consumed on
 
 #### Linux / macOS / WSL
 
+Replace `BOOTSTRAP_URL` below with the URL from the invite creation step.
+
 ```bash
-curl -sSf "https://vpn.example.com/bootstrap?token=inv_abc123&name=my-device" | sudo bash
+curl -sSf "BOOTSTRAP_URL&name=my-device" | sudo bash
 ```
 
 The script automatically:
@@ -212,14 +213,16 @@ The script automatically:
 
 **Custom peer name:**
 ```bash
-curl -sSf "https://vpn.example.com/bootstrap?token=inv_abc123&name=my-laptop" | sudo bash
+curl -sSf "BOOTSTRAP_URL&name=my-laptop" | sudo bash
 ```
+
+**WSL note:** On WSL, the script warns that WireGuard should be installed on the Windows host (not inside WSL). Follow the Windows PowerShell or CMD path instead.
 
 #### Windows PowerShell
 
 ```powershell
 # Download the bootstrap script
-Invoke-WebRequest "https://vpn.example.com/bootstrap?token=inv_abc123&name=MYPC" -OutFile join.ps1
+Invoke-WebRequest "BOOTSTRAP_URL&name=MYPC" -OutFile join.ps1
 
 # Run it
 .\join.ps1
@@ -228,7 +231,7 @@ Invoke-WebRequest "https://vpn.example.com/bootstrap?token=inv_abc123&name=MYPC"
 #### Windows CMD
 
 ```cmd
-curl -o wg0.conf "https://vpn.example.com/bootstrap?token=inv_abc123&name=MYPC"
+curl -o wg0.conf "BOOTSTRAP_URL&name=MYPC"
 ```
 
 Then import `wg0.conf` into the WireGuard client.
@@ -308,14 +311,11 @@ bash ~/WG-manager/scripts/list-peers.sh
 
 ## CLI Reference
 
-The `wg-mgmt` CLI runs on the server and talks to the daemon over localhost. It reads `MGMT_LISTEN` and `MGMT_API_KEY` from `config.env` by default.
+The `wg-mgmt` CLI runs on the server and talks to the daemon over localhost. It reads `MGMT_LISTEN` and `MGMT_API_KEY` from `config.env` by default. The setup script installs it automatically at `/usr/local/bin/wg-mgmt`.
 
 ```bash
-# Build the CLI
-make build-cli
-
-./bin/wg-mgmt --help
-# Usage: ./bin/wg-mgmt [--config FILE] <command>
+wg-mgmt --help
+# Usage: wg-mgmt [--config FILE] <command>
 ```
 
 ### Global Flags
@@ -326,14 +326,16 @@ make build-cli
 
 ### Commands
 
-| Command | Description | Status |
-|---------|-------------|--------|
-| `peer` | List, alias, delete peers | Implemented |
-| `invite` | Invite operations | Scaffolded |
-| `user` | User operations | Scaffolded |
-| `status` | Daemon and WireGuard status | Implemented |
-| `auth` | Session authentication | Scaffolded |
-| `me` | Current user info | Implemented |
+| Command | Description |
+|---------|-------------|
+| `peer` | List, alias, delete peers |
+| `invite` | Create, list, revoke, delete invites and generate QR codes |
+| `user` | List, create, delete users |
+| `status` | Daemon and WireGuard status |
+| `auth` | Login and logout (session management) |
+| `me` | Current user info |
+
+---
 
 ### peer list
 
@@ -341,10 +343,10 @@ Lists all peers with their public key, alias, name, IP, online status, and endpo
 
 ```bash
 # Table output (default)
-./bin/wg-mgmt peer list
+wg-mgmt peer list
 
 # JSON output
-./bin/wg-mgmt peer list --format json
+wg-mgmt peer list --format json
 ```
 
 Example table output:
@@ -359,14 +361,14 @@ Example table output:
 
 Sets a friendly alias for a peer, identified by its immutable public key.
 
-```
-./bin/wg-mgmt peer alias --id <public_key> --alias <new_name>
+```bash
+wg-mgmt peer alias --id <public_key> --alias <new_name>
 ```
 
 Example:
 
 ```bash
-./bin/wg-mgmt peer alias --id RoJ7SRMQC7Zu... --alias "John's Laptop"
+wg-mgmt peer alias --id RoJ7SRMQC7Zu... --alias "John's Laptop"
 # Alias updated: "" -> "John's Laptop" (peer: my-lap)
 ```
 
@@ -375,8 +377,155 @@ Example:
 Deletes a peer by its public key. Ambiguous alias-only delete is rejected.
 
 ```bash
-./bin/wg-mgmt peer delete --id RoJ7SRMQC7Zu...
+wg-mgmt peer delete --id RoJ7SRMQC7Zu...
 ```
+
+---
+
+### invite create
+
+Creates a new invite token with optional constraints.
+
+```bash
+wg-mgmt invite create [flags]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--ttl N` | `72` | TTL in hours |
+| `--pool NAME` | - | Address pool name |
+| `--dns SERVERS` | - | Custom DNS servers |
+| `--role ROLE` | - | Target role (`user` or `admin`) |
+| `--max-uses N` | `1` | Maximum redemption count |
+| `--labels K=V,...` | - | Comma-separated key=value labels |
+| `--name-hint TEXT` | - | Display name hint for the invite |
+| `--device-name NAME` | - | Pre-bound device name |
+| `--format FORMAT` | `human` | Output format (`human` or `json`) |
+
+Human output includes the token, expiry, a copyable bootstrap URL, and a ready-to-pipe curl command:
+
+```
+Invite created: inv_abc123...
+Token:       inv_abc123...
+Expires:     2026-05-10T15:00:00Z
+
+Bootstrap URL (share this with the client):
+  https://YOUR_DOMAIN/bootstrap?token=inv_abc123...
+
+Copy-and-paste command:
+  curl -sSf "https://YOUR_DOMAIN/bootstrap?token=inv_abc123..." | sudo bash
+```
+
+### invite list
+
+Lists all invites with their status, hint, issuer, and redemption info.
+
+```bash
+wg-mgmt invite list [--format human|json] [--show-deleted]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--format` | `human` | Output format |
+| `--show-deleted` | `false` | Include soft-deleted invites |
+
+Human output example:
+
+```
+ID           STATUS    NAME HINT   ISSUED BY   EXPIRES             REDEEMED
+inv_abc123   created   my-laptop   admin       2026-05-10T15:...   -
+inv_def456   redeemed  phone1      admin       -                   2026-05-08T10:... by john
+```
+
+### invite revoke
+
+Revokes an invite by its ID. Redeemed invites cannot be revoked.
+
+```bash
+wg-mgmt invite revoke --id <invite_id>
+```
+
+### invite delete
+
+Soft-deletes an invite (marks as deleted but preserves history).
+
+```bash
+wg-mgmt invite delete --id <invite_id>
+```
+
+### invite qrcode
+
+Generates an SVG QR code for a bootstrap URL from an invite token.
+
+```bash
+wg-mgmt invite qrcode --id <token> --name <device_name> --output <file.svg>
+```
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `--id` | Yes | Invite token (raw token from invite create output) |
+| `--name` | No | Device name embedded in the QR URL (default: `mobile`) |
+| `--output` | Yes | Output SVG file path |
+
+---
+
+### user list
+
+Lists all users with their name, role, and creation time. Requires the API key (owner-only).
+
+```bash
+# Table output (default)
+wg-mgmt user list
+
+# JSON output
+wg-mgmt user list --format json
+```
+
+### user create
+
+Creates a new user account. Requires the API key (owner-only).
+
+```bash
+wg-mgmt user create --name <username> --password <password> [--role <role>]
+```
+
+| Flag | Required | Default | Description |
+|------|----------|---------|-------------|
+| `--name` | Yes | - | Username |
+| `--password` | Yes | - | Password |
+| `--role` | No | `user` | Role (`owner`, `admin`, `user`) |
+
+### user delete
+
+Deletes a user by name. Requires the API key (owner-only).
+
+```bash
+wg-mgmt user delete --name <username>
+```
+
+---
+
+### auth login
+
+Authenticates with the daemon and receives a session token.
+
+```bash
+wg-mgmt auth login [--name <username> --password <password>]
+```
+
+When run without flags, prompts interactively for username and password. If the CLI already has an API key configured, it informs you that you are already authenticated.
+
+Output includes the session token to store in `MGMT_SESSION_TOKEN`.
+
+### auth logout
+
+Logs out the current session.
+
+```bash
+wg-mgmt auth logout
+```
+
+---
 
 ### status
 
@@ -384,10 +533,10 @@ Shows daemon and WireGuard interface status.
 
 ```bash
 # Human-readable
-./bin/wg-mgmt status
+wg-mgmt status
 
 # JSON
-./bin/wg-mgmt status --format json
+wg-mgmt status --format json
 ```
 
 Human output example:
@@ -407,10 +556,10 @@ Shows the currently authenticated user's name, role, and creation time. Requires
 ```bash
 # Use MGMT_SESSION_TOKEN env var or --session-token flag
 export MGMT_SESSION_TOKEN=<session_token>
-./bin/wg-mgmt me
+wg-mgmt me
 
 # JSON
-./bin/wg-mgmt me --format json
+wg-mgmt me --format json
 ```
 
 Example:
@@ -420,10 +569,6 @@ name: admin
 role: owner
 created_at: 2026-05-03T15:00:00Z
 ```
-
-### invite, user, auth
-
-These commands are scaffolded and will be implemented in a future release. Use the API or TUI for these operations.
 
 ---
 
@@ -501,7 +646,7 @@ tail -f /var/log/wg-mgmt/wg-mgmt.log
 
 ## API Reference
 
-Base URL: `https://vpn.example.com` (reverse proxy) or `http://IP:58880` (direct, local network only).
+Base URL: `https://YOUR_DOMAIN` (reverse proxy, HTTPS) or `http://SERVER_IP:58880` (direct, local network only).
 
 ### Public Routes
 
@@ -584,21 +729,41 @@ The daemon enforces two access tiers via middleware. The reverse proxy must expo
 
 ### Deployment Automation
 
-The `server/setup-server.sh` script automates daemon installation, WireGuard init, and systemd service setup. It does NOT configure the reverse proxy. After running it, set up nginx or Caddy manually (see examples below) with Let's Encrypt for TLS.
+The `server/setup-server.sh` script automates daemon installation, WireGuard init, and systemd service setup. After that, run the guided proxy deployment script:
 
-### TLS Requirement
+```bash
+# For nginx (default):
+sudo bash server/deploy-proxy.sh
 
-All production deployments MUST terminate TLS at the reverse proxy. The daemon speaks plain HTTP. Use Let's Encrypt (certbot or Caddy auto) for free certificates.
+# For Caddy:
+sudo bash server/deploy-proxy.sh --caddy
+```
 
-### Example: nginx
+The `deploy-proxy.sh` script handles everything:
+
+- **With a domain**: Sets up nginx or Caddy with TLS (Let's Encrypt), generates HTTPS config, and validates before reloading.
+- **Without a domain**: Generates an HTTP-only config and warns that HTTPS is unavailable. Bootstrap URLs use `http://SERVER_IP/`.
+- **Safety**: Backs up existing configs, validates generated config (`nginx -t` or `caddy validate`), and rolls back on failure.
+- **Admin routes**: Blocks `/api/v1/peers`, `/api/v1/invites`, `/api/v1/users`, `/api/v1/status` at the proxy level (returns 403).
+
+### TLS Strategy
+
+The daemon itself speaks plain HTTP on localhost. TLS is handled by the reverse proxy.
+
+| Scenario | Behavior |
+|----------|----------|
+| Domain configured + DNS resolves | Automatic HTTPS via Let's Encrypt (nginx: certbot standalone; Caddy: auto-ACME) |
+| No domain or DNS not resolved | HTTP-only fallback with clear warning. Bootstrap URLs use `http://` over the public IP. |
+
+### Example: nginx (generated by deploy-proxy.sh --nginx)
 
 ```nginx
 server {
     listen 443 ssl http2;
-    server_name vpn.example.com;
+    server_name YOUR_DOMAIN;
 
-    ssl_certificate     /etc/letsencrypt/live/vpn.example.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/vpn.example.com/privkey.pem;
+    ssl_certificate     /etc/letsencrypt/live/YOUR_DOMAIN/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/YOUR_DOMAIN/privkey.pem;
 
     # Public routes (forward to daemon)
     location /api/v1/health      { proxy_pass http://127.0.0.1:58880; }
@@ -623,15 +788,19 @@ server {
 # Redirect HTTP to HTTPS
 server {
     listen 80;
-    server_name vpn.example.com;
+    server_name YOUR_DOMAIN;
     return 301 https://$host$request_uri;
 }
 ```
 
-### Example: Caddy
+Without a domain, the script generates an HTTP-only config (no TLS, no redirect).
+
+### Example: Caddy (generated by deploy-proxy.sh --caddy)
+
+With domain (Caddy auto-provisions TLS):
 
 ```
-vpn.example.com {
+YOUR_DOMAIN {
     reverse_proxy /api/v1/health  127.0.0.1:58880
     reverse_proxy /api/v1/login   127.0.0.1:58880
     reverse_proxy /api/v1/logout  127.0.0.1:58880
@@ -647,22 +816,25 @@ vpn.example.com {
 }
 ```
 
+Without a domain, the script generates an `:80` config block (HTTP-only).
+
 ### Bootstrap URL
 
-With the reverse proxy in place, the canonical bootstrap URL is:
+With the reverse proxy in place, the bootstrap URL uses your domain or server IP:
 
-```
-https://vpn.example.com/bootstrap?token=INVITE_TOKEN&name=MYDEVICE
-```
+| Scenario | Bootstrap URL format |
+|----------|---------------------|
+| Domain + HTTPS | `https://YOUR_DOMAIN/bootstrap?token=TOKEN&name=DEVICE` |
+| IP-only + HTTP | `http://YOUR_SERVER_IP/bootstrap?token=TOKEN&name=DEVICE` |
 
 Users pipe this directly into bash. The script is served as plain text. Users should inspect it before running:
 
 ```bash
 # Inspect
-curl -sSf https://vpn.example.com/bootstrap?token=TOKEN&name=my-device
+curl -sSf "https://YOUR_DOMAIN/bootstrap?token=TOKEN&name=my-device"
 
 # Run (only after inspecting)
-curl -sSf "https://vpn.example.com/bootstrap?token=TOKEN&name=my-device" | sudo bash
+curl -sSf "https://YOUR_DOMAIN/bootstrap?token=TOKEN&name=my-device" | sudo bash
 ```
 
 The bootstrap script contains no global API key. The invite token is the sole credential and is consumed on first use.
@@ -699,8 +871,16 @@ This path upgrades a server that is already running an older WG-Manager version.
 cd ~/WG-manager && git pull
 sudo bash server/setup-server.sh
 # When prompted: "Use existing configuration? [Y/n]" -> Y + Enter
+```
 
-# Optional: install or rebuild the Rust TUI
+The setup script automatically:
+- Rebuilds and reinstalls the daemon (`wg-mgmt-daemon`) if source has changed
+- Rebuilds and reinstalls the CLI (`wg-mgmt` at `/usr/local/bin/wg-mgmt`)
+- Preserves the existing config, API key, and bootstrap owner password
+- Restarts the systemd service without interrupting existing WireGuard connections
+
+**Optional:** rebuild the Rust TUI:
+```bash
 cd ~/WG-manager/wg-tui && bash install.sh
 ```
 
@@ -807,6 +987,8 @@ If you are upgrading from a version that used the approval flow:
 | Audit log empty | Logrotate rotated the file. Run `sudo systemctl kill -s HUP wg-mgmt` |
 | Rust not found (wg-tui) | Install Rust: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
 | `wg-tui` command not found | Install the Rust TUI: `cd ~/WG-manager/wg-tui && bash install.sh` |
+| WSL bootstrap issues | WSL is detected by the bootstrap script. A warning recommends installing WireGuard on the Windows host, not inside WSL. Use the Windows PowerShell or CMD path instead. |
+| Bootstrap fails with parser error | The bootstrap script requires `jq` or `python3` to parse the server response. Install one (`sudo apt install jq`) and re-run. The invite token is NOT consumed until the server confirms redemption. |
 
 ---
 

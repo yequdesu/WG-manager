@@ -668,7 +668,7 @@ print_summary() {
 
     echo -e "  ${BOLD}${CYAN}Production Deployment${NC}"
     echo -e "    ${BOLD}sudo bash server/deploy-proxy.sh${NC}       Set up reverse proxy (nginx or Caddy)"
-    echo -e "    ${BOLD}sudo bash server/update.sh${NC}              Guided server upgrade (coming soon)"
+    echo -e "    ${BOLD}sudo bash server/update.sh${NC}              Guided server upgrade"
     echo -e "    ${BOLD}sudo bash scripts/health-check.sh${NC}        System health check"
     echo ""
 }

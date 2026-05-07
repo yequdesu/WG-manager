@@ -89,7 +89,7 @@ owner/admin 创建邀请  ->  用户兑换邀请  ->  peer 原子创建并写入
 
 ### 1. 服务端初始化
 
-前置条件：Ubuntu/Debian 服务器，已安装 Git，生产环境建议准备一个指向服务器的域名。
+前置条件：Ubuntu/Debian 服务器，已安装 Git。域名可选，但推荐配置（可以自动启用 HTTPS）。
 
 ```bash
 git clone git@github.com:yequdesu/WG-manager.git ~/WG-manager
@@ -98,20 +98,29 @@ sudo apt install -y golang-go
 sudo bash server/setup-server.sh
 ```
 
-脚本会提示公网 IP、WireGuard 端口、VPN 子网、管理端口和默认 DNS。安装完成后会生成 `config.env`，其中关键项如下：
+脚本会提示以下信息：
+
+| 提示 | 说明 | 示例 |
+|------|------|------|
+| `Server Public IP` | 公网 IP（自动检测，回车确认） | `118.178.171.166` |
+| `Server Domain (optional)` | 域名；回车跳过则使用 IP + HTTP | `vpn.example.com` |
+| `WireGuard Port` | WireGuard 监听端口 | `51820`（默认） |
+| `VPN Subnet` | VPN 内部子网 | `10.0.0.0/24`（默认） |
+| `Management API Port` | 管理 API 端口 | `58880`（默认） |
+| `Default Client DNS` | 客户端 DNS | `1.1.1.1,8.8.8.8`（默认） |
+
+安装完成后：
+- CLI `wg-mgmt` 自动安装到 `/usr/local/bin/wg-mgmt`
+- 守护进程 `wg-mgmt-daemon` 作为 systemd 服务运行
+- 会显示 bootstrap owner 密码和后续步骤
+
+关键配置项说明：
 
 | 配置项 | 说明 |
 |--------|------|
 | `MGMT_LISTEN=127.0.0.1:58880` | 守护进程默认只监听本机，生产环境通过反向代理暴露 HTTPS。 |
 | `MGMT_API_KEY` | break-glass 管理后路，不应分发给用户。 |
 | `BOOTSTRAP_OWNER_PASSWORD` | 首次启动时创建 `admin` owner 账户的密码。 |
-
-**升级服务器：**
-```bash
-cd ~/WG-manager && git pull
-sudo bash server/setup-server.sh
-# "Use existing configuration? [Y/n]" -> Y + Enter
-```
 
 #### 地址池
 
@@ -165,14 +174,16 @@ curl -s -X POST http://127.0.0.1:58880/api/v1/invites \
   -d '{"max_uses": 1}'
 ```
 
-响应会包含一次性 `token` 和 bootstrap URL，例如：
+响应会包含一次性 `token` 和可直接使用的 bootstrap URL（协议和主机取决于你的服务器配置）：
 
 ```json
 {
   "token": "inv_abc123...",
-  "url": "https://vpn.example.com/bootstrap?token=inv_abc123..."
+  "url": "https://YOUR_DOMAIN/bootstrap?token=inv_abc123..."
 }
 ```
+
+配置了域名时 URL 使用 `https://YOUR_DOMAIN/`，未配置域名时降级为 `http://YOUR_SERVER_IP/`。
 
 ---
 
@@ -180,23 +191,27 @@ curl -s -X POST http://127.0.0.1:58880/api/v1/invites \
 
 ### Linux / macOS / WSL
 
+将下方的 `BOOTSTRAP_URL` 替换为创建邀请时获得的实际 URL。
+
 ```bash
-curl -sSf "https://vpn.example.com/bootstrap?token=inv_abc123&name=my-device" | sudo bash
+curl -sSf "BOOTSTRAP_URL&name=my-device" | sudo bash
 ```
 
 脚本会检测系统、安装 WireGuard（如需要）、兑换邀请、写入配置、启动隧道并验证连通性。
 
+**WSL 用户注意：** 脚本会检测 WSL 环境并给出提示，推荐在 Windows 宿主机上安装 WireGuard，而非在 WSL 内部。请改用下方的 Windows PowerShell 或 CMD 方式入网。
+
 ### Windows PowerShell
 
 ```powershell
-Invoke-WebRequest "https://vpn.example.com/bootstrap?token=inv_abc123&name=MYPC" -OutFile join.ps1
+Invoke-WebRequest "BOOTSTRAP_URL&name=MYPC" -OutFile join.ps1
 .\join.ps1
 ```
 
 ### Windows CMD
 
 ```cmd
-curl -o wg0.conf "https://vpn.example.com/bootstrap?token=inv_abc123&name=MYPC"
+curl -o wg0.conf "BOOTSTRAP_URL&name=MYPC"
 ```
 
 然后在 WireGuard 客户端中导入 `wg0.conf`。
@@ -260,14 +275,11 @@ curl -s -X DELETE http://127.0.0.1:58880/api/v1/peers/<name> \
 
 ## CLI 参考
 
-`wg-mgmt` CLI 在服务器上运行，通过 localhost 与守护进程通信。默认读取 `config.env` 中的 `MGMT_LISTEN` 和 `MGMT_API_KEY`。
+`wg-mgmt` CLI 在服务器上运行，通过 localhost 与守护进程通信。默认读取 `config.env` 中的 `MGMT_LISTEN` 和 `MGMT_API_KEY`。安装脚本会自动把 CLI 安装到 `/usr/local/bin/wg-mgmt`。
 
 ```bash
-# 构建 CLI
-make build-cli
-
-./bin/wg-mgmt --help
-# Usage: ./bin/wg-mgmt [--config FILE] <command>
+wg-mgmt --help
+# Usage: wg-mgmt [--config FILE] <command>
 ```
 
 ### 全局参数
@@ -278,14 +290,16 @@ make build-cli
 
 ### 子命令
 
-| 命令 | 说明 | 状态 |
-|------|------|------|
-| `peer` | 列出、别名、删除 peer | 已实现 |
-| `invite` | 邀请操作 | 已搭建 |
-| `user` | 用户操作 | 已搭建 |
-| `status` | 守护进程和 WireGuard 状态 | 已实现 |
-| `auth` | 会话认证 | 已搭建 |
-| `me` | 当前用户信息 | 已实现 |
+| 命令 | 说明 |
+|------|------|
+| `peer` | 列出、别名、删除 peer |
+| `invite` | 创建、列出、撤销、删除邀请，生成 QR 码 |
+| `user` | 列出、创建、删除用户 |
+| `status` | 守护进程和 WireGuard 状态 |
+| `auth` | 登录和登出（会话管理） |
+| `me` | 当前用户信息 |
+
+---
 
 ### peer list
 
@@ -293,10 +307,10 @@ make build-cli
 
 ```bash
 # 表格输出（默认）
-./bin/wg-mgmt peer list
+wg-mgmt peer list
 
 # JSON 输出
-./bin/wg-mgmt peer list --format json
+wg-mgmt peer list --format json
 ```
 
 表格输出示例：
@@ -312,13 +326,13 @@ make build-cli
 为 peer 设置友好别名，通过不可变的公钥标识。
 
 ```bash
-./bin/wg-mgmt peer alias --id <public_key> --alias <new_name>
+wg-mgmt peer alias --id <public_key> --alias <new_name>
 ```
 
 示例：
 
 ```bash
-./bin/wg-mgmt peer alias --id RoJ7SRMQC7Zu... --alias "John's Laptop"
+wg-mgmt peer alias --id RoJ7SRMQC7Zu... --alias "John's Laptop"
 # Alias updated: "" -> "John's Laptop" (peer: my-lap)
 ```
 
@@ -327,8 +341,155 @@ make build-cli
 通过公钥删除 peer。仅依赖别名的删除会被拒绝。
 
 ```bash
-./bin/wg-mgmt peer delete --id RoJ7SRMQC7Zu...
+wg-mgmt peer delete --id RoJ7SRMQC7Zu...
 ```
+
+---
+
+### invite create
+
+创建新的邀请 token，可设置可选约束。
+
+```bash
+wg-mgmt invite create [flags]
+```
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--ttl N` | `72` | 有效期（小时） |
+| `--pool NAME` | - | 地址池名称 |
+| `--dns SERVERS` | - | 自定义 DNS 服务器 |
+| `--role ROLE` | - | 目标角色（`user` 或 `admin`） |
+| `--max-uses N` | `1` | 最大使用次数 |
+| `--labels K=V,...` | - | 逗号分隔的键值对标签 |
+| `--name-hint TEXT` | - | 邀请显示名称提示 |
+| `--device-name NAME` | - | 预绑定的设备名称 |
+| `--format FORMAT` | `human` | 输出格式（`human` 或 `json`） |
+
+可读输出包含 token、过期时间、可直接复制的 bootstrap URL 和一键执行命令：
+
+```
+Invite created: inv_abc123...
+Token:       inv_abc123...
+Expires:     2026-05-10T15:00:00Z
+
+Bootstrap URL (share this with the client):
+  https://YOUR_DOMAIN/bootstrap?token=inv_abc123...
+
+Copy-and-paste command:
+  curl -sSf "https://YOUR_DOMAIN/bootstrap?token=inv_abc123..." | sudo bash
+```
+
+### invite list
+
+列出所有邀请及其状态、提示、创建者和兑换信息。
+
+```bash
+wg-mgmt invite list [--format human|json] [--show-deleted]
+```
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--format` | `human` | 输出格式 |
+| `--show-deleted` | `false` | 包含软删除的邀请 |
+
+可读输出示例：
+
+```
+ID           STATUS    NAME HINT   ISSUED BY   EXPIRES             REDEEMED
+inv_abc123   created   my-laptop   admin       2026-05-10T15:...   -
+inv_def456   redeemed  phone1      admin       -                   2026-05-08T10:... by john
+```
+
+### invite revoke
+
+按 ID 撤销邀请。已兑换的邀请无法撤销。
+
+```bash
+wg-mgmt invite revoke --id <invite_id>
+```
+
+### invite delete
+
+软删除邀请（标记为已删除但保留历史记录）。
+
+```bash
+wg-mgmt invite delete --id <invite_id>
+```
+
+### invite qrcode
+
+根据邀请 token 生成 SVG 格式的 QR 码。
+
+```bash
+wg-mgmt invite qrcode --id <token> --name <device_name> --output <file.svg>
+```
+
+| 参数 | 必需 | 说明 |
+|------|------|------|
+| `--id` | 是 | 邀请 token（来自 create 输出） |
+| `--name` | 否 | QR URL 中的设备名称（默认：`mobile`） |
+| `--output` | 是 | 输出 SVG 文件路径 |
+
+---
+
+### user list
+
+列出所有用户，包含名称、角色和创建时间。需要 API 密钥（仅 owner）。
+
+```bash
+# 表格输出（默认）
+wg-mgmt user list
+
+# JSON 输出
+wg-mgmt user list --format json
+```
+
+### user create
+
+创建新用户账户。需要 API 密钥（仅 owner）。
+
+```bash
+wg-mgmt user create --name <username> --password <password> [--role <role>]
+```
+
+| 参数 | 必需 | 默认值 | 说明 |
+|------|------|--------|------|
+| `--name` | 是 | - | 用户名 |
+| `--password` | 是 | - | 密码 |
+| `--role` | 否 | `user` | 角色（`owner`、`admin`、`user`） |
+
+### user delete
+
+按名称删除用户。需要 API 密钥（仅 owner）。
+
+```bash
+wg-mgmt user delete --name <username>
+```
+
+---
+
+### auth login
+
+与守护进程认证并获取 session token。
+
+```bash
+wg-mgmt auth login [--name <username> --password <password>]
+```
+
+不带参数运行时，会交互式提示输入用户名和密码。如果 CLI 已配置 API 密钥，会提示已认证。
+
+输出包含 session token，可存入 `MGMT_SESSION_TOKEN` 环境变量。
+
+### auth logout
+
+登出当前会话。
+
+```bash
+wg-mgmt auth logout
+```
+
+---
 
 ### status
 
@@ -336,10 +497,10 @@ make build-cli
 
 ```bash
 # 可读输出
-./bin/wg-mgmt status
+wg-mgmt status
 
 # JSON
-./bin/wg-mgmt status --format json
+wg-mgmt status --format json
 ```
 
 可读输出示例：
@@ -359,10 +520,10 @@ peers: 3 online / 5 total
 ```bash
 # 使用 MGMT_SESSION_TOKEN 环境变量或 --session-token 参数
 export MGMT_SESSION_TOKEN=<session_token>
-./bin/wg-mgmt me
+wg-mgmt me
 
 # JSON
-./bin/wg-mgmt me --format json
+wg-mgmt me --format json
 ```
 
 示例：
@@ -373,15 +534,11 @@ role: owner
 created_at: 2026-05-03T15:00:00Z
 ```
 
-### invite、user、auth
-
-这些命令已搭建框架，将在未来版本中实现。请使用 API 或 TUI 执行相关操作。
-
 ---
 
 ## 生产部署
 
-守护进程默认绑定 `127.0.0.1:58880`。生产环境必须使用 nginx 或 Caddy 在公网终止 TLS，并只暴露公共路由。
+守护进程默认绑定 `127.0.0.1:58880`。生产环境通过 nginx 或 Caddy 反向代理暴露 HTTPS，守护进程本身只监听本机。
 
 ```
                    ┌─────────────────────────────┐
@@ -400,7 +557,31 @@ created_at: 2026-05-03T15:00:00Z
 
 ### 部署自动化
 
-`server/setup-server.sh` 脚本自动完成守护进程安装、WireGuard 初始化和 systemd 服务配置。它**不**配置反向代理。运行脚本后，需要手动配置 nginx 或 Caddy（参考下面的示例）并使用 Let's Encrypt 提供 TLS 证书。
+`server/setup-server.sh` 脚本自动完成守护进程安装、WireGuard 初始化和 systemd 服务配置。之后运行引导式反向代理部署脚本：
+
+```bash
+# nginx（默认）：
+sudo bash server/deploy-proxy.sh
+
+# Caddy：
+sudo bash server/deploy-proxy.sh --caddy
+```
+
+`deploy-proxy.sh` 脚本自动处理：
+
+- **配置了域名**：自动配置 nginx 或 Caddy 并获取 Let's Encrypt TLS 证书，生成 HTTPS 配置，验证后重新加载。
+- **未配置域名**：生成纯 HTTP 配置，并提示 HTTPS 不可用。bootstrap URL 使用 `http://SERVER_IP/`。
+- **安全措施**：备份现有配置，验证生成的配置（`nginx -t` 或 `caddy validate`），验证失败自动回滚。
+- **路由隔离**：在代理层面拦截管理路由（返回 403），只暴露公共路由。
+
+### TLS 策略
+
+守护进程本身使用纯 HTTP 与本机通信。TLS 由反向代理处理。
+
+| 场景 | 行为 |
+|------|------|
+| 配置了域名且 DNS 可解析 | 自动通过 Let's Encrypt 获取证书（nginx：certbot standalone；Caddy：自动 ACME） |
+| 未配置域名或 DNS 未解析 | 纯 HTTP 降级，显示明确警告。Bootstrap URL 使用 `http://` 加公网 IP |
 
 ### 路由隔离
 
@@ -424,15 +605,15 @@ created_at: 2026-05-03T15:00:00Z
 | `/api/v1/users` | 用户管理 |
 | `/api/v1/status` | 状态 |
 
-nginx 示例：
+### nginx 示例（由 deploy-proxy.sh --nginx 生成）
 
 ```nginx
 server {
     listen 443 ssl http2;
-    server_name vpn.example.com;
+    server_name YOUR_DOMAIN;
 
-    ssl_certificate     /etc/letsencrypt/live/vpn.example.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/vpn.example.com/privkey.pem;
+    ssl_certificate     /etc/letsencrypt/live/YOUR_DOMAIN/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/YOUR_DOMAIN/privkey.pem;
 
     location /api/v1/health { proxy_pass http://127.0.0.1:58880; }
     location /api/v1/login  { proxy_pass http://127.0.0.1:58880; }
@@ -448,10 +629,14 @@ server {
 }
 ```
 
-Caddy 示例：
+未配置域名时，脚本生成纯 HTTP 配置（无 TLS，无重定向）。
+
+### Caddy 示例（由 deploy-proxy.sh --caddy 生成）
+
+配置域名时（Caddy 自动申请 TLS）：
 
 ```
-vpn.example.com {
+YOUR_DOMAIN {
     reverse_proxy /api/v1/health  127.0.0.1:58880
     reverse_proxy /api/v1/login   127.0.0.1:58880
     reverse_proxy /api/v1/logout  127.0.0.1:58880
@@ -466,22 +651,25 @@ vpn.example.com {
 }
 ```
 
+未配置域名时，脚本生成 `:80` 配置块（纯 HTTP）。
+
 ### Bootstrap URL
 
-配置反向代理后，标准 bootstrap URL 为：
+配置反向代理后，bootstrap URL 使用你的域名或服务器 IP：
 
-```
-https://vpn.example.com/bootstrap?token=INVITE_TOKEN&name=MYDEVICE
-```
+| 场景 | Bootstrap URL 格式 |
+|------|-------------------|
+| 域名 + HTTPS | `https://YOUR_DOMAIN/bootstrap?token=TOKEN&name=DEVICE` |
+| 仅 IP + HTTP | `http://YOUR_SERVER_IP/bootstrap?token=TOKEN&name=DEVICE` |
 
 用户可通过管道直接传给 bash。建议先检查脚本内容：
 
 ```bash
 # 检查
-curl -sSf https://vpn.example.com/bootstrap?token=TOKEN&name=my-device
+curl -sSf "https://YOUR_DOMAIN/bootstrap?token=TOKEN&name=my-device"
 
 # 执行（确认后）
-curl -sSf "https://vpn.example.com/bootstrap?token=TOKEN&name=my-device" | sudo bash
+curl -sSf "https://YOUR_DOMAIN/bootstrap?token=TOKEN&name=my-device" | sudo bash
 ```
 
 bootstrap 脚本不包含全局 API 密钥，邀请 token 是唯一凭证，且一次性使用。
@@ -512,15 +700,23 @@ bash build-linux.sh
 
 ## 升级旧服务器
 
-已有旧版本正在运行时，使用以下流程升级：
+已有旧版本正在运行时，使用以下流程升级。现有 WireGuard 隧道不会中断，因为升级会保留 `/etc/wireguard/wg0.conf` 和 `server/peers.json`。
 
 ```bash
 cd ~/WG-manager
 git pull
 sudo bash server/setup-server.sh
 # 出现 "Use existing configuration? [Y/n]" 时输入 Y 回车
+```
 
-# 可选：安装/更新 Rust TUI
+升级脚本自动执行：
+- 源码变更时自动重新编译并安装守护进程（`wg-mgmt-daemon`）
+- 自动重新编译并安装 CLI（`wg-mgmt` 到 `/usr/local/bin/wg-mgmt`）
+- 保留现有配置、API 密钥和 bootstrap owner 密码
+- 重启 systemd 服务而不中断现有 WireGuard 连接
+
+**可选：** 安装或更新 Rust TUI：
+```bash
 cd ~/WG-manager/wg-tui && bash install.sh
 ```
 
@@ -602,6 +798,8 @@ sudo systemctl kill -s HUP wg-mgmt
 | TUI 未安装 | `cd ~/WG-manager/wg-tui && bash install.sh` |
 | 日志为空 | 日志已轮转，运行 `sudo systemctl kill -s HUP wg-mgmt` |
 | WG 接口丢失 | `modprobe wireguard && ip link add wg0 type wireguard` |
+| WSL bootstrap 问题 | 脚本会自动检测 WSL 并提示在 Windows 宿主机上安装 WireGuard，而非 WSL 内部。请使用 Windows PowerShell 或 CMD 方式入网。 |
+| Bootstrap 解析错误 | bootstrap 脚本需要 `jq` 或 `python3` 解析服务端响应。安装其中一个（`sudo apt install jq`）后重新运行。邀请 token 在服务端确认兑换前不会被消耗。 |
 
 ---
 
