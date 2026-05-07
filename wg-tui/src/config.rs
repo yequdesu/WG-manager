@@ -10,6 +10,7 @@ pub struct Config {
     /// Full public URL with scheme, e.g. "https://vpn.example.com" or "http://203.0.113.10".
     /// Derived from SERVER_HOST (preferred) or SERVER_PUBLIC_IP in config.env.
     /// Empty if neither is configured.
+    #[allow(dead_code)]
     pub public_url: String,
 }
 
@@ -51,7 +52,11 @@ impl Config {
 
         let public_url = Self::build_public_url(&server_host, &server_public_ip);
 
-        Self { api_url, api_key, public_url }
+        Self {
+            api_url,
+            api_key,
+            public_url,
+        }
     }
 
     /// Mirror the daemon's PublicURL() logic:
@@ -72,8 +77,7 @@ impl Config {
     }
 
     fn config_path() -> PathBuf {
-        let project_dir = env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("."));
+        let project_dir = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
         let local_config = project_dir.join("config.env");
         if local_config.exists() {

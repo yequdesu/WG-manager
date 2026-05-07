@@ -24,6 +24,8 @@ pub enum DataEvent {
     StatusFetched(Result<api::ServerStatus, String>),
     InviteCreated(Result<serde_json::Value, String>),
     InviteRevoked(Result<bool, String>),
+    InviteLinkFetched(Result<serde_json::Value, String>),
+    InviteForceDeleted(Result<bool, String>),
     PeerDeleted(Result<bool, String>),
 }
 

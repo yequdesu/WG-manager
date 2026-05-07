@@ -130,21 +130,20 @@ impl ApiClient {
             req = req.header("Authorization", format!("Bearer {}", self.api_key));
         }
         let resp = req.send().await.map_err(|e| e.to_string())?;
-        resp.json::<ServerStatus>()
-            .await
-            .map_err(|e| e.to_string())
+        resp.json::<ServerStatus>().await.map_err(|e| e.to_string())
     }
 
-    pub async fn create_invite(&self, request: CreateInviteRequest) -> Result<serde_json::Value, String> {
+    pub async fn create_invite(
+        &self,
+        request: CreateInviteRequest,
+    ) -> Result<serde_json::Value, String> {
         let url = format!("{}/api/v1/invites", self.base_url);
         let mut req = self.client.post(&url).json(&request);
         if !self.api_key.is_empty() {
             req = req.header("Authorization", format!("Bearer {}", self.api_key));
         }
         let resp = req.send().await.map_err(|e| e.to_string())?;
-        resp.json::<serde_json::Value>()
-            .await
-            .map_err(|e| e.to_string())
+        json_response(resp).await
     }
 
     pub async fn revoke_invite(&self, invite_id: &str) -> Result<bool, String> {
@@ -154,8 +153,48 @@ impl ApiClient {
             req = req.header("Authorization", format!("Bearer {}", self.api_key));
         }
         let resp = req.send().await.map_err(|e| e.to_string())?;
-        let body: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-        Ok(body.get("success").and_then(|v| v.as_bool()).unwrap_or(false))
+        let body = json_response(resp).await?;
+        Ok(body
+            .get("success")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false))
+    }
+
+    pub async fn get_invite_link(
+        &self,
+        invite_id: &str,
+        device_name: &str,
+    ) -> Result<serde_json::Value, String> {
+        let url = format!(
+            "{}/api/v1/invites/{}/link?name={}",
+            self.base_url,
+            urlencoding::encode(invite_id),
+            urlencoding::encode(device_name),
+        );
+        let mut req = self.client.get(&url);
+        if !self.api_key.is_empty() {
+            req = req.header("Authorization", format!("Bearer {}", self.api_key));
+        }
+        let resp = req.send().await.map_err(|e| e.to_string())?;
+        json_response(resp).await
+    }
+
+    pub async fn force_delete_invite(&self, invite_id: &str) -> Result<bool, String> {
+        let url = format!(
+            "{}/api/v1/invites/{}?action=force-delete",
+            self.base_url,
+            urlencoding::encode(invite_id),
+        );
+        let mut req = self.client.delete(&url);
+        if !self.api_key.is_empty() {
+            req = req.header("Authorization", format!("Bearer {}", self.api_key));
+        }
+        let resp = req.send().await.map_err(|e| e.to_string())?;
+        let body = json_response(resp).await?;
+        Ok(body
+            .get("success")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false))
     }
 
     pub async fn delete_peer(&self, peer_name: &str) -> Result<bool, String> {
@@ -165,9 +204,27 @@ impl ApiClient {
             req = req.header("Authorization", format!("Bearer {}", self.api_key));
         }
         let resp = req.send().await.map_err(|e| e.to_string())?;
-        let body: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-        Ok(body.get("success").and_then(|v| v.as_bool()).unwrap_or(false))
+        let body = json_response(resp).await?;
+        Ok(body
+            .get("success")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false))
     }
+}
+
+async fn json_response(resp: reqwest::Response) -> Result<serde_json::Value, String> {
+    let status = resp.status();
+    let body = resp.text().await.map_err(|e| e.to_string())?;
+    let value: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+    if status.is_success() {
+        return Ok(value);
+    }
+    let message = value
+        .get("error")
+        .and_then(|v| v.as_str())
+        .or_else(|| value.get("message").and_then(|v| v.as_str()))
+        .unwrap_or("request failed");
+    Err(format!("HTTP {}: {}", status.as_u16(), message))
 }
 
 #[cfg(test)]
@@ -216,7 +273,8 @@ mod tests {
     #[test]
     fn test_invite_info_missing_optionals() {
         let json = r#"{"id":"inv_min","status":"redeemed"}"#;
-        let invite: InviteInfo = serde_json::from_str(json).expect("deserialize with missing optionals failed");
+        let invite: InviteInfo =
+            serde_json::from_str(json).expect("deserialize with missing optionals failed");
 
         assert_eq!(invite.id, "inv_min");
         assert_eq!(invite.status, "redeemed");
