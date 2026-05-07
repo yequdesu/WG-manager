@@ -3,7 +3,7 @@ use ratatui::text::{Line, Span};
 use ratatui::Frame;
 
 use crate::theme::DARK_THEME;
-use crate::widgets::card::{Card, status_line};
+use crate::widgets::card::{status_line, Card};
 
 pub fn card_server(
     frame: &mut Frame,
@@ -24,7 +24,10 @@ pub fn card_server(
         vec![
             status_line(daemon_status, "Daemon     "),
             status_line(wg_status, "WireGuard  "),
-            status_line("active", &format!("Interface  {}:{}", interface, listen_port)),
+            status_line(
+                "active",
+                &format!("Interface  {}:{}", interface, listen_port),
+            ),
             status_line(
                 if online > 0 { "active" } else { "inactive" },
                 &format!("Peers      {} / {} online", online, total),

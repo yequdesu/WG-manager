@@ -1,10 +1,10 @@
 #![allow(dead_code)]
 
+use rand::Rng;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::widgets::Widget;
-use rand::Rng;
 
 const MAX_PARTICLES: usize = 360;
 const MIN_PARTICLES: usize = 180;
@@ -60,8 +60,8 @@ impl ParticleSystem {
 
         let dx = window.x as i16 - self.prev_window.x as i16;
         let dy = window.y as i16 - self.prev_window.y as i16;
-        let scaled_up = window.width > self.prev_window.width
-            || window.height > self.prev_window.height;
+        let scaled_up =
+            window.width > self.prev_window.width || window.height > self.prev_window.height;
 
         // ── Window move collision ──
         if dx != 0 || dy != 0 {
@@ -132,9 +132,7 @@ impl ParticleSystem {
         }
 
         // ── Asteroid spawn ──
-        if self.asteroids.len() < MAX_ASTEROIDS
-            && self.rng.random_range(0..ASTEROID_CHANCE) == 0
-        {
+        if self.asteroids.len() < MAX_ASTEROIDS && self.rng.random_range(0..ASTEROID_CHANCE) == 0 {
             self.spawn_asteroid(area);
         }
 
@@ -209,10 +207,30 @@ impl ParticleSystem {
     fn spawn_particle(&mut self, area: Rect) {
         let edge: u8 = self.rng.random_range(0..4);
         let (x, y, vx, vy) = match edge {
-            0 => (self.rng.random_range(0.0..area.width as f32), -1.0, 0.0, self.rng.random_range(0.2..0.6)),
-            1 => (self.rng.random_range(0.0..area.width as f32), area.height as f32 + 1.0, 0.0, self.rng.random_range(-0.6..-0.2)),
-            2 => (-1.0, self.rng.random_range(0.0..area.height as f32), self.rng.random_range(0.2..0.6), 0.0),
-            _ => (area.width as f32 + 1.0, self.rng.random_range(0.0..area.height as f32), self.rng.random_range(-0.6..-0.2), 0.0),
+            0 => (
+                self.rng.random_range(0.0..area.width as f32),
+                -1.0,
+                0.0,
+                self.rng.random_range(0.2..0.6),
+            ),
+            1 => (
+                self.rng.random_range(0.0..area.width as f32),
+                area.height as f32 + 1.0,
+                0.0,
+                self.rng.random_range(-0.6..-0.2),
+            ),
+            2 => (
+                -1.0,
+                self.rng.random_range(0.0..area.height as f32),
+                self.rng.random_range(0.2..0.6),
+                0.0,
+            ),
+            _ => (
+                area.width as f32 + 1.0,
+                self.rng.random_range(0.0..area.height as f32),
+                self.rng.random_range(-0.6..-0.2),
+                0.0,
+            ),
         };
 
         self.particles.push(Particle {
@@ -231,15 +249,40 @@ impl ParticleSystem {
         let text_len = text.chars().count().max(3);
         let radius = text_len.max(5);
         let (ax, ay, avx, avy): (f32, f32, f32, f32) = match edge {
-            0 => (self.rng.random_range(0.0..area.width as f32), -(radius as f32) * 2.0, 0.0, speed),
-            1 => (self.rng.random_range(0.0..area.width as f32), area.height as f32 + (radius as f32) * 2.0, 0.0, -speed),
-            2 => (-(radius as f32) * 2.0, self.rng.random_range(0.0..area.height as f32), speed, 0.0),
-            _ => (area.width as f32 + (radius as f32) * 2.0, self.rng.random_range(0.0..area.height as f32), -speed, 0.0),
+            0 => (
+                self.rng.random_range(0.0..area.width as f32),
+                -(radius as f32) * 2.0,
+                0.0,
+                speed,
+            ),
+            1 => (
+                self.rng.random_range(0.0..area.width as f32),
+                area.height as f32 + (radius as f32) * 2.0,
+                0.0,
+                -speed,
+            ),
+            2 => (
+                -(radius as f32) * 2.0,
+                self.rng.random_range(0.0..area.height as f32),
+                speed,
+                0.0,
+            ),
+            _ => (
+                area.width as f32 + (radius as f32) * 2.0,
+                self.rng.random_range(0.0..area.height as f32),
+                -speed,
+                0.0,
+            ),
         };
 
         let cells = Self::build_asteroid_cells(radius);
         self.asteroids.push(Asteroid {
-            x: ax, y: ay, vx: avx, vy: avy, radius, cells,
+            x: ax,
+            y: ay,
+            vx: avx,
+            vy: avy,
+            radius,
+            cells,
             text: Some(text.to_string()),
         });
     }
@@ -249,14 +292,42 @@ impl ParticleSystem {
         let edge: u8 = self.rng.random_range(0..4);
         let speed = self.rng.random_range(0.8..2.0);
         let (ax, ay, avx, avy): (f32, f32, f32, f32) = match edge {
-            0 => (self.rng.random_range(0.0..area.width as f32), -(radius as f32) * 2.0, 0.0, speed),
-            1 => (self.rng.random_range(0.0..area.width as f32), area.height as f32 + (radius as f32) * 2.0, 0.0, -speed),
-            2 => (-(radius as f32) * 2.0, self.rng.random_range(0.0..area.height as f32), speed, 0.0),
-            _ => (area.width as f32 + (radius as f32) * 2.0, self.rng.random_range(0.0..area.height as f32), -speed, 0.0),
+            0 => (
+                self.rng.random_range(0.0..area.width as f32),
+                -(radius as f32) * 2.0,
+                0.0,
+                speed,
+            ),
+            1 => (
+                self.rng.random_range(0.0..area.width as f32),
+                area.height as f32 + (radius as f32) * 2.0,
+                0.0,
+                -speed,
+            ),
+            2 => (
+                -(radius as f32) * 2.0,
+                self.rng.random_range(0.0..area.height as f32),
+                speed,
+                0.0,
+            ),
+            _ => (
+                area.width as f32 + (radius as f32) * 2.0,
+                self.rng.random_range(0.0..area.height as f32),
+                -speed,
+                0.0,
+            ),
         };
 
         let cells = Self::build_asteroid_cells(radius);
-        self.asteroids.push(Asteroid { x: ax, y: ay, vx: avx, vy: avy, radius, cells, text: None });
+        self.asteroids.push(Asteroid {
+            x: ax,
+            y: ay,
+            vx: avx,
+            vy: avy,
+            radius,
+            cells,
+            text: None,
+        });
     }
 
     fn build_asteroid_cells(radius: usize) -> Vec<Vec<Option<char>>> {
@@ -267,7 +338,8 @@ impl ParticleSystem {
 
         for dy in 0..size {
             for dx in 0..size {
-                let dist = ((dx as f32 - center).powi(2) + ((dy as f32 - center) * 2.0).powi(2)).sqrt();
+                let dist =
+                    ((dx as f32 - center).powi(2) + ((dy as f32 - center) * 2.0).powi(2)).sqrt();
                 if dist <= r + 0.3 {
                     let ch = if dist <= r * 0.35 {
                         '█'
@@ -385,18 +457,10 @@ fn render_asteroid(buf: &mut Buffer, area: Rect, a: &Asteroid) {
 
 fn particle_color(alpha: f32) -> Color {
     let a = (alpha * 0.70).clamp(0.08, 0.70);
-    Color::Rgb(
-        (210.0 * a) as u8,
-        (224.0 * a) as u8,
-        (255.0 * a) as u8,
-    )
+    Color::Rgb((210.0 * a) as u8, (224.0 * a) as u8, (255.0 * a) as u8)
 }
 
 fn asteroid_color(alpha: f32) -> Color {
     let a = alpha.clamp(0.10, 0.35);
-    Color::Rgb(
-        (180.0 * a) as u8,
-        (200.0 * a) as u8,
-        (255.0 * a) as u8,
-    )
+    Color::Rgb((180.0 * a) as u8, (200.0 * a) as u8, (255.0 * a) as u8)
 }

@@ -31,7 +31,9 @@ pub fn render_peer_list(
             };
             let name = truncate(&p.name, 22);
             let endpoint = p.endpoint.as_ref().map(|e| e.as_str()).unwrap_or("—");
-            let hs = p.latest_handshake.as_ref()
+            let hs = p
+                .latest_handshake
+                .as_ref()
                 .map(|h| format_handshake(h))
                 .unwrap_or_else(|| "—".to_string());
             let rx = format_bytes(p.transfer_rx.as_ref().map(|s| s.as_str()).unwrap_or("0"));
@@ -57,7 +59,7 @@ pub fn render_peer_list(
         .collect();
 
     let widths = [
-        Constraint::Length(4),   // dot
+        Constraint::Length(4), // dot
         Constraint::Length(24),
         Constraint::Length(14),
         Constraint::Length(26),
@@ -68,14 +70,11 @@ pub fn render_peer_list(
     frame.render_stateful_widget(table, inner, state);
 }
 
-pub fn render_peer_detail(
-    frame: &mut Frame,
-    area: Rect,
-    peer: &PeerInfo,
-    _tick_count: u64,
-) {
+pub fn render_peer_detail(frame: &mut Frame, area: Rect, peer: &PeerInfo, _tick_count: u64) {
     let endpoint = peer.endpoint.as_ref().map(|e| e.as_str()).unwrap_or("—");
-    let hs = peer.latest_handshake.as_ref()
+    let hs = peer
+        .latest_handshake
+        .as_ref()
         .map(|h| format_handshake(h))
         .unwrap_or_else(|| "—".to_string());
     let rx = format_bytes(peer.transfer_rx.as_ref().map(|s| s.as_str()).unwrap_or("0"));
@@ -116,32 +115,58 @@ pub fn render_peer_detail(
 fn compute_dot_color(tick: u64) -> Color {
     let phase = tick as f32 * 0.12;
     let alpha = (phase.sin() * 0.25 + 0.75).clamp(0.0, 1.0);
-    Color::Rgb((63.0 * alpha) as u8, (185.0 * alpha) as u8, (80.0 * alpha) as u8)
+    Color::Rgb(
+        (63.0 * alpha) as u8,
+        (185.0 * alpha) as u8,
+        (80.0 * alpha) as u8,
+    )
 }
 
 fn format_handshake(raw: &str) -> String {
-    if raw == "0" { return "—".into(); }
+    if raw == "0" {
+        return "—".into();
+    }
     if let Ok(ts) = raw.parse::<i64>() {
         let diff = chrono::Utc::now().timestamp() - ts;
-        if diff < 0 { "now".into() }
-        else if diff < 60 { format!("{}s", diff) }
-        else if diff < 3600 { format!("{}m", diff / 60) }
-        else if diff < 86400 { format!("{}h", diff / 3600) }
-        else { format!("{}d", diff / 86400) }
-    } else { "—".into() }
+        if diff < 0 {
+            "now".into()
+        } else if diff < 60 {
+            format!("{}s", diff)
+        } else if diff < 3600 {
+            format!("{}m", diff / 60)
+        } else if diff < 86400 {
+            format!("{}h", diff / 3600)
+        } else {
+            format!("{}d", diff / 86400)
+        }
+    } else {
+        "—".into()
+    }
 }
 
 fn format_bytes(raw: &str) -> String {
     if let Ok(n) = raw.parse::<u64>() {
-        if n == 0 { return "0".into(); }
-        if n >= 1 << 30 { format!("{:.1}G", n as f64 / (1u64 << 30) as f64) }
-        else if n >= 1 << 20 { format!("{:.1}M", n as f64 / (1u64 << 20) as f64) }
-        else if n >= 1 << 10 { format!("{:.1}K", n as f64 / (1u64 << 10) as f64) }
-        else { format!("{}B", n) }
-    } else { "—".into() }
+        if n == 0 {
+            return "0".into();
+        }
+        if n >= 1 << 30 {
+            format!("{:.1}G", n as f64 / (1u64 << 30) as f64)
+        } else if n >= 1 << 20 {
+            format!("{:.1}M", n as f64 / (1u64 << 20) as f64)
+        } else if n >= 1 << 10 {
+            format!("{:.1}K", n as f64 / (1u64 << 10) as f64)
+        } else {
+            format!("{}B", n)
+        }
+    } else {
+        "—".into()
+    }
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max { s.to_string() }
-    else { format!("{}…", s.chars().take(max - 1).collect::<String>()) }
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        format!("{}…", s.chars().take(max - 1).collect::<String>())
+    }
 }

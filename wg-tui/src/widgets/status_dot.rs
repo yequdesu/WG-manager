@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use ratatui::layout::Rect;
-use ratatui::style::{Style};
+use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
