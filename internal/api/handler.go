@@ -475,11 +475,32 @@ func (h *Handler) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 3. Allocate IP and add peer to the store.
-	_, err = h.store.AllocateIPAndAddPeer(&peer, h.cfg().WGSubnet, h.getWGPeerIPs(publicKey))
-	if err != nil {
-		h.store.UnredeemByTokenHash(tokenHash)
-		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
-		return
+	if redeemedInv.PoolName != "" {
+		pool, ok := h.store.GetPool(redeemedInv.PoolName)
+		if !ok {
+			h.store.UnredeemByTokenHash(tokenHash)
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "pool not found: " + redeemedInv.PoolName})
+			return
+		}
+		ip, err := h.store.AllocateIPInPool(pool, h.cfg().WGSubnet, h.getWGPeerIPs(publicKey))
+		if err != nil {
+			h.store.UnredeemByTokenHash(tokenHash)
+			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+			return
+		}
+		peer.Address = ip
+		if err := h.store.AddPeer(peer); err != nil {
+			h.store.UnredeemByTokenHash(tokenHash)
+			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+			return
+		}
+	} else {
+		_, err = h.store.AllocateIPAndAddPeer(&peer, h.cfg().WGSubnet, h.getWGPeerIPs(publicKey))
+		if err != nil {
+			h.store.UnredeemByTokenHash(tokenHash)
+			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+			return
+		}
 	}
 
 	// 4. Commit peer to WireGuard: add live peer, write config, persist state.
