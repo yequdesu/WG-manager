@@ -53,6 +53,7 @@ func NewServer(ctx context.Context, cfg *Config, s *store.State, m *wg.Manager) 
 			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		}
 	})))
+	mux.Handle("/api/v1/invites/qrcode", methodGuard(http.MethodGet, LocalOnly(inviteAdminMW(h.ServeInviteQR))))
 	mux.Handle("/api/v1/invites/", methodGuard(http.MethodDelete, LocalOnly(inviteAdminMW(h.RevokeInvite))))
 
 	ownerMW := RequireRole(s, cfg.APIKey, store.RoleOwner)

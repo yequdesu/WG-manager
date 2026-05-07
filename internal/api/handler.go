@@ -335,37 +335,61 @@ DELETE /api/v1/requests/{id}           Reject request (server-local)</pre>
 
 func (h *Handler) serveBootstrapHTML(w http.ResponseWriter, r *http.Request) {
 	ip := h.cfg().ServerPublicIP
-	p := portStr(h.cfg().MgmtListen)
 	wgSubnet := h.cfg().WGSubnet
 	html := `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WG-Manager - Join</title>
 <style>*{margin:0;padding:0;box-sizing:border-box}
-body{font:14px/1.6 system-ui,-apple-system,monospace;background:#0d1117;color:#c9d1d9;max-width:780px;margin:0 auto;padding:24px 16px}
-h1{color:#58a6ff;font-size:20px;margin-bottom:4px}
+body{font:14px/1.6 system-ui,-apple-system,sans-serif;background:#0d1117;color:#c9d1d9;max-width:680px;margin:0 auto;padding:20px 16px}
+h1{color:#58a6ff;font-size:20px;margin-bottom:2px}
 .sub{color:#8b949e;font-size:12px;margin-bottom:20px}
-.box{background:#161b22;border:1px solid #30363d;border-radius:6px;padding:14px;margin-bottom:12px}
-.box h3{font-size:13px;color:#8b949e;margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px}
-pre{background:#0d1117;padding:10px 14px;border-radius:4px;overflow-x:auto;font-size:13px;color:#7ee787;border:1px solid #21262d;white-space:pre-wrap;word-break:break-all}
+.box{background:#161b22;border:1px solid #30363d;border-radius:6px;padding:16px;margin-bottom:14px}
+.box h3{font-size:12px;color:#58a6ff;margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px}
+.box p{font-size:13px;color:#c9d1d9;margin-bottom:8px;line-height:1.5}
+label{display:block;font-size:12px;color:#8b949e;margin-bottom:4px;margin-top:10px}
+input{display:block;width:100%;padding:8px 10px;font-size:13px;font-family:monospace;background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:4px;outline:none}
+input:focus{border-color:#58a6ff}
+button{display:block;width:100%;margin-top:12px;padding:10px;font-size:13px;font-weight:600;color:#fff;background:#238636;border:1px solid #2ea043;border-radius:4px;cursor:pointer}
+button:hover{background:#2ea043}
+pre{background:#0d1117;padding:10px 14px;border-radius:4px;overflow-x:auto;font-size:13px;color:#7ee787;border:1px solid #21262d;white-space:pre-wrap;word-break:break-all;margin-top:8px}
+pre.cmd{color:#d2a8ff}
 .hint{color:#8b949e;font-size:12px;margin-top:6px}
+.hidden{display:none}
 a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
-ol{font-size:13px;color:#c9d1d9;line-height:2;padding-left:16px}
+ol{font-size:13px;color:#c9d1d9;line-height:2;padding-left:16px;margin-top:4px}
 .footer{margin-top:24px;border-top:1px solid #30363d;padding-top:12px;font-size:12px;color:#484f58}
+#result{margin-top:12px;padding:10px;background:#0a3622;border:1px solid #2ea043;border-radius:4px}
+#result.error{background:#3d1117;border-color:#f85149}
+#result .title{font-size:12px;color:#7ee787;margin-bottom:4px;font-weight:600}
+#result.error .title{color:#f85149}
 </style></head><body>
 <h1>WG-Manager</h1>
-<p class="sub">Server: ` + ip + `  |  Port: ` + p + `  |  Subnet: ` + wgSubnet + `</p>
+<p class="sub">Server: ` + ip + `  |  Subnet: ` + wgSubnet + `</p>
 <div class="box">
   <h3>Join This Network</h3>
-  <p>WG-Manager now uses invite-based onboarding. Ask your administrator for an invite token.</p>
+  <p>Onboarding uses <strong>one-time invite tokens</strong>. Your administrator creates an invite and shares a token with you. The token is consumed on first use — one token, one device.</p>
 </div>
 <div class="box">
-  <h3>Redeem an Invite (Linux / macOS / WSL)</h3>
-  <pre>curl -sSf -X POST http://` + ip + `:` + p + `/api/v1/redeem \
+  <h3>Paste Your Invite Token</h3>
+  <label for="token">Invite Token (64 hex characters)</label>
+  <input type="text" id="token" placeholder="Paste your invite token here" autocomplete="off" spellcheck="false">
+  <label for="peer-name">Device Name (optional)</label>
+  <input type="text" id="peer-name" placeholder="e.g. my-laptop" autocomplete="off" spellcheck="false">
+  <button onclick="generateBootstrap()">Generate Bootstrap Command</button>
+  <div id="result" class="hidden"></div>
+</div>
+<div class="box">
+  <h3>Auto-Install (Linux / macOS / WSL)</h3>
+  <p>Pipe the bootstrap script directly into bash. Always inspect first:</p>
+  <pre class="cmd" id="inspect-cmd">curl -sSf https://` + ip + `/bootstrap</pre>
+  <p class="hint">Replace TOKEN below and run:</p>
+  <pre class="cmd" id="run-cmd">curl -sSf "https://` + ip + `/bootstrap?token=TOKEN&name=my-device" | sudo bash</pre>
+</div>
+<div class="box">
+  <h3>Manual Redemption (All Platforms)</h3>
+  <p>Redeem via the API and save the config manually:</p>
+  <pre>curl -sSf -X POST https://` + ip + `/api/v1/redeem \
   -H "Content-Type: application/json" \
-  -d '{"token":"YOUR_INVITE_TOKEN","name":"my-device"}'</pre>
-</div>
-<div class="box">
-  <h3>Redeem an Invite (Windows PowerShell)</h3>
-  <pre>$body = @{token="YOUR_INVITE_TOKEN";name="MYPC"} | ConvertTo-Json
-Invoke-RestMethod -Uri http://` + ip + `:` + p + `/api/v1/redeem -Method Post -Body $body -ContentType "application/json"</pre>
+  -d '{"token":"YOUR_TOKEN","name":"my-device"}'</pre>
+  <p class="hint">Windows PowerShell: <code>Invoke-RestMethod -Uri https://` + ip + `/api/v1/redeem -Method Post -Body (@{token="TOKEN";name="MYPC"} | ConvertTo-Json) -ContentType "application/json"</code></p>
 </div>
 <div class="box">
   <h3>After Redemption</h3>
@@ -376,98 +400,85 @@ Invoke-RestMethod -Uri http://` + ip + `:` + p + `/api/v1/redeem -Method Post -B
     <li>Ping <code>` + h.cfg().WGServerIP + `</code> to verify</li>
   </ol>
 </div>
-<div class="box">
-  <h3>API Reference</h3>
-  <pre>GET  /api/v1/health          Health check (no auth)
-POST /api/v1/redeem          Redeem invite token (rate-limited)
-POST /api/v1/login           Login with credentials (rate-limited)
-POST /api/v1/logout          End session
-GET  /api/v1/peers           List peers (server-local)
-DELETE /api/v1/peers/{name}  Remove peer (server-local)
-GET  /api/v1/status          Daemon + WG status (server-local)
-POST /api/v1/invites         Create invite (server-local, admin)
-GET  /api/v1/invites         List invites (server-local, admin)
-DELETE /api/v1/invites/{id}  Revoke invite (server-local, admin)
-GET  /api/v1/users           List users (server-local, owner)
-POST /api/v1/users           Create user (server-local, owner)
-DELETE /api/v1/users/{name}  Delete user (server-local, owner)</pre>
-</div>
 <div class="footer">
   WG-Manager  |  <a href="/api/v1/health">health</a>  |  <a href="/api/v1/status">status</a>
 </div>
+<script>
+function generateBootstrap() {
+  var token = document.getElementById('token').value.trim();
+  var name = document.getElementById('peer-name').value.trim() || 'my-device';
+  var result = document.getElementById('result');
+  result.classList.remove('error');
+  if (!token) {
+    result.className = 'hidden error';
+    result.innerHTML = '<div class="title">Missing Token</div><div>Please paste your invite token.</div>';
+    result.classList.remove('hidden');
+    return;
+  }
+  var url = 'https://` + ip + `/bootstrap?token=' + encodeURIComponent(token) + '&name=' + encodeURIComponent(name);
+  result.className = '';
+  result.innerHTML = '<div class="title">Bootstrap Command</div><pre style="margin-top:4px;word-break:break-all">curl -sSf "' + url + '" | sudo bash</pre><div class="hint">Tip: run <code>curl -sSf "' + url + '"</code> first to inspect the script before piping to bash.</div>';
+  result.classList.remove('hidden');
+}
+</script>
 </body></html>`
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(html))
 }
 
-func (h *Handler) serveQR(w http.ResponseWriter, r *http.Request, mode, name string) {
-	isDirect := mode == "direct"
-
-	if !isDirect {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error":   "QR codes are only available in direct mode",
-			"message": "Use mode=direct to generate a WireGuard config QR. For approval flow, open /connect in a browser.",
-			"hint":    fmt.Sprintf("http://%s:%s/connect", h.cfg().ServerPublicIP, portStr(h.cfg().MgmtListen)),
-		})
+// ServeInviteQR generates an SVG QR code that encodes an invite bootstrap URL.
+// Access: LocalOnly + RequireRole(admin, owner).
+// Query params: ?token=RAW_TOKEN&name=DEVICE_NAME.
+// The raw token is verified by hashing it and checking against the invite store.
+// The QR encodes: https://SERVER_HOST/bootstrap?token=RAW_TOKEN&name=DEVICE_NAME
+func (h *Handler) ServeInviteQR(w http.ResponseWriter, r *http.Request) {
+	token := strings.TrimSpace(r.URL.Query().Get("token"))
+	if token == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "token query parameter is required"})
 		return
 	}
 
+	name := strings.TrimSpace(r.URL.Query().Get("name"))
 	if name == "" {
 		name = "mobile"
 	}
-	q := r.URL.Query()
-	dns := q.Get("dns")
-	if dns == "" {
-		dns = h.cfg().DefaultDNS
-	}
-	if err := validateDNS(dns); err != nil {
+	if err := validatePeerName(name); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 
-	var privateKey, publicKey, ip string
-	if existing, ok := h.store.GetPeer(name); ok {
-		privateKey = existing.PrivateKey
-		publicKey = existing.PublicKey
-		ip = existing.Address
-	} else {
-		var err error
-		privateKey, publicKey, err = h.wgMgr.GenKeyPair()
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "keygen failed"})
-			return
-		}
-		peer := store.Peer{
-			Name: name, PublicKey: publicKey, PrivateKey: privateKey,
-			DNS: dns, Keepalive: h.cfg().PeerKeepalive,
-			CreatedAt: time.Now().UTC().Format(time.RFC3339),
-		}
-		ip, err = h.store.AllocateIPAndAddPeer(&peer, h.cfg().WGSubnet, h.getWGPeerIPs(publicKey))
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "no IP available"})
-			return
-		}
-		if err := h.commitPeerToWG(peer.Name); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-		audit.Log("peer_registered", auditFields("name", name, "ip", ip, "source", "qr"))
+	// Verify the token is valid by checking its hash against the store.
+	tokenSum := sha256.Sum256([]byte(token))
+	tokenHash := hex.EncodeToString(tokenSum[:])
+
+	inv, ok := h.store.GetInviteByTokenHash(tokenHash)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "invite not found for the given token"})
+		return
 	}
 
-	content := fmt.Sprintf(`[Interface]
-Address = %s/24
-PrivateKey = %s
-DNS = %s
+	if inv.Status != store.InviteCreated {
+		writeJSON(w, http.StatusGone, map[string]string{
+			"error":  fmt.Sprintf("invite is already %s", inv.Status),
+			"status": string(inv.Status),
+		})
+		return
+	}
 
-[Peer]
-PublicKey = %s
-Endpoint = %s
-AllowedIPs = %s
-PersistentKeepalive = %d
-`, ip, privateKey, dns, h.store.Server().PublicKey, h.cfg().ServerEndpoint(), h.cfg().WGSubnet, h.cfg().PeerKeepalive)
+	if inv.ExpiresAt != "" {
+		expAt, err := time.Parse(time.RFC3339, inv.ExpiresAt)
+		if err == nil && time.Now().UTC().After(expAt) {
+			writeJSON(w, http.StatusGone, map[string]string{"error": "invite has expired"})
+			return
+		}
+	}
 
-	svg := generateQR(content)
+	// Build the bootstrap URL — uses HTTPS reverse-proxy port, not the raw daemon port.
+	serverHost := h.cfg().ServerPublicIP
+	bootstrapURL := fmt.Sprintf("https://%s/bootstrap?token=%s&name=%s", serverHost, token, name)
+
+	svg := generateQR(bootstrapURL)
 	w.Header().Set("Content-Type", "image/svg+xml")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(svg))
@@ -1175,16 +1186,14 @@ func (h *Handler) Bootstrap(w http.ResponseWriter, r *http.Request) {
 	name := r.URL.Query().Get("name")
 
 	serverHost := h.cfg().ServerPublicIP
-	mgmtPort := portStr(h.cfg().MgmtListen)
 
 	script := fmt.Sprintf(`#!/bin/bash
 set -euo pipefail
 # WG-Manager — Invite Bootstrap Script
-# Served by /bootstrap — inspect before running: curl -sSf https://%s:%s/bootstrap
-# Usage: curl -sSf "https://%s:%s/bootstrap?token=INVITE_TOKEN&name=MYDEVICE" | sudo bash
+# Served by /bootstrap — inspect before running: curl -sSf https://%s/bootstrap
+# Usage: curl -sSf "https://%s/bootstrap?token=INVITE_TOKEN&name=MYDEVICE" | sudo bash
 
 SERVER_HOST="%s"
-MGMT_PORT="%s"
 INVITE_TOKEN="%s"
 PEER_NAME="%s"
 DEFAULT_DNS="%s"
@@ -1195,7 +1204,7 @@ warn() { echo -e "${YELLOW}[!]${NC} $*"; }
 err()  { echo -e "${RED}[x]${NC} $*"; }
 
 if [ "${INVITE_TOKEN}" = "" ]; then
-    err "Missing invite token. Usage: curl -sSf \"https://$SERVER_HOST:$MGMT_PORT/bootstrap?token=INVITE_TOKEN&name=MYDEVICE\" | sudo bash"
+    err "Missing invite token. Usage: curl -sSf \"https://$SERVER_HOST/bootstrap?token=INVITE_TOKEN&name=MYDEVICE\" | sudo bash"
     exit 1
 fi
 
@@ -1294,7 +1303,7 @@ fi
 install_wg
 
 log "Redeeming invite token..."
-RESP=$(curl -sSf -X POST "http://$SERVER_HOST:$MGMT_PORT/api/v1/redeem" \
+RESP=$(curl -sSf -X POST "https://$SERVER_HOST/api/v1/redeem" \
     -H "Content-Type: application/json" \
     -d "{\"token\":\"$INVITE_TOKEN\",\"name\":\"$PEER_NAME\",\"dns\":\"$DEFAULT_DNS\"}")
 
@@ -1350,8 +1359,8 @@ else
 fi
 
 log "Done!"
-`, serverHost, mgmtPort, serverHost, mgmtPort,
-		serverHost, mgmtPort, token, name,
+`, serverHost, serverHost,
+		serverHost, token, name,
 		h.cfg().DefaultDNS, h.cfg().WGServerIP)
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
