@@ -1,8 +1,10 @@
-.PHONY: build build-all clean run dev help vet
+.PHONY: build build-all build-cli clean run dev help vet
 
 BINARY_NAME := wg-mgmt-daemon
+BINARY_CLI := wg-mgmt
 OUTPUT_DIR  := bin
 CMD_DIR     := ./cmd/mgmt-daemon
+CLI_DIR     := ./cmd/wg-mgmt
 
 GOOS        ?= linux
 GOARCH      ?= amd64
@@ -30,6 +32,14 @@ build:
 	@ls -lh $(OUTPUT_DIR)/$(BINARY_NAME)
 
 build-all: build
+
+build-cli:
+	@echo "Building $(BINARY_CLI) for $(GOOS)/$(GOARCH)..."
+	@mkdir -p $(OUTPUT_DIR)
+	GOOS=$(GOOS) GOARCH=$(GOARCH) CGO_ENABLED=$(CGO_ENABLED) GOPROXY=$(GOPROXY) \
+		go build -ldflags="$(LDFLAGS)" -o $(OUTPUT_DIR)/$(BINARY_CLI) $(CLI_DIR)
+	@echo "Done: $(OUTPUT_DIR)/$(BINARY_CLI)"
+	@ls -lh $(OUTPUT_DIR)/$(BINARY_CLI)
 
 build-win:
 	@echo "Building $(BINARY_NAME) for windows/amd64..."
