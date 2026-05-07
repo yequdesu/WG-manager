@@ -1,53 +1,42 @@
 # WG-Manager
 
-基于 WireGuard 的管理层 — 星形拓扑 VPN，客户端一行命令即可加入。服务端运行 Go 守护进程提供 HTTP API。可选安装基于 Ratatui (Rust) 的增强 TUI 仪表盘。
+WG-Manager 是面向星形 WireGuard 拓扑的服务器端管理层。Go 守护进程负责 peer 生命周期、身份系统、邀请入网和 HTTPS bootstrap 分发；Rust Ratatui TUI 提供本地管理界面。
 
-支持 **Linux / macOS / WSL / Windows / 移动端（QR 码）**。
+支持 **Linux / macOS / WSL / Windows / 移动端 QR**。当前版本只保留一种入网模型：**管理员创建一次性邀请，用户使用邀请 token 入网**。
 
 ---
 
 ## 目录
 
-- [设计理念](#设计理念)
+- [设计](#设计)
 - [快速开始](#快速开始)
-  - [1. 服务端初始化](#1-服务端初始化)
-  - [2. 开放端口](#2-开放端口)
-  - [3. 客户端加入](#3-客户端加入)
-  - [4. 管理员操作](#4-管理员操作)
-- [增强 TUI 仪表盘](#增强-tui-仪表盘)
-- [日志与诊断](#日志与诊断)
-- [API 参考](#api-参考)
-- [更新服务器](#更新服务器)
-- [编译](#编译)
-- [常见问题](#常见问题)
+- [用户入网](#用户入网)
+- [管理员操作](#管理员操作)
+- [生产部署](#生产部署)
+- [构建](#构建)
+- [升级旧服务器](#升级旧服务器)
+- [弃用说明](#弃用说明)
+- [排障](#排障)
 
 ---
 
-## 设计理念
+## 设计
 
-两种连接模式，适配不同信任级别：
+### 单一入网模型
 
-| 模式 | 信任度 | 适用场景 | 是否需要 API Key |
-|------|--------|----------|:--:|
-| **审批**（默认） | 低 / 公开 | 对外分发、访客接入、不愿暴露 API Key 的场景 | 否 |
-| **直连** | 高 / 内部 | 管理员直接分发给信任设备，即时加入 | 是（服务端嵌入脚本） |
+系统使用邀请入网：`owner` 或 `admin` 创建邀请 token，用户兑换 token，服务端原子创建 peer 并返回 WireGuard 配置。没有审批队列，没有直连注册，也不会向公网分发 `MGMT_API_KEY`。
 
+```text
+owner/admin 创建邀请  ->  用户兑换邀请  ->  peer 原子创建并写入 WireGuard
 ```
-┌─ 服务器 ──────────────────────────────────┐
-│  wg-mgmt-daemon :58880                     │
-│  GET /connect   ← 所有平台统一入口          │
-│  POST /register ← 直连注册                  │
-│  POST /request  ← 审批提交                  │
-│         │ wg set                            │
-│  WireGuard wg0  10.0.0.1/24                │
-└────┬──────────────┬────────────────────────┘
-     │ WG 隧道       │ HTTP
-  ┌──┴────┐    ┌────┴──────┐
-  │ Linux │    │  Windows   │
-  │ macOS │    │  PS / CMD  │
-  │ WSL   │    │  Mobile QR │
-  └───────┘    └────────────┘
-```
+
+### 角色模型
+
+| 角色 | 权限 |
+|------|------|
+| `owner` | 最高管理员。管理用户、邀请、peer 和系统配置。首次启动时通过 bootstrap 密码创建。 |
+| `admin` | 创建/撤销邀请，管理 peer，查看状态。 |
+| `user` | 通过邀请入网，后续为客户端侧能力预留。 |
 
 ---
 
@@ -55,415 +44,277 @@
 
 ### 1. 服务端初始化
 
-**前置条件：** 一台 Ubuntu/Debian Linux 服务器，已安装 Git。
+前置条件：Ubuntu/Debian 服务器，已安装 Git，生产环境建议准备一个指向服务器的域名。
 
 ```bash
 git clone git@github.com:yequdesu/WG-manager.git ~/WG-manager
 cd ~/WG-manager
-
-# 安装 Go（如未安装）
 sudo apt install -y golang-go
-
-# 一键初始化
 sudo bash server/setup-server.sh
 ```
 
-脚本会依次提示：
+脚本会提示公网 IP、WireGuard 端口、VPN 子网、管理端口和默认 DNS。安装完成后会生成 `config.env`，其中关键项如下：
 
-| 提示 | 说明 | 示例 |
-|------|------|------|
-| `Server Public IP` | 服务器公网 IP（自动检测，回车确认） | `118.178.171.166` |
-| `WireGuard Port` | WG 监听端口 | `51820`（回车默认） |
-| `VPN Subnet` | VPN 内网子网 | `10.0.0.0/24`（回车默认） |
-| `Management API Port` | 管理 API 端口 | `58880`（回车默认） |
-| `Default Client DNS` | 客户端 DNS | `1.1.1.1,8.8.8.8`（回车默认） |
+| 配置项 | 说明 |
+|--------|------|
+| `MGMT_LISTEN=127.0.0.1:58880` | 守护进程默认只监听本机，生产环境通过反向代理暴露 HTTPS。 |
+| `MGMT_API_KEY` | break-glass 管理后路，不应分发给用户。 |
+| `BOOTSTRAP_OWNER_PASSWORD` | 首次启动时创建 `admin` owner 账户的密码。 |
 
-完成后输出摘要，包含连接命令和管理命令。
-
-**后续升级服务器**只需执行：
-```bash
-cd ~/WG-manager && git pull
-sudo bash server/setup-server.sh
-# 提示 "Use existing configuration? [Y/n]" → 输入 Y 回车
-```
-
----
-
-### 2. 开放端口
-
-在云服务商控制台的安全组中添加**入方向**规则：
-
-| 协议 | 端口 | 用途 |
-|------|------|------|
-| UDP | 51820 | WireGuard 隧道 |
-| TCP | 58880 | 管理 API（客户端注册 / 脚本下载） |
-
-服务器本地防火墙（如有 UFW）：
-```bash
-sudo ufw allow 51820/udp
-sudo ufw allow 58880/tcp
-```
-
----
-
-### 3. 客户端加入
-
-以下命令中，把 `118.178.171.166` 替换为你的服务器 IP。
-
----
-
-#### 3.1 审批模式（默认，无需 API Key）
-
-> 客户端提交申请 → 管理员在服务器上批准 → 客户端自动完成配置并连接。
-
-##### Linux / macOS / WSL
-
-打开终端，执行：
+查看首次 owner 密码：
 
 ```bash
-curl -sSf http://118.178.171.166:58880/connect | sudo bash
+grep BOOTSTRAP_OWNER_PASSWORD ~/WG-manager/config.env
 ```
 
-脚本会自动完成：
-1. 检测操作系统
-2. 检测/安装 WireGuard
-3. 提交申请（peer 名称默认使用本机 hostname）
-4. 每 3 秒轮询审批结果
-5. 管理员批准后自动写入配置并启动连接
+### 2. 创建邀请
 
-**自定义 peer 名称：**
-```bash
-curl -sSf "http://118.178.171.166:58880/connect?name=my-device" | sudo bash
-```
-
-##### Windows PowerShell
-
-```powershell
-# 步骤 1：下载脚本
-Invoke-WebRequest http://118.178.171.166:58880/connect -OutFile join.ps1
-
-# 步骤 2：运行（交互输入名称）
-.\join.ps1
-```
-
-脚本自动完成：提交申请 → 等待批准 → 批准后自动下载 `.conf` → 打印手动导入指引。
-
-**批准后的操作：**
-1. 下载安装 [WireGuard for Windows](https://download.wireguard.com/windows-client/)
-2. 打开 WireGuard → 点击 **Import Tunnel(s) from file**
-3. 选择脚本输出的 `.conf` 文件路径
-4. 点击 **Activate** 激活连接
-
-##### Windows CMD
-
-```cmd
-:: 步骤 1：提交申请
-curl -X POST http://118.178.171.166:58880/api/v1/request ^
-  -H "Content-Type: application/json" ^
-  -d "{\"hostname\":\"MYPC\",\"dns\":\"1.1.1.1\"}"
-
-:: 返回: {"request_id":"abc123...","status":"pending"}
-:: 记下 request_id
-
-:: 步骤 2：轮询审批状态
-curl -s http://118.178.171.166:58880/api/v1/request/abc123
-
-:: 步骤 3：管理员批准后，下载 .conf
-curl -o wg0.conf "http://118.178.171.166:58880/connect?mode=direct&name=MYPC"
-
-:: 步骤 4：导入 WireGuard 客户端（同 PowerShell 的步骤）
-```
-
-##### 移动端（QR 码）
-
-QR 码仅支持**直连模式**。管理员在服务器上生成：
+可以用 Rust TUI 创建邀请：
 
 ```bash
-# 自动注册 peer "phone1" 并生成 QR（手机可直接扫码）
-curl -s "http://localhost:58880/connect?qrcode&mode=direct&name=phone1" -o phone1.svg
+cd ~/WG-manager/wg-tui
+bash install.sh --ustc
+wg-tui
 ```
 
-将 `phone1.svg` 发送给用户 → WireGuard App → Scan QR → 连接。
-
----
-
-#### 3.2 直连模式（管理员分发，内含 API Key）
-
-> 管理员将 URL 发给信任用户。用户执行后直接加入，无需审批。
-
-API Key 存放位置（仅管理员可见）：
-```bash
-grep MGMT_API_KEY ~/WG-manager/config.env
-```
-
-##### Linux / macOS / WSL
-
-```bash
-curl -sSf "http://118.178.171.166:58880/connect?mode=direct&name=my-laptop" | sudo bash
-```
-
-脚本自动完成：WG 检测安装 → POST /register（内嵌 API Key）→ 写配置 → 启动连接。
-
-##### Windows PowerShell
-
-```powershell
-Invoke-WebRequest "http://118.178.171.166:58880/connect?mode=direct&name=MYPC" -OutFile wg0.conf
-```
-
-然后将 `wg0.conf` 导入 WireGuard 客户端。
-
-##### Windows CMD
-
-```cmd
-curl -o wg0.conf "http://118.178.171.166:58880/connect?mode=direct&name=MYPC"
-```
-
----
-
-#### 3.3 验证连接
-
-加入后在客户端设备上：
-
-```bash
-sudo wg show              # 检查 WireGuard 状态
-ping 10.0.0.1             # ping 网关（服务器）
-ping 10.0.0.2             # ping 其他 peer
-```
-
-**Windows 注意：** 如果 ping 不通，需要允许 ICMP：
-```powershell
-New-NetFirewallRule -DisplayName "WG ICMP" -Direction Inbound -Protocol ICMPv4 -IcmpType 8 -Action Allow
-```
-
----
-
-### 4. 管理员操作
-
-所有管理操作在服务器上执行。
-
-#### 4.1 TUI 管理面板（推荐）
-
-```bash
-wg-tui                 # 增强版（如已安装）或原始版
-wg-tui --legacy        # 强制使用原始版 TUI
-```
-
-**原始版 TUI**（始终可用）：
-
-| 标签页 | 内容 | 操作 |
-|--------|------|------|
-| **Peers** | 所有已连接 peer + 详情面板 | `↑↓` 选择，`d` 删除 |
-| **Requests** | 待审批列表 | `↑↓` 选择，`a` 批准，`d` 拒绝 |
-| **Status** | 服务状态 + 各 peer 流量 | 只读 |
-| **Log** | 最近 50 条审计日志 | `j/k` 滚动 |
-
-全局快捷键：`Tab` 切换标签，`r` 刷新，`q` 退出。
-
-#### 4.2 审批请求（CLI）
+也可以用 API 创建邀请：
 
 ```bash
 API_KEY=$(grep MGMT_API_KEY ~/WG-manager/config.env | cut -d= -f2)
 
-# 查看待审批列表
-curl -s http://127.0.0.1:58880/api/v1/requests \
-  -H "Authorization: Bearer $API_KEY" | python3 -m json.tool
-
-# 批准（替换 <id> 为实际的 request_id）
-curl -s -X POST http://127.0.0.1:58880/api/v1/requests/<id>/approve \
-  -H "Authorization: Bearer $API_KEY"
-
-# 拒绝
-curl -s -X DELETE http://127.0.0.1:58880/api/v1/requests/<id> \
-  -H "Authorization: Bearer $API_KEY"
+curl -s -X POST http://127.0.0.1:58880/api/v1/invites \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"max_uses": 1}'
 ```
 
-#### 4.3 删除 peer
+响应会包含一次性 `token` 和 bootstrap URL，例如：
 
-```bash
-# TUI 方式：Peers 标签页 → ↑↓ 选中 → d 确认（再按 d/y）
-
-# CLI 方式：
-curl -s -X DELETE http://127.0.0.1:58880/api/v1/peers/<peer名称> \
-  -H "Authorization: Bearer $API_KEY"
-```
-
-#### 4.4 离线预生成配置（管理员手动分发）
-
-在服务器本地生成客户端配置文件，自动注册 peer 并加入管理，然后将 `.conf` 文件手动分发给客户端——无需客户端发 HTTP 请求。
-
-```bash
-# 生成新 peer 的配置（保存至 scripts/<名称>.conf）
-sudo bash ~/WG-manager/scripts/create-peer.sh --name my-laptop
-
-# 自定义 DNS 和输出路径
-sudo bash ~/WG-manager/scripts/create-peer.sh --name office-pc --dns 8.8.8.8 -o /tmp/office.conf
-
-# 将 .conf 文件分发给客户端（邮件、U盘等）
-# 客户端导入 WireGuard 即可——无需审批，无需联网请求
-```
-
-Peer 会在服务器端自动注册并加入 WireGuard 接口。客户端只需导入 `.conf` 文件并激活即可连接。
-
-#### 4.5 健康检查
-
-```bash
-bash ~/WG-manager/scripts/health-check.sh
-bash ~/WG-manager/scripts/list-peers.sh
+```json
+{
+  "token": "inv_abc123...",
+  "url": "https://vpn.example.com/bootstrap?token=inv_abc123..."
+}
 ```
 
 ---
 
-## 增强 TUI 仪表盘
+## 用户入网
 
-可选安装的增强版 TUI，基于 **Rust + Ratatui**，拥有粒子物理背景动画和流畅的交互体验。
-
-### 安装
+### Linux / macOS / WSL
 
 ```bash
-cd ~/WG-manager/wg-tui
-bash install.sh --ustc          # 中国地区使用 USTC 镜像
-bash install.sh                  # 默认
+curl -sSf "https://vpn.example.com/bootstrap?token=inv_abc123&name=my-device" | sudo bash
 ```
 
-### 快捷键
+脚本会检测系统、安装 WireGuard（如需要）、兑换邀请、写入配置、启动隧道并验证连通性。
 
-| 按键 | 操作 |
-|------|------|
-| `Tab` / `←→` | 切换标签 |
-| `↑↓` / `j` `k` | 上下选择 |
-| `/` | 搜索 peer |
-| `a` | 批准请求 |
-| `d` / `y` | 删除 peer / 拒绝请求 |
-| `r` | 刷新数据 |
-| `=` / `-` / `0` | 放大 / 缩小 / 重置 |
-| `Ctrl+Arrows` | 移动窗口 |
+### Windows PowerShell
+
+```powershell
+Invoke-WebRequest "https://vpn.example.com/bootstrap?token=inv_abc123&name=MYPC" -OutFile join.ps1
+.\join.ps1
+```
+
+### Windows CMD
+
+```cmd
+curl -o wg0.conf "https://vpn.example.com/bootstrap?token=inv_abc123&name=MYPC"
+```
+
+然后在 WireGuard 客户端中导入 `wg0.conf`。
+
+### 移动端 QR
+
+管理员在服务器本地生成 QR：
+
+```bash
+API_KEY=$(grep MGMT_API_KEY ~/WG-manager/config.env | cut -d= -f2)
+
+curl -s "http://127.0.0.1:58880/api/v1/invites/qrcode?token=inv_abc123&name=phone1" \
+  -H "Authorization: Bearer $API_KEY" \
+  -o phone1.svg
+```
+
+将 `phone1.svg` 发给用户，用户用 WireGuard 移动端扫码导入。
+
+---
+
+## 管理员操作
+
+### TUI
+
+```bash
+wg-tui
+```
+
+常用快捷键：
+
+| 键 | 动作 |
+|----|------|
+| `Tab` / `←→` | 切换标签页 |
+| `↑↓` / `j` `k` | 选择条目 |
+| `d` / `y` | 删除 peer / 撤销邀请 |
+| `r` | 刷新 |
 | `?` | 帮助 |
 | `q` | 退出 |
 
-### 交叉编译（Windows → Linux）
+### API
 
 ```bash
-# 一次性安装目标
-rustup target add x86_64-unknown-linux-musl
+# 列出邀请
+curl -s http://127.0.0.1:58880/api/v1/invites \
+  -H "Authorization: Bearer $API_KEY"
 
-# 从任意平台编译 Linux 二进制
+# 撤销邀请
+curl -s -X DELETE http://127.0.0.1:58880/api/v1/invites/inv_abc123 \
+  -H "Authorization: Bearer $API_KEY"
+
+# 列出 peer
+curl -s http://127.0.0.1:58880/api/v1/peers \
+  -H "Authorization: Bearer $API_KEY"
+```
+
+---
+
+## 生产部署
+
+守护进程默认绑定 `127.0.0.1:58880`。生产环境必须使用 nginx 或 Caddy 在公网终止 TLS，并只暴露公共路由。
+
+公共路由：
+
+| 路由 | 说明 |
+|------|------|
+| `/api/v1/health` | 健康检查 |
+| `/api/v1/login` | 登录 |
+| `/api/v1/logout` | 登出 |
+| `/api/v1/redeem` | 兑换邀请 |
+| `/bootstrap` | bootstrap 脚本 |
+| `/connect` | 浏览器入网页 |
+
+管理路由只能本机访问，不要通过反向代理暴露：
+
+| 路由 | 说明 |
+|------|------|
+| `/api/v1/peers` | peer 管理 |
+| `/api/v1/invites` | 邀请管理 |
+| `/api/v1/users` | 用户管理 |
+| `/api/v1/status` | 状态 |
+
+nginx 示例：
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name vpn.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/vpn.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/vpn.example.com/privkey.pem;
+
+    location /api/v1/health { proxy_pass http://127.0.0.1:58880; }
+    location /api/v1/login  { proxy_pass http://127.0.0.1:58880; }
+    location /api/v1/logout { proxy_pass http://127.0.0.1:58880; }
+    location /api/v1/redeem { proxy_pass http://127.0.0.1:58880; }
+    location /bootstrap     { proxy_pass http://127.0.0.1:58880; }
+    location /connect       { proxy_pass http://127.0.0.1:58880; }
+
+    location /api/v1/peers   { return 403; }
+    location /api/v1/invites { return 403; }
+    location /api/v1/users   { return 403; }
+    location /api/v1/status  { return 403; }
+}
+```
+
+---
+
+## 构建
+
+### Go 守护进程
+
+```bash
+make build
+make build-all
+make vet
+```
+
+### Rust TUI
+
+```bash
 cd wg-tui
+cargo build --release
 bash build-linux.sh
-
-# 部署
-scp wg-tui-ratatui-linux user@server:~/.local/bin/wg-tui-ratatui
-ssh user@server 'chmod +x ~/.local/bin/wg-tui-ratatui'
 ```
 
 ---
 
-## 日志与诊断
+## 升级旧服务器
 
-### 统一日志
-
-所有事件写入 `/var/log/wg-mgmt/wg-mgmt.log`，按模块分类：
-
-| 模块 | 记录的事件 |
-|------|-----------|
-| `[DAEMON]` | 守护进程启停、peer 注册/删除、请求生命周期、配置热重载 |
-| `[WG]` | peer 连接/断开、握手完成、端点变更、密钥轮换、传输里程碑 |
-| `[HTTP]` | API 写操作：POST/PUT/DELETE 请求、非 localhost 来源请求 |
-
-**格式示例：**
-```
-2026-05-03T15:00:00.123456Z [DAEMON] daemon_started version=1.0.0
-2026-05-03T15:00:10.000000Z [WG] peer_connected peer=RoJ7SRMQC7Zu endpoint=112.49.240.57:16262
-2026-05-03T15:00:15.456789Z [DAEMON] request_approved name=phone1 ip=10.0.0.7
-```
-
-日志按 100 MB 轮转（保留 10 份）。TUI 的定时轮询（本地 GET 请求）已过滤，不会污染日志。
-
-### 查看日志
+已有旧版本正在运行时，使用以下流程升级：
 
 ```bash
-tail -f /var/log/wg-mgmt/wg-mgmt.log
+cd ~/WG-manager
+git pull
+sudo bash server/setup-server.sh
+# 出现 "Use existing configuration? [Y/n]" 时输入 Y 回车
+
+# 可选：安装/更新 Rust TUI
+cd ~/WG-manager/wg-tui && bash install.sh
 ```
 
----
-
-## API 参考
-
-基础路径：`http://IP:58880`
-
-| 方法 | 路径 | 鉴权 | 说明 |
-|------|------|------|------|
-| `GET` | `/connect` | 无 | 统一分发——返回 bash/ps1/conf/HTML/QR |
-| `GET` | `/connect?qrcode` | 无 | SVG QR 码（仅直连模式） |
-| `POST` | `/register` | KeyOrLocal | 注册 peer，返回配置 |
-| `POST` | `/request` | 限流 | 提交审批申请 |
-| `GET` | `/request/{id}` | 无 | 轮询状态 |
-| `GET` | `/requests` | LocalOnly | 查看待审批列表 |
-| `POST` | `/requests/{id}/approve` | LocalOnly | 批准 |
-| `DELETE` | `/requests/{id}` | LocalOnly | 拒绝 |
-| `GET` | `/peers` | LocalOnly | 查看 peer 列表 |
-| `DELETE` | `/peers/{name}` | LocalOnly | 删除 peer |
-| `GET` | `/status` | LocalOnly | 服务状态 |
-| `GET` | `/health` | 无 | 存活检查 |
-
-鉴权说明：
-- `LocalOnly` = 仅允许 `127.0.0.1` 访问（服务器本地操作）
-- `KeyOrLocal` = localhost 免鉴权，或远程提供 `Authorization: Bearer <KEY>`
-
----
-
-## 更新服务器
+升级后确认：
 
 ```bash
-cd ~/WG-manager && git pull
-sudo bash server/setup-server.sh   # Y 复用配置，自动重新编译
-
-# 可选：更新增强 TUI
-cd wg-tui && bash install.sh
+grep MGMT_LISTEN ~/WG-manager/config.env
+grep BOOTSTRAP_OWNER_PASSWORD ~/WG-manager/config.env
+sudo systemctl restart wg-mgmt
+sudo systemctl status wg-mgmt --no-pager
 ```
 
-更新过程中已有 WireGuard 连接**不受影响**。
+注意事项：
+
+- 已有 WireGuard 连接不会中断，现有 peer 会继续保留。
+- 旧的审批请求数据不再使用；需要让新用户通过邀请重新入网。
+- 删除旧脚本或 cron 中对 `/api/v1/register`、`/api/v1/request`、`/connect?mode=direct` 的调用。
+- 确保公网只开放 HTTPS `443/tcp` 和 WireGuard `51820/udp`；管理端口 `58880` 应只监听本机。
 
 ---
 
-## 编译
+## 弃用说明
 
-### Go 守护进程 + 原始 TUI
+以下旧端点保留为迁移提示，统一返回 `410 Gone`：
 
-```bash
-make build      # 守护进程 → bin/wg-mgmt-daemon
-make build-tui  # 原始 TUI → bin/wg-tui-legacy
-make build-all  # 两个一起
-make vet        # go vet
-```
+| 旧端点 | 替代方案 |
+|--------|----------|
+| `POST /api/v1/register` | `POST /api/v1/redeem` |
+| `POST /api/v1/request` | `POST /api/v1/redeem` |
+| `GET /api/v1/request/{id}` | 无需轮询 |
+| `GET /api/v1/requests` | `GET /api/v1/invites` |
+| `POST /api/v1/requests/{id}/approve` | 创建邀请 |
+| `DELETE /api/v1/requests/{id}` | 撤销邀请 |
 
-### 增强 TUI (Rust)
+移除的旧行为：
 
-```bash
-cd wg-tui
-cargo build --release    # → target/release/wg-tui(.exe)
-bash build-linux.sh      # 交叉编译 Linux musl 静态二进制
-```
-
----
-
-## 常见问题
-
-| 现象 | 解决方案 |
-|------|----------|
-| Windows 无法 ping 通 | `New-NetFirewallRule -DisplayName "WG ICMP" -Direction Inbound -Protocol ICMPv4 -IcmpType 8 -Action Allow` |
-| 无法访问管理 API | 检查云安全组是否放行 TCP 58880 |
-| 无 WireGuard 握手 | 检查云安全组是否放行 UDP 51820 |
-| 注册重复（409） | 先删除旧 peer 再重新加入 |
-| 部署时提示 "Binary is up to date" 但功能未变 | `sudo rm -f /usr/local/bin/wg-mgmt-daemon` 强制重新编译 |
-| 守护进程启动失败 | `journalctl -u wg-mgmt -n 20` |
-| WG 接口不存在 | `modprobe wireguard && ip link add wg0 type wireguard` |
-| `?name=` 传入名称不生效 | 守护进程二进制可能过期 — 执行 `sudo bash server/setup-server.sh` |
-| 审计日志始终为空 | logrotate 轮转了文件 — 执行 `sudo systemctl kill -s HUP wg-mgmt` |
-| Rust 未找到 (wg-tui) | 安装 Rust: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
-| `wg-tui` 命令不存在 | 两种 TUI 共享 `/usr/local/bin/wg-tui` 启动器 — 重新运行 setup |
+- `?mode=direct`
+- `?mode=approval`
+- `CLEAN_PEERS_ON_EXIT`
+- `scripts/create-peer.sh`
+- 旧 Go TUI 和 `wg-tui --legacy`
 
 ---
 
-## 许可证
+## 排障
+
+| 问题 | 处理 |
+|------|------|
+| API 访问失败 | 检查 nginx/Caddy 与安全组是否允许 `443/tcp` |
+| 无 WireGuard handshake | 检查安全组是否允许 `51820/udp` |
+| peer 名称重复 | 删除旧 peer 后重新使用邀请入网 |
+| 邀请 token 无效 | token 一次性使用，检查是否已兑换或撤销 |
+| 守护进程启动失败 | `journalctl -u wg-mgmt -n 50 --no-pager` |
+| TUI 未安装 | `cd ~/WG-manager/wg-tui && bash install.sh` |
+
+---
+
+## License
 
 MIT

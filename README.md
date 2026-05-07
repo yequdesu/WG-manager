@@ -194,7 +194,9 @@ Admins can generate QR codes from the server:
 
 ```bash
 # Generate QR for an invite token
-curl -s "http://localhost:58880/connect?qrcode&token=inv_abc123&name=phone1" -o phone1.svg
+curl -s "http://localhost:58880/api/v1/invites/qrcode?token=inv_abc123&name=phone1" \
+  -H "Authorization: Bearer $API_KEY" \
+  -o phone1.svg
 ```
 
 Share `phone1.svg` with the user. They scan it with the WireGuard mobile app and connect.
@@ -208,8 +210,7 @@ All management is done on the server or via the management API.
 #### 5.1 TUI Dashboard (recommended)
 
 ```bash
-wg-tui                 # Enhanced (if installed) or Legacy
-wg-tui --legacy        # Force Legacy TUI
+wg-tui                 # Rust Ratatui dashboard, if installed
 ```
 
 The TUI shows tabs for Peers, Invites, Users, Status, and Log.
@@ -348,7 +349,6 @@ Accessible over HTTPS with no authentication (except login/redeem which handle a
 | `POST` | `/api/v1/redeem` | None | Redeem an invite token, receive WireGuard config |
 | `GET` | `/bootstrap` | None | Bootstrap script (pipe to bash) |
 | `GET` | `/connect` | None | Browser portal or script dispatch by User-Agent |
-| `GET` | `/connect?qrcode` | None | SVG QR code for invite token |
 
 ### Admin Routes
 
@@ -360,6 +360,7 @@ Localhost-only (enforced by daemon middleware). Do not expose via reverse proxy.
 | `DELETE` | `/api/v1/peers/{name}` | LocalOnly | Remove a peer |
 | `GET` | `/api/v1/invites` | LocalOnly | List all invites |
 | `POST` | `/api/v1/invites` | LocalOnly | Create a new invite |
+| `GET` | `/api/v1/invites/qrcode` | LocalOnly | SVG QR code for invite token |
 | `DELETE` | `/api/v1/invites/{token}` | LocalOnly | Revoke an invite |
 | `GET` | `/api/v1/users` | LocalOnly | List users |
 | `DELETE` | `/api/v1/users/{name}` | LocalOnly | Remove a user |
@@ -500,12 +501,11 @@ The bootstrap script contains no global API key. The invite token is the sole cr
 
 ## Building
 
-### Go Daemon + Legacy TUI
+### Go Daemon
 
 ```bash
 make build      # Daemon -> bin/wg-mgmt-daemon
-make build-tui  # Legacy TUI -> bin/wg-tui-legacy
-make build-all  # Both
+make build-all  # Daemon
 make vet        # go vet ./...
 ```
 
@@ -519,17 +519,34 @@ bash build-linux.sh      # Cross-compile for Linux (musl static binary)
 
 ---
 
-## Updating
+## Updating an Existing Server
+
+This path upgrades a server that is already running an older WG-Manager version. Existing WireGuard tunnels keep working because the update preserves `/etc/wireguard/wg0.conf` and `server/peers.json`.
 
 ```bash
 cd ~/WG-manager && git pull
-sudo bash server/setup-server.sh   # Y to reuse config, auto-rebuilds if source changed
+sudo bash server/setup-server.sh
+# When prompted: "Use existing configuration? [Y/n]" -> Y + Enter
 
-# Optional: rebuild enhanced TUI
-cd wg-tui && bash install.sh
+# Optional: install or rebuild the Rust TUI
+cd ~/WG-manager/wg-tui && bash install.sh
 ```
 
-Existing WireGuard connections are not interrupted during updates.
+After upgrading from the old approval/direct model:
+
+```bash
+# 1. Confirm the daemon is listening only on localhost
+grep MGMT_LISTEN ~/WG-manager/config.env
+
+# 2. Save the generated owner password for first login
+grep BOOTSTRAP_OWNER_PASSWORD ~/WG-manager/config.env
+
+# 3. Restart and inspect service health
+sudo systemctl restart wg-mgmt
+sudo systemctl status wg-mgmt --no-pager
+```
+
+Then configure HTTPS reverse proxying to `http://127.0.0.1:58880`, create new invites, and replace any old scripts that call `/api/v1/register`, `/api/v1/request`, or `/connect?mode=direct`.
 
 ---
 
@@ -565,7 +582,7 @@ The following endpoints are deprecated and return HTTP 410 (Gone). They are reta
 
 If you are upgrading from a version that used the approval flow:
 
-1. The daemon automatically expires any pending approval requests on startup.
+1. Legacy pending approval requests are ignored by the new daemon; recreate access through invites.
 2. Create invites for your existing users via `POST /api/v1/invites`.
 3. Share the invite URLs with users. They can join by redeeming their invite.
 4. Old peers on the server continue to work. No action needed for existing WireGuard connections.
@@ -587,7 +604,7 @@ If you are upgrading from a version that used the approval flow:
 | Invite token invalid | Tokens are one-time use. Check if already redeemed via `curl http://127.0.0.1:58880/api/v1/invites -H "Authorization: Bearer $KEY"` |
 | Audit log empty | Logrotate rotated the file. Run `sudo systemctl kill -s HUP wg-mgmt` |
 | Rust not found (wg-tui) | Install Rust: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
-| `wg-tui` command not found | Both TUI variants share `/usr/local/bin/wg-tui` launcher. Re-run setup. |
+| `wg-tui` command not found | Install the Rust TUI: `cd ~/WG-manager/wg-tui && bash install.sh` |
 
 ---
 
