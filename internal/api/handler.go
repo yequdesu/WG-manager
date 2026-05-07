@@ -649,32 +649,8 @@ func (h *Handler) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 	tokenSum := sha256.Sum256([]byte(req.Token))
 	tokenHash := hex.EncodeToString(tokenSum[:])
 
-	inv, ok := h.store.GetInviteByTokenHash(tokenHash)
-	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "invite not found"})
-		return
-	}
-
-	if inv.Status != store.InviteCreated {
-		writeJSON(w, http.StatusGone, map[string]string{
-			"error":  fmt.Sprintf("invite is already %s", inv.Status),
-			"status": string(inv.Status),
-		})
-		return
-	}
-
-	if inv.ExpiresAt != "" {
-		expAt, err := time.Parse(time.RFC3339, inv.ExpiresAt)
-		if err == nil && time.Now().UTC().After(expAt) {
-			writeJSON(w, http.StatusGone, map[string]string{"error": "invite has expired"})
-			return
-		}
-	}
-
+	// Resolve DNS default first — invite-specific override applied after redeem.
 	dns := req.DNS
-	if dns == "" && inv.DNSOverride != "" {
-		dns = inv.DNSOverride
-	}
 	if dns == "" {
 		dns = h.cfg().DefaultDNS
 	}
@@ -683,8 +659,24 @@ func (h *Handler) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 1. Atomically redeem the invite BEFORE creating any peer resources.
+	// This prevents the double-redeem race: if provisioning fails later,
+	// the invite is consumed but no orphan peer exists.
+	redeemedInv, err := h.store.RedeemInviteByTokenHash(tokenHash, req.Name)
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+
+	// Apply invite-level DNS override if user didn't specify one.
+	if req.DNS == "" && redeemedInv.DNSOverride != "" {
+		dns = redeemedInv.DNSOverride
+	}
+
+	// 2. Generate WireGuard key pair for the new peer.
 	privateKey, publicKey, err := h.wgMgr.GenKeyPair()
 	if err != nil {
+		h.store.UnredeemByTokenHash(tokenHash)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate keys"})
 		return
 	}
@@ -698,29 +690,24 @@ func (h *Handler) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
 	}
 
+	// 3. Allocate IP and add peer to the store.
 	_, err = h.store.AllocateIPAndAddPeer(&peer, h.cfg().WGSubnet, h.getWGPeerIPs(publicKey))
 	if err != nil {
+		h.store.UnredeemByTokenHash(tokenHash)
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
 
+	// 4. Commit peer to WireGuard: add live peer, write config, persist state.
+	// commitPeerToWG handles its own rollback (removes peer from store on failure).
 	if err := h.commitPeerToWG(peer.Name); err != nil {
+		h.store.UnredeemByTokenHash(tokenHash)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 
-	if _, err := h.store.RedeemInviteByTokenHash(tokenHash, peer.Name); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to redeem invite"})
-		return
-	}
-
-	if err := h.store.Save(); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist state"})
-		return
-	}
-
 	src := remoteIP(r)
-	audit.Log("invite_redeemed", auditFields("name", peer.Name, "ip", peer.Address, "source", src, "invite_id", inv.ID))
+	audit.Log("invite_redeemed", auditFields("name", peer.Name, "ip", peer.Address, "source", src, "invite_id", redeemedInv.ID))
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,

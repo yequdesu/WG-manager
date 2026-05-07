@@ -38,12 +38,12 @@ func NewServer(ctx context.Context, cfg *Config, s *store.State, m *wg.Manager) 
 
 	// ── Admin routes (local-only, role-based auth) ───────────────────────
 
-	mux.Handle("/api/v1/peers", methodGuard(http.MethodGet, LocalOnly(h.ListPeers)))
-	mux.Handle("/api/v1/peers/", methodGuard(http.MethodDelete, LocalOnly(h.DeletePeer)))
-	mux.Handle("/api/v1/status", methodGuard(http.MethodGet, LocalOnly(h.Status)))
+	adminMW := RequireRole(s, cfg.APIKey, store.RoleAdmin, store.RoleOwner)
+	mux.Handle("/api/v1/peers", methodGuard(http.MethodGet, LocalOnly(adminMW(h.ListPeers))))
+	mux.Handle("/api/v1/peers/", methodGuard(http.MethodDelete, LocalOnly(adminMW(h.DeletePeer))))
+	mux.Handle("/api/v1/status", methodGuard(http.MethodGet, LocalOnly(adminMW(h.Status))))
 
-	inviteAdminMW := RequireRole(s, cfg.APIKey, store.RoleAdmin, store.RoleOwner)
-	mux.HandleFunc("/api/v1/invites", LocalOnly(inviteAdminMW(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/v1/invites", LocalOnly(adminMW(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
 			h.ListInvites(w, r)
@@ -53,8 +53,8 @@ func NewServer(ctx context.Context, cfg *Config, s *store.State, m *wg.Manager) 
 			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		}
 	})))
-	mux.Handle("/api/v1/invites/qrcode", methodGuard(http.MethodGet, LocalOnly(inviteAdminMW(h.ServeInviteQR))))
-	mux.Handle("/api/v1/invites/", methodGuard(http.MethodDelete, LocalOnly(inviteAdminMW(h.RevokeInvite))))
+	mux.Handle("/api/v1/invites/qrcode", methodGuard(http.MethodGet, LocalOnly(adminMW(h.ServeInviteQR))))
+	mux.Handle("/api/v1/invites/", methodGuard(http.MethodDelete, LocalOnly(adminMW(h.RevokeInvite))))
 
 	ownerMW := RequireRole(s, cfg.APIKey, store.RoleOwner)
 	mux.HandleFunc("/api/v1/users", LocalOnly(ownerMW(func(w http.ResponseWriter, r *http.Request) {

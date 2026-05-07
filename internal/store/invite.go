@@ -252,6 +252,27 @@ func (s *State) RedeemInviteByTokenHash(tokenHash, redeemedBy string) (*Invite, 
 	return nil, fmt.Errorf("invite not found")
 }
 
+// UnredeemByTokenHash rolls back a redeemed invite to "created" status.
+// Used when peer provisioning fails after the invite was atomically consumed.
+func (s *State) UnredeemByTokenHash(tokenHash string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for id, inv := range s.Invites {
+		if inv.TokenHash == tokenHash {
+			if inv.Status != InviteRedeemed {
+				return fmt.Errorf("invite is %s, not redeemed", inv.Status)
+			}
+			inv.Status = InviteCreated
+			inv.RedeemedAt = ""
+			inv.RedeemedBy = ""
+			s.Invites[id] = inv
+			return nil
+		}
+	}
+	return fmt.Errorf("invite not found")
+}
+
 // ExpireInvites removes invites whose ExpiresAt is before now and returns
 // the list of expired invites.
 func (s *State) ExpireInvites() []Invite {
