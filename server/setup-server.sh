@@ -209,6 +209,7 @@ collect_info() {
 
     if [[ -f "$CONFIG_FILE" ]]; then
         existing_ip=$(grep SERVER_PUBLIC_IP "$CONFIG_FILE" 2>/dev/null | cut -d= -f2 || echo "")
+        existing_host=$(grep SERVER_HOST "$CONFIG_FILE" 2>/dev/null | cut -d= -f2 || echo "")
         existing_wg_port=$(grep WG_PORT "$CONFIG_FILE" 2>/dev/null | cut -d= -f2 || echo "51820")
         existing_subnet=$(grep WG_SUBNET "$CONFIG_FILE" 2>/dev/null | cut -d= -f2 || echo "10.0.0.0/24")
         existing_mgmt_port=$(grep MGMT_LISTEN "$CONFIG_FILE" 2>/dev/null | sed 's/.*://' || echo "58880")
@@ -217,6 +218,9 @@ collect_info() {
         if [[ -n "$existing_ip" ]]; then
             warn "Existing configuration found:"
             info "  Public IP: $existing_ip"
+            if [[ -n "$existing_host" ]]; then
+                info "  Domain:     $existing_host"
+            fi
             info "  WG Port:   $existing_wg_port"
             info "  Subnet:    $existing_subnet"
             info "  MGMT Port: $existing_mgmt_port"
@@ -225,6 +229,7 @@ collect_info() {
             read -p "$(echo -e "${BOLD}Use existing configuration? [Y/n]: ")" USE_EXISTING
             if [[ ! "$USE_EXISTING" =~ ^[Nn] ]]; then
                 SERVER_PUBLIC_IP="$existing_ip"
+                SERVER_HOST="$existing_host"
                 WG_PORT="$existing_wg_port"
                 WG_SUBNET="$existing_subnet"
                 MGMT_PORT="$existing_mgmt_port"
@@ -250,6 +255,16 @@ collect_info() {
         exit 1
     fi
 
+    # ── Optional domain (HTTPS / reverse proxy) ──
+    echo ""
+    read -p "$(echo -e "${BOLD}Server Domain (optional)${NC} [skip]: ")" SERVER_HOST
+    if [[ -n "$SERVER_HOST" ]]; then
+        info "Using domain $SERVER_HOST for public-facing URLs (HTTPS if reverse proxy configured)"
+        info "  WireGuard endpoint: $SERVER_PUBLIC_IP:$WG_PORT (unchanged)"
+    else
+        info "No domain — public-facing URLs will use $SERVER_PUBLIC_IP (HTTP fallback)"
+    fi
+
     read -p "$(echo -e "${BOLD}WireGuard Port${NC} [51820]: ")" WG_PORT
     WG_PORT="${WG_PORT:-51820}"
 
@@ -265,9 +280,12 @@ collect_info() {
     echo ""
     info "Configuration Summary:"
     info "  Public IP:     $SERVER_PUBLIC_IP"
+    if [[ -n "$SERVER_HOST" ]]; then
+        info "  Domain:         $SERVER_HOST"
+    fi
     info "  WG Port:       $WG_PORT"
     info "  VPN Subnet:    $WG_SUBNET"
-	info "  Management:    127.0.0.1:$MGMT_PORT"
+    info "  Management:    127.0.0.1:$MGMT_PORT"
     info "  Default DNS:   $DEFAULT_DNS"
     echo ""
 
@@ -438,6 +456,7 @@ WG_PORT=$WG_PORT
 WG_SUBNET=$WG_SUBNET
 WG_SERVER_IP=$server_address
 SERVER_PUBLIC_IP=$SERVER_PUBLIC_IP
+SERVER_HOST=$SERVER_HOST
 MGMT_LISTEN=$mgmt_listen
 MGMT_API_KEY=$api_key
 BOOTSTRAP_OWNER_PASSWORD=$owner_pw
@@ -586,6 +605,9 @@ print_summary() {
 
     echo -e "  ${BOLD}Server Info${NC}"
     echo -e "    Server IP:        ${BOLD}${SERVER_PUBLIC_IP}${NC}"
+    if [[ -n "$SERVER_HOST" ]]; then
+        echo -e "    Server Domain:    ${BOLD}${SERVER_HOST}${NC} (HTTPS-capable)"
+    fi
     echo -e "    WG Port:          ${BOLD}${WG_PORT}${NC} (UDP)"
     echo -e "    MGMT Port:        ${BOLD}${mgmt_port}${NC} (TCP)"
     echo -e "    Default DNS:      ${BOLD}${DEFAULT_DNS}${NC}"
@@ -642,6 +664,12 @@ print_summary() {
     echo -e "  ${BOLD}${YELLOW}Security${NC}"
     echo -e "    Firewall:       allow UDP ${WG_PORT} + TCP 443; keep TCP ${mgmt_port} localhost-only"
     echo -e "    peers.json:     encrypted at rest (AES-256-GCM)"
+    echo ""
+
+    echo -e "  ${BOLD}${CYAN}Production Deployment${NC}"
+    echo -e "    ${BOLD}sudo bash server/deploy-proxy.sh${NC}       Set up reverse proxy (nginx or Caddy)"
+    echo -e "    ${BOLD}sudo bash server/update.sh${NC}              Guided server upgrade (coming soon)"
+    echo -e "    ${BOLD}sudo bash scripts/health-check.sh${NC}        System health check"
     echo ""
 }
 
