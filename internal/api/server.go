@@ -40,6 +40,8 @@ func NewServer(ctx context.Context, cfg *Config, s *store.State, m *wg.Manager) 
 
 	adminMW := RequireRole(s, cfg.APIKey, store.RoleAdmin, store.RoleOwner)
 	mux.Handle("/api/v1/peers", methodGuard(http.MethodGet, LocalOnly(adminMW(h.ListPeers))))
+	mux.Handle("/api/v1/peers/alias", methodGuard(http.MethodPut, LocalOnly(adminMW(h.PeerAliasUpdate))))
+	mux.Handle("/api/v1/peers/by-pubkey/", methodGuard(http.MethodDelete, LocalOnly(adminMW(h.PeerDeleteByPubkey))))
 	mux.Handle("/api/v1/peers/", methodGuard(http.MethodDelete, LocalOnly(adminMW(h.DeletePeer))))
 	mux.Handle("/api/v1/status", methodGuard(http.MethodGet, LocalOnly(adminMW(h.Status))))
 

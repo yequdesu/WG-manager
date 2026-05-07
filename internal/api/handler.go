@@ -537,6 +537,14 @@ func (h *Handler) CreateInvite(w http.ResponseWriter, r *http.Request) {
 	req.TargetRole = strings.TrimSpace(req.TargetRole)
 	req.DeviceName = strings.TrimSpace(req.DeviceName)
 
+	callerRole, _ := r.Context().Value(ContextKeyRole).(store.Role)
+	if callerRole == store.RoleAdmin && req.TargetRole == "owner" {
+		writeJSON(w, http.StatusForbidden, map[string]string{
+			"error": "admin cannot create owner-level invites",
+		})
+		return
+	}
+
 	var ttl time.Duration
 	if req.TTLHours > 0 {
 		ttl = time.Duration(req.TTLHours) * time.Hour
@@ -858,6 +866,7 @@ func (h *Handler) ListPeers(w http.ResponseWriter, r *http.Request) {
 
 	type peerInfo struct {
 		Name            string `json:"name"`
+		Alias           string `json:"alias,omitempty"`
 		PublicKey       string `json:"public_key"`
 		Address         string `json:"address"`
 		DNS             string `json:"dns,omitempty"`
@@ -876,6 +885,7 @@ func (h *Handler) ListPeers(w http.ResponseWriter, r *http.Request) {
 	for _, p := range peers {
 		pi := peerInfo{
 			Name:      p.Name,
+			Alias:     p.Alias,
 			PublicKey: p.PublicKey,
 			Address:   p.Address,
 			DNS:       p.DNS,
@@ -973,6 +983,130 @@ func (h *Handler) DeletePeer(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
 		"message": fmt.Sprintf("peer %q removed", name),
+	})
+}
+
+// PeerAliasUpdate handles PUT /api/v1/peers/alias
+// Body: {"pubkey": "<public_key>", "alias": "<new_alias>"}
+// Updates the alias of a peer identified by its immutable public key.
+func (h *Handler) PeerAliasUpdate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	var req struct {
+		Pubkey string `json:"pubkey"`
+		Alias  string `json:"alias"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	req.Pubkey = strings.TrimSpace(req.Pubkey)
+	req.Alias = strings.TrimSpace(req.Alias)
+
+	if req.Pubkey == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "pubkey is required"})
+		return
+	}
+	if req.Alias == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "alias is required"})
+		return
+	}
+	if err := validatePeerName(req.Alias); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	peer, ok := h.store.PeerByPublicKey(req.Pubkey)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{
+			"error": fmt.Sprintf("peer with public key %q not found", req.Pubkey),
+		})
+		return
+	}
+
+	oldAlias := peer.Alias
+	if err := h.store.SetPeerAlias(peer.Name, req.Alias); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to update alias"})
+		return
+	}
+
+	if err := h.store.Save(); err != nil {
+		// Rollback alias to old value.
+		_ = h.store.SetPeerAlias(peer.Name, oldAlias)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist state"})
+		return
+	}
+
+	audit.Log("peer_alias_changed", auditFields("name", peer.Name, "old", oldAlias, "new", req.Alias))
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success":   true,
+		"name":      peer.Name,
+		"pubkey":    peer.PublicKey,
+		"old_alias": oldAlias,
+		"new_alias": req.Alias,
+	})
+}
+
+// PeerDeleteByPubkey handles DELETE /api/v1/peers/by-pubkey/{pubkey}
+// Deletes a peer by its immutable public key.
+func (h *Handler) PeerDeleteByPubkey(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	pubkey := strings.TrimPrefix(r.URL.Path, "/api/v1/peers/by-pubkey/")
+	if pubkey == "" || pubkey == r.URL.Path {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "peer public key is required"})
+		return
+	}
+
+	peer, ok := h.store.PeerByPublicKey(pubkey)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{
+			"error": fmt.Sprintf("peer with public key %q not found", pubkey),
+		})
+		return
+	}
+
+	if err := h.wgMgr.RemovePeerByKey(h.cfg().WGInterface, peer.PublicKey); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to remove peer from wireguard"})
+		return
+	}
+
+	if err := h.store.RemovePeer(peer.Name); err != nil {
+		log.Printf("ROLLBACK: re-adding peer %q to WG after store remove failure: %v", peer.Name, err)
+		h.wgMgr.AddPeerLive(h.cfg().WGInterface, peer.PublicKey, fmt.Sprintf("%s/32", peer.Address), peer.Keepalive)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to remove peer from store"})
+		return
+	}
+
+	if err := h.writeConfigToDisk(); err != nil {
+		h.store.AddPeer(peer)
+		log.Printf("ROLLBACK: re-adding peer %q to WG after config write failure: %v", peer.Name, err)
+		h.wgMgr.AddPeerLive(h.cfg().WGInterface, peer.PublicKey, fmt.Sprintf("%s/32", peer.Address), peer.Keepalive)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to write config"})
+		return
+	}
+
+	if err := h.store.Save(); err != nil {
+		h.store.AddPeer(peer)
+		log.Printf("ROLLBACK: re-adding peer %q to WG after state save failure: %v", peer.Name, err)
+		h.wgMgr.AddPeerLive(h.cfg().WGInterface, peer.PublicKey, fmt.Sprintf("%s/32", peer.Address), peer.Keepalive)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist state"})
+		return
+	}
+
+	audit.Log("peer_deleted", auditFields("name", peer.Name, "ip", peer.Address, "admin", remoteIP(r)))
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"message": fmt.Sprintf("peer %q removed", peer.Name),
 	})
 }
 

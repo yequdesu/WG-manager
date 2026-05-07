@@ -10,6 +10,7 @@ pub struct ApiClient {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PeerInfo {
     pub name: String,
+    pub alias: Option<String>,
     pub address: String,
     pub dns: Option<String>,
     pub public_key: String,
@@ -231,6 +232,7 @@ mod tests {
     #[test]
     fn test_peer_info_serialization() {
         let peer = PeerInfo {
+            alias: None,
             name: "peer1".to_string(),
             address: "10.0.0.2".to_string(),
             dns: Some("1.1.1.1".to_string()),
