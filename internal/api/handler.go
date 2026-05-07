@@ -897,6 +897,129 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) RedeemInvite(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	var req struct {
+		Token string `json:"token"`
+		Name  string `json:"name"`
+		DNS   string `json:"dns"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"})
+		return
+	}
+	if err := validatePeerName(req.Name); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	req.Token = strings.TrimSpace(req.Token)
+	if req.Token == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "token is required"})
+		return
+	}
+
+	tokenSum := sha256.Sum256([]byte(req.Token))
+	tokenHash := hex.EncodeToString(tokenSum[:])
+
+	inv, ok := h.store.GetInviteByTokenHash(tokenHash)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "invite not found"})
+		return
+	}
+
+	if inv.Status != store.InviteCreated {
+		writeJSON(w, http.StatusGone, map[string]string{
+			"error":  fmt.Sprintf("invite is already %s", inv.Status),
+			"status": string(inv.Status),
+		})
+		return
+	}
+
+	if inv.ExpiresAt != "" {
+		expAt, err := time.Parse(time.RFC3339, inv.ExpiresAt)
+		if err == nil && time.Now().UTC().After(expAt) {
+			writeJSON(w, http.StatusGone, map[string]string{"error": "invite has expired"})
+			return
+		}
+	}
+
+	dns := req.DNS
+	if dns == "" && inv.DNSOverride != "" {
+		dns = inv.DNSOverride
+	}
+	if dns == "" {
+		dns = h.cfg().DefaultDNS
+	}
+	if err := validateDNS(dns); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	privateKey, publicKey, err := h.wgMgr.GenKeyPair()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate keys"})
+		return
+	}
+
+	peer := store.Peer{
+		Name:       req.Name,
+		PublicKey:  publicKey,
+		PrivateKey: privateKey,
+		DNS:        dns,
+		Keepalive:  h.cfg().PeerKeepalive,
+		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
+	}
+
+	_, err = h.store.AllocateIPAndAddPeer(&peer, h.cfg().WGSubnet, h.getWGPeerIPs(publicKey))
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+
+	if err := h.commitPeerToWG(peer.Name); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	if _, err := h.store.RedeemInviteByTokenHash(tokenHash, peer.Name); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to redeem invite"})
+		return
+	}
+
+	if err := h.store.Save(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist state"})
+		return
+	}
+
+	src := remoteIP(r)
+	audit.Log("invite_redeemed", auditFields("name", peer.Name, "ip", peer.Address, "source", src, "invite_id", inv.ID))
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"peer": map[string]interface{}{
+			"name":              peer.Name,
+			"address":           fmt.Sprintf("%s/24", peer.Address),
+			"private_key":       peer.PrivateKey,
+			"public_key":        peer.PublicKey,
+			"server_public_key": h.store.Server().PublicKey,
+			"server_endpoint":   h.cfg().ServerEndpoint(),
+			"dns":               peer.DNS,
+			"keepalive":         peer.Keepalive,
+		},
+	})
+}
+
 func (h *Handler) ListPeers(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})

@@ -223,6 +223,35 @@ func (s *State) RedeemInvite(id string, redeemedBy string) (Invite, error) {
 	return inv, nil
 }
 
+// RedeemInviteByTokenHash finds an invite by token hash and atomically marks
+// it redeemed. Only invites in "created" status that haven't expired can be
+// redeemed. Returns the updated invite or an error.
+func (s *State) RedeemInviteByTokenHash(tokenHash, redeemedBy string) (*Invite, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for id, inv := range s.Invites {
+		if inv.TokenHash == tokenHash {
+			if inv.Status != InviteCreated {
+				return nil, fmt.Errorf("invite is already %s", inv.Status)
+			}
+			if inv.ExpiresAt != "" {
+				expAt, err := time.Parse(time.RFC3339, inv.ExpiresAt)
+				if err == nil && time.Now().UTC().After(expAt) {
+					return nil, fmt.Errorf("invite has expired")
+				}
+			}
+			now := time.Now().UTC()
+			inv.Status = InviteRedeemed
+			inv.RedeemedAt = now.Format(time.RFC3339)
+			inv.RedeemedBy = redeemedBy
+			s.Invites[id] = inv
+			return &inv, nil
+		}
+	}
+	return nil, fmt.Errorf("invite not found")
+}
+
 // ExpireInvites removes invites whose ExpiresAt is before now and returns
 // the list of expired invites.
 func (s *State) ExpireInvites() []Invite {

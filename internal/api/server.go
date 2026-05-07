@@ -36,6 +36,8 @@ func NewServer(ctx context.Context, cfg *Config, s *store.State, m *wg.Manager) 
 	mux.HandleFunc("/api/v1/login", rateLimit(h.Login))
 	mux.HandleFunc("/api/v1/logout", h.Logout)
 
+	mux.HandleFunc("/api/v1/redeem", rateLimit(h.RedeemInvite))
+
 	loggedMux := requestLogger(mux)
 
 	return &http.Server{
