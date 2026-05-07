@@ -45,6 +45,18 @@ pub struct App {
     pub confirm_timer: u16,
     pub pending_text_asteroid: Option<String>,
 
+    // Invite creation form state
+    pub invite_form_active: bool,
+    pub invite_form_field: usize,
+    pub invite_form_name: String,
+    pub invite_form_ttl: String,
+    pub invite_form_dns: String,
+    pub invite_form_pool: String,
+    pub invite_form_role: String,
+    pub invite_form_device: String,
+    pub invite_form_confirm: bool,
+    pub invite_form_result: Option<String>,
+
     pub api: ApiClient,
     #[allow(dead_code)]
     pub config: Config,
@@ -95,6 +107,17 @@ impl App {
             confirm_delete: false,
             confirm_timer: 0,
             pending_text_asteroid: None,
+
+            invite_form_active: false,
+            invite_form_field: 0,
+            invite_form_name: String::new(),
+            invite_form_ttl: "24".to_string(),
+            invite_form_dns: String::new(),
+            invite_form_pool: String::new(),
+            invite_form_role: String::new(),
+            invite_form_device: String::new(),
+            invite_form_confirm: false,
+            invite_form_result: None,
 
             api,
             config,
@@ -149,7 +172,25 @@ impl App {
             DataEvent::InvitesFetched(Err(e)) => self.error_msg = Some(e),
             DataEvent::StatusFetched(Ok(status)) => self.status = status,
             DataEvent::StatusFetched(Err(e)) => self.error_msg = Some(e),
-            DataEvent::InviteCreated(_) | DataEvent::InviteRevoked(_) | DataEvent::PeerDeleted(_) => {
+            DataEvent::InviteCreated(Ok(val)) => {
+                self.flash = Some((self.invite_selected, ui::invites::FlashKind::Create, 0));
+                if self.invite_form_active {
+                    let token = val
+                        .get("token")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("(no token)");
+                    self.invite_form_result = Some(token.to_string());
+                }
+                self.refresh_data();
+            }
+            DataEvent::InviteCreated(Err(e)) => {
+                if self.invite_form_active {
+                    self.invite_form_result = Some(format!("Error: {}", e));
+                } else {
+                    self.error_msg = Some(e);
+                }
+            }
+            DataEvent::InviteRevoked(_) | DataEvent::PeerDeleted(_) => {
                 self.refresh_data();
             }
         }
@@ -171,16 +212,43 @@ impl App {
         });
     }
 
-    pub fn create_invite(&mut self) {
-        let selected = self.invite_selected;
+    pub fn open_invite_form(&mut self) {
+        self.invite_form_active = true;
+        self.invite_form_field = 0;
+        self.invite_form_name.clear();
+        self.invite_form_ttl = "24".to_string();
+        self.invite_form_dns.clear();
+        self.invite_form_pool.clear();
+        self.invite_form_role.clear();
+        self.invite_form_device.clear();
+        self.invite_form_confirm = false;
+        self.invite_form_result = None;
+    }
+
+    pub fn submit_invite(&mut self) {
+        let ttl: u32 = self.invite_form_ttl.parse().unwrap_or(24);
+        let request = crate::api::CreateInviteRequest {
+            name_hint: self.invite_form_name.clone(),
+            ttl_hours: ttl,
+            dns_override: optional_string(&self.invite_form_dns),
+            pool_name: optional_string(&self.invite_form_pool),
+            target_role: optional_string(&self.invite_form_role),
+            device_name: optional_string(&self.invite_form_device),
+            max_uses: None,
+            labels: None,
+        };
+
         let api = self.api.clone();
         let rt = self.rt.clone();
         let tx = self.data_tx.clone();
         rt.spawn(async move {
-            let result = api.create_invite("tui-invite", 24).await;
+            let result = api.create_invite(request).await;
             let _ = tx.send(DataEvent::InviteCreated(result));
         });
-        self.flash = Some((selected, ui::invites::FlashKind::Create, 0));
+    }
+
+    pub fn cancel_invite_form(&mut self) {
+        self.invite_form_active = false;
     }
 
     pub fn revoke_invite(&mut self, id: &str) {
@@ -454,10 +522,15 @@ fn render_peers(frame: &mut Frame, area: Rect, app: &mut App) {
 fn render_invites(frame: &mut Frame, area: Rect, app: &mut App) {
     fill_area(frame, area, DARK_THEME.bg);
 
+    if app.invite_form_active {
+        ui::invites::render_create_invite_form(frame, area, app);
+        return;
+    }
+
     use crate::widgets::card::Card;
     if app.invites.is_empty() {
         let lines = vec![Line::from(Span::styled(
-            "No invites. Press [c] to create a new invite.",
+            "No invites. Press [a] to create a new invite.",
             DARK_THEME.muted,
         ))];
         Card::new("Invites").render(frame, area, lines);
@@ -548,6 +621,10 @@ fn read_audit_log(path: &str) -> Vec<String> {
 
 pub fn read_audit_log_file(path: &str) -> Vec<String> {
     read_audit_log(path)
+}
+
+fn optional_string(s: &str) -> Option<String> {
+    if s.is_empty() { None } else { Some(s.to_string()) }
 }
 
 fn find_audit_log_path() -> String {

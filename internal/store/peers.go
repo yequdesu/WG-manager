@@ -406,7 +406,9 @@ func (s *State) Save() error {
 	return nil
 }
 
-func Load(path string, crypto *Crypto) (*State, error) {
+func Load(path string, crypto *Crypto) (*State, MigrationInfo, error) {
+	var mi MigrationInfo
+
 	s := &State{
 		Peers:    make(map[string]Peer),
 		Users:    make(map[string]User),
@@ -420,18 +422,18 @@ func Load(path string, crypto *Crypto) (*State, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return s, nil
+			return s, mi, nil
 		}
-		return nil, fmt.Errorf("read state file: %w", err)
+		return nil, mi, fmt.Errorf("read state file: %w", err)
 	}
 
 	if len(data) == 0 {
-		return s, nil
+		return s, mi, nil
 	}
 
 	if bytes.HasPrefix(data, []byte(encryptedPrefix)) {
 		if crypto == nil {
-			return nil, fmt.Errorf("state is encrypted but no crypto key provided")
+			return nil, mi, fmt.Errorf("state is encrypted but no crypto key provided")
 		}
 		dec, err := crypto.Decrypt(data[len(encryptedPrefix):])
 		if err != nil {
@@ -444,7 +446,7 @@ func Load(path string, crypto *Crypto) (*State, error) {
 					goto unmarshal
 				}
 			}
-			return nil, fmt.Errorf("decrypt state: %w", err)
+			return nil, mi, fmt.Errorf("decrypt state: %w", err)
 		}
 		data = dec
 	} else if crypto != nil {
@@ -456,23 +458,23 @@ unmarshal:
 		bakPath := path + ".bak"
 		bakData, bakErr := os.ReadFile(bakPath)
 		if bakErr != nil || len(bakData) == 0 {
-			fmt.Fprintf(os.Stderr, "WARNING: %s corrupted and no valid backup, starting with empty state\n", path)
-			return s, nil
+		fmt.Fprintf(os.Stderr, "WARNING: %s corrupted and no valid backup, starting with empty state\n", path)
+		return s, mi, nil
 		}
 		if bytes.HasPrefix(bakData, []byte(encryptedPrefix)) {
 			if crypto == nil {
 				fmt.Fprintf(os.Stderr, "WARNING: %s corrupted, backup is encrypted but no key, starting empty\n", path)
-				return s, nil
+				return s, mi, nil
 			}
 			bakData, bakErr = crypto.Decrypt(bakData[len(encryptedPrefix):])
 			if bakErr != nil {
 				fmt.Fprintf(os.Stderr, "WARNING: %s and backup both corrupted, starting with empty state\n", path)
-				return s, nil
+				return s, mi, nil
 			}
 		}
 		if bakErr := json.Unmarshal(bakData, s); bakErr != nil {
 			fmt.Fprintf(os.Stderr, "WARNING: %s corrupted, backup also invalid, starting with empty state\n", path)
-			return s, nil
+			return s, mi, nil
 		}
 		fmt.Fprintf(os.Stderr, "WARNING: %s corrupted, recovered from %s\n", path, bakPath)
 	}
@@ -498,10 +500,51 @@ unmarshal:
 		if p.Alias == "" {
 			p.Alias = p.Name
 			s.Peers[name] = p
+			mi.PeerAliases++
 		}
 	}
 
-	return s, nil
+	// Backfill invite defaults for fields that were absent in older state files.
+	// omitempty fields (DeviceName, PoolName, Labels, etc.) don't need migration.
+	for id, inv := range s.Invites {
+		needsSave := false
+
+		if inv.MaxUses == 0 {
+			inv.MaxUses = 1 // old invites were single-use
+			needsSave = true
+		}
+
+		if inv.TargetRole == "" {
+			inv.TargetRole = "user"
+			needsSave = true
+		}
+
+		if (inv.Status == InviteRedeemed || inv.Status == InviteRevoked) && inv.UsedCount == 0 {
+			inv.UsedCount = 1
+			needsSave = true
+		}
+
+		if needsSave {
+			s.Invites[id] = inv
+			mi.Invites++
+		}
+	}
+
+	if mi.PeerAliases > 0 {
+		fmt.Fprintf(os.Stderr, "MIGRATION: backfilled alias for %d peer(s)\n", mi.PeerAliases)
+	}
+	if mi.Invites > 0 {
+		fmt.Fprintf(os.Stderr, "MIGRATION: backfilled fields for %d invite(s)\n", mi.Invites)
+	}
+
+	return s, mi, nil
+}
+
+// MigrationInfo reports how many state entries were migrated by Load.
+// Zero values mean no migration was needed.
+type MigrationInfo struct {
+	PeerAliases int
+	Invites     int
 }
 
 func (s *State) Replace(other *State) {

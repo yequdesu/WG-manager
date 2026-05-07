@@ -202,7 +202,7 @@ func reloadConfig(path string, appCfg *AppConfig, handler *api.Handler, state *s
 		crypto = store.NewCrypto(appCfg.APIKey)
 	}
 
-	newState, err := store.Load(appCfg.PeersDBPath, crypto)
+	newState, _, err := store.Load(appCfg.PeersDBPath, crypto)
 	if err != nil {
 		log.Printf("Warning: failed to reload peers db (%s): %v — keeping current state", appCfg.PeersDBPath, err)
 	} else {
@@ -288,10 +288,14 @@ func main() {
 		crypto = store.NewCrypto(appCfg.APIKey)
 	}
 
-	state, err := store.Load(appCfg.PeersDBPath, crypto)
+	state, mi, err := store.Load(appCfg.PeersDBPath, crypto)
 	if err != nil {
 		log.Printf("WARNING: Failed to load peer state: %v — starting with empty state", err)
 		state = store.NewState(appCfg.PeersDBPath, crypto)
+	}
+
+	if mi.PeerAliases > 0 || mi.Invites > 0 {
+		log.Printf("State migration complete: %d peer alias(es), %d invite(s) backfilled", mi.PeerAliases, mi.Invites)
 	}
 
 	// Parse and store address pools from config.

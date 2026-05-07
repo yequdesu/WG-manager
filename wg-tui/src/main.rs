@@ -107,6 +107,64 @@ fn run(
                     continue;
                 }
 
+                // ── Invite creation form modal ──────────────────────────
+                if app.invite_form_active {
+                    match key.code {
+                        KeyCode::Esc => {
+                            if app.invite_form_confirm {
+                                app.invite_form_confirm = false;
+                            } else {
+                                app.cancel_invite_form();
+                            }
+                        }
+                        KeyCode::Enter => {
+                            if app.invite_form_result.is_some() {
+                                // Dismiss result screen
+                                app.invite_form_active = false;
+                                app.invite_form_result = None;
+                            } else if app.invite_form_confirm {
+                                // Submit from confirmation
+                                app.invite_form_confirm = false;
+                                app.submit_invite();
+                            } else {
+                                // Go to confirmation
+                                app.invite_form_confirm = true;
+                            }
+                        }
+                        KeyCode::Tab | KeyCode::Down | KeyCode::Char('j') => {
+                            if !app.invite_form_confirm && app.invite_form_result.is_none() {
+                                app.invite_form_field = (app.invite_form_field + 1) % 6;
+                            }
+                        }
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            if !app.invite_form_confirm && app.invite_form_result.is_none() {
+                                app.invite_form_field = (app.invite_form_field + 5) % 6;
+                            }
+                        }
+                        KeyCode::Backspace => {
+                            if !app.invite_form_confirm && app.invite_form_result.is_none() {
+                                pop_form_field(app, app.invite_form_field);
+                            }
+                        }
+                        KeyCode::Char(c) => {
+                            if !app.invite_form_confirm && app.invite_form_result.is_none() {
+                                push_form_field(app, app.invite_form_field, c);
+                            } else if app.invite_form_result.is_some() {
+                                app.invite_form_active = false;
+                                app.invite_form_result = None;
+                            }
+                        }
+                        _ => {
+                            // Dismiss result screen on any key
+                            if app.invite_form_result.is_some() {
+                                app.invite_form_active = false;
+                                app.invite_form_result = None;
+                            }
+                        }
+                    }
+                    continue;
+                }
+
                 match key.code {
                     KeyCode::Char('q') => app.should_quit = true,
                     KeyCode::Esc => {
@@ -184,7 +242,7 @@ fn run(
                     }
                     KeyCode::Char('a') | KeyCode::Char('A') => {
                         if app.tab == Tab::Invites {
-                            app.create_invite();
+                            app.open_invite_form();
                         }
                     }
                     KeyCode::Char('1') => app.tab = Tab::Dashboard,
@@ -221,6 +279,30 @@ fn run(
         }
     }
     Ok(())
+}
+
+fn push_form_field(app: &mut App, field: usize, c: char) {
+    match field {
+        0 => app.invite_form_name.push(c),
+        1 => app.invite_form_ttl.push(c),
+        2 => app.invite_form_dns.push(c),
+        3 => app.invite_form_pool.push(c),
+        4 => app.invite_form_role.push(c),
+        5 => app.invite_form_device.push(c),
+        _ => {}
+    }
+}
+
+fn pop_form_field(app: &mut App, field: usize) {
+    match field {
+        0 => { app.invite_form_name.pop(); }
+        1 => { app.invite_form_ttl.pop(); }
+        2 => { app.invite_form_dns.pop(); }
+        3 => { app.invite_form_pool.pop(); }
+        4 => { app.invite_form_role.pop(); }
+        5 => { app.invite_form_device.pop(); }
+        _ => {}
+    }
 }
 
 fn panic_handler() -> impl Drop {

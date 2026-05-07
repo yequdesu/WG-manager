@@ -61,6 +61,8 @@ pub struct InviteListResponse {
 pub struct CreateInviteRequest {
     pub name_hint: String,
     pub ttl_hours: u32,
+    #[serde(rename = "dns")]
+    pub dns_override: Option<String>,
     pub pool_name: Option<String>,
     pub target_role: Option<String>,
     pub device_name: Option<String>,
@@ -133,14 +135,9 @@ impl ApiClient {
             .map_err(|e| e.to_string())
     }
 
-    pub async fn create_invite(&self, name_hint: &str, ttl_hours: u32) -> Result<serde_json::Value, String> {
+    pub async fn create_invite(&self, request: CreateInviteRequest) -> Result<serde_json::Value, String> {
         let url = format!("{}/api/v1/invites", self.base_url);
-        let body = CreateInviteRequest {
-            name_hint: name_hint.to_string(),
-            ttl_hours,
-            ..Default::default()
-        };
-        let mut req = self.client.post(&url).json(&body);
+        let mut req = self.client.post(&url).json(&request);
         if !self.api_key.is_empty() {
             req = req.header("Authorization", format!("Bearer {}", self.api_key));
         }
@@ -259,6 +256,7 @@ mod tests {
         let req = CreateInviteRequest {
             name_hint: "my-peer".to_string(),
             ttl_hours: 24,
+            dns_override: Some("8.8.8.8".to_string()),
             pool_name: Some("default".to_string()),
             target_role: Some("user".to_string()),
             device_name: None,
@@ -270,5 +268,7 @@ mod tests {
         assert!(json.contains("my-peer"));
         assert!(json.contains("24"));
         assert!(json.contains("default"));
+        assert!(json.contains("8.8.8.8"));
+        assert!(json.contains("\"dns\""));
     }
 }

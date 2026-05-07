@@ -1,3 +1,4 @@
+use crate::app::App;
 use ratatui::layout::{Constraint, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -175,4 +176,166 @@ fn truncate(s: &str, max: usize) -> String {
     } else {
         format!("{}…", s.chars().take(max - 1).collect::<String>())
     }
+}
+
+static FORM_FIELDS: &[(&str, &str)] = &[
+    ("name_hint",   "Label for this invite"),
+    ("ttl_hours",   "Hours until expiry"),
+    ("dns",         "DNS override (leave blank for default)"),
+    ("pool",        "Peer pool name"),
+    ("target_role", "Role for peer (user/admin)"),
+    ("device",      "Device name hint"),
+];
+static FORM_FIELD_COUNT: usize = FORM_FIELDS.len();
+
+pub fn render_create_invite_form(frame: &mut Frame, area: Rect, app: &App) {
+    let inner = Card::new("Create Invite").render_block(frame, area);
+
+    if let Some(ref token) = app.invite_form_result {
+        render_invite_result(frame, inner, token);
+        return;
+    }
+
+    if app.invite_form_confirm {
+        render_invite_confirmation(frame, inner, app);
+        return;
+    }
+
+    let field_values: [&str; 6] = [
+        &app.invite_form_name,
+        &app.invite_form_ttl,
+        &app.invite_form_dns,
+        &app.invite_form_pool,
+        &app.invite_form_role,
+        &app.invite_form_device,
+    ];
+
+    let area_w = inner.width.saturating_sub(4) as usize;
+    let mut lines: Vec<Line> = Vec::new();
+
+    for i in 0..FORM_FIELD_COUNT {
+        let (name, hint) = FORM_FIELDS[i];
+        let value = field_values[i];
+        let display_val = if value.is_empty() { "(default)" } else { value };
+        let is_sel = i == app.invite_form_field;
+
+        let prefix = if is_sel { ">" } else { " " };
+        let label_style = if is_sel {
+            Style::default().fg(DARK_THEME.accent)
+        } else {
+            Style::default().fg(DARK_THEME.muted)
+        };
+        let val_style = if is_sel {
+            Style::default().fg(DARK_THEME.text).bg(DARK_THEME.primary)
+        } else {
+            Style::default().fg(DARK_THEME.text)
+        };
+
+        let field_line = format!(
+            " {} {:12} {}",
+            prefix,
+            name,
+            truncate(display_val, area_w.saturating_sub(18))
+        );
+        let remaining = area_w.saturating_sub(field_line.len());
+        let padding = " ".repeat(remaining);
+
+        lines.push(Line::from(vec![
+            Span::styled(field_line, label_style),
+            Span::styled(padding, val_style),
+        ]));
+
+        if is_sel {
+            lines.push(Line::from(Span::styled(
+                format!("     ── {}", hint),
+                Style::default().fg(DARK_THEME.muted),
+            )));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        " [Tab/↑↓] select field  [Enter] confirm  [Esc] cancel",
+        DARK_THEME.muted,
+    )));
+
+    Card::new("").render(frame, area, lines);
+}
+
+fn render_invite_confirmation(frame: &mut Frame, area: Rect, app: &App) {
+    let dns_val = if app.invite_form_dns.is_empty() { "(server default)" } else { app.invite_form_dns.as_str() };
+    let pool_val = if app.invite_form_pool.is_empty() { "(none)" } else { app.invite_form_pool.as_str() };
+    let role_val = if app.invite_form_role.is_empty() { "user" } else { app.invite_form_role.as_str() };
+    let device_val = if app.invite_form_device.is_empty() { "(none)" } else { app.invite_form_device.as_str() };
+    let name_val = if app.invite_form_name.is_empty() { "(none)" } else { app.invite_form_name.as_str() };
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Confirm invite creation:", DARK_THEME.accent),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Name hint:   ", DARK_THEME.muted),
+            Span::styled(name_val, DARK_THEME.text),
+        ]),
+        Line::from(vec![
+            Span::styled("  TTL:         ", DARK_THEME.muted),
+            Span::styled(format!("{} hours", app.invite_form_ttl), DARK_THEME.text),
+        ]),
+        Line::from(vec![
+            Span::styled("  DNS:         ", DARK_THEME.muted),
+            Span::styled(dns_val, DARK_THEME.text),
+        ]),
+        Line::from(vec![
+            Span::styled("  Pool:        ", DARK_THEME.muted),
+            Span::styled(pool_val, DARK_THEME.text),
+        ]),
+        Line::from(vec![
+            Span::styled("  Role:        ", DARK_THEME.muted),
+            Span::styled(role_val, DARK_THEME.text),
+        ]),
+        Line::from(vec![
+            Span::styled("  Device:      ", DARK_THEME.muted),
+            Span::styled(device_val, DARK_THEME.text),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            " [Enter] create  [Esc] back to edit",
+            DARK_THEME.muted,
+        )),
+    ];
+
+    Card::new("Confirm").render(frame, area, lines);
+}
+
+fn render_invite_result(frame: &mut Frame, area: Rect, token: &str) {
+    let lines = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Invite created successfully!", DARK_THEME.accent),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Token: ", DARK_THEME.muted),
+            Span::styled(token, DARK_THEME.text),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Bootstrap URL:", DARK_THEME.muted),
+        ]),
+        Line::from(vec![
+            Span::styled(
+                format!("  https://vpn.example.com/bootstrap?token={}", token),
+                DARK_THEME.text,
+            ),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            " [Enter] or any key to return to list",
+            DARK_THEME.muted,
+        )),
+    ];
+
+    Card::new("Result").render(frame, area, lines);
 }
