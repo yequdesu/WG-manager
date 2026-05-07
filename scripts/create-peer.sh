@@ -157,7 +157,7 @@ json_get() {
 }
 
 ERROR=$(json_get "$RESP" "error" "")
-if [[ -n "$ERROR" ]]; then
+if [[ -n "$ERROR" ]] && [[ "$ERROR" != "null" ]]; then
     err "API error: $ERROR"
     exit 1
 fi
