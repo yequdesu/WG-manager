@@ -631,21 +631,34 @@ print_summary() {
 
     echo -e "  ${BOLD}${CYAN}User Onboarding${NC} ${YELLOW}-- share the invite bootstrap URL${NC}"
     echo ""
-    echo -e "    Replace https://vpn.example.com with your HTTPS domain."
-    echo -e "    Replace TOKEN with the invite token from the create step above."
+    if [ -n "$SERVER_HOST" ]; then
+        echo -e "    ${BOLD}Bootstrap URL${NC}: https://${SERVER_HOST}/bootstrap?token=TOKEN&name=DEVICE"
+    else
+        echo -e "    ${BOLD}Bootstrap URL${NC}: http://${SERVER_PUBLIC_IP}/bootstrap?token=TOKEN&name=DEVICE"
+    fi
     echo ""
-
-    echo -e "    ${BOLD}Linux / macOS / WSL${NC}"
-    echo -e "      curl -sSf \"https://vpn.example.com/bootstrap?token=TOKEN&name=DEVICE\" | sudo bash"
+    echo -e "    ${BOLD}Run:${NC}"
+    if [ -n "$SERVER_HOST" ]; then
+        echo -e "      curl -sSf \"https://${SERVER_HOST}/bootstrap?token=TOKEN&name=DEVICE\" | sudo bash"
+    else
+        echo -e "      curl -sSf \"http://${SERVER_PUBLIC_IP}/bootstrap?token=TOKEN&name=DEVICE\" | sudo bash"
+    fi
     echo ""
-
-    echo -e "    ${BOLD}Windows PowerShell${NC}"
-    echo -e "      Invoke-WebRequest \"https://vpn.example.com/bootstrap?token=TOKEN&name=MYPC\" -OutFile join.ps1"
+    echo -e "    ${BOLD}Windows PowerShell${NC}:"
+    if [ -n "$SERVER_HOST" ]; then
+        echo -e "      Invoke-WebRequest \"https://${SERVER_HOST}/bootstrap?token=TOKEN&name=MYPC\" -OutFile join.ps1"
+    else
+        echo -e "      Invoke-WebRequest \"http://${SERVER_PUBLIC_IP}/bootstrap?token=TOKEN&name=MYPC\" -OutFile join.ps1"
+    fi
     echo -e "      .\\join.ps1"
     echo ""
 
     echo -e "    ${BOLD}Windows CMD${NC}"
-    echo -e "      curl -o wg0.conf \"https://vpn.example.com/bootstrap?token=TOKEN&name=MYPC\""
+    if [ -n "$SERVER_HOST" ]; then
+        echo -e "      curl -o wg0.conf \"https://${SERVER_HOST}/bootstrap?token=TOKEN&name=MYPC\""
+    else
+        echo -e "      curl -o wg0.conf \"http://${SERVER_PUBLIC_IP}/bootstrap?token=TOKEN&name=MYPC\""
+    fi
     echo ""
 
     echo -e "    ${BOLD}Mobile QR${NC} (generate on server)"
