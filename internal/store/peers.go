@@ -2,13 +2,11 @@ package store
 
 import (
 	"bytes"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net"
 	"os"
-	"maps"
 	"sync"
 	"time"
 )
@@ -23,20 +21,6 @@ type Peer struct {
 	CreatedAt  string `json:"created_at"`
 }
 
-type Request struct {
-	ID         string `json:"id"`
-	Hostname   string `json:"hostname"`
-	DNS        string `json:"dns"`
-	PrivateKey string `json:"private_key"`
-	PublicKey  string `json:"public_key"`
-	Address    string `json:"address"`
-	Keepalive  int    `json:"keepalive"`
-	SourceIP   string `json:"source_ip"`
-	Status     string `json:"status"`
-	CreatedAt  string `json:"created_at"`
-	ExpiresAt  string `json:"expires_at"`
-}
-
 type ServerConfig struct {
 	PublicKey  string `json:"public_key"`
 	PrivateKey string `json:"private_key"`
@@ -49,7 +33,6 @@ type ServerConfig struct {
 type State struct {
 	server   ServerConfig
 	Peers    map[string]Peer    `json:"peers"`
-	Requests map[string]Request `json:"requests,omitempty"`
 	Users    map[string]User    `json:"users,omitempty"`
 	Sessions map[string]Session `json:"sessions,omitempty"`
 	Invites  map[string]Invite  `json:"invites,omitempty"`
@@ -62,7 +45,6 @@ type State struct {
 func NewState(path string, crypto *Crypto) *State {
 	return &State{
 		Peers:    make(map[string]Peer),
-		Requests: make(map[string]Request),
 		Users:    make(map[string]User),
 		Sessions: make(map[string]Session),
 		Invites:  make(map[string]Invite),
@@ -75,7 +57,6 @@ func (s *State) MarshalJSON() ([]byte, error) {
 	type Alias struct {
 		Server   ServerConfig       `json:"server"`
 		Peers    map[string]Peer    `json:"peers"`
-		Requests map[string]Request `json:"requests,omitempty"`
 		Users    map[string]User    `json:"users,omitempty"`
 		Sessions map[string]Session `json:"sessions,omitempty"`
 		Invites  map[string]Invite  `json:"invites,omitempty"`
@@ -83,7 +64,6 @@ func (s *State) MarshalJSON() ([]byte, error) {
 	return json.Marshal(&Alias{
 		Server:   s.server,
 		Peers:    s.Peers,
-		Requests: s.Requests,
 		Users:    s.Users,
 		Sessions: s.Sessions,
 		Invites:  s.Invites,
@@ -94,7 +74,6 @@ func (s *State) UnmarshalJSON(data []byte) error {
 	type Alias struct {
 		Server   ServerConfig       `json:"server"`
 		Peers    map[string]Peer    `json:"peers"`
-		Requests map[string]Request `json:"requests,omitempty"`
 		Users    map[string]User    `json:"users,omitempty"`
 		Sessions map[string]Session `json:"sessions,omitempty"`
 		Invites  map[string]Invite  `json:"invites,omitempty"`
@@ -105,15 +84,11 @@ func (s *State) UnmarshalJSON(data []byte) error {
 	}
 	s.server = alias.Server
 	s.Peers = alias.Peers
-	s.Requests = alias.Requests
 	s.Users = alias.Users
 	s.Sessions = alias.Sessions
 	s.Invites = alias.Invites
 	if s.Peers == nil {
 		s.Peers = make(map[string]Peer)
-	}
-	if s.Requests == nil {
-		s.Requests = make(map[string]Request)
 	}
 	if s.Users == nil {
 		s.Users = make(map[string]User)
@@ -256,9 +231,6 @@ func (s *State) nextIPInLock(subnet string, extraUsed map[string]bool) (string, 
 	for _, p := range s.Peers {
 		used[p.Address] = true
 	}
-	for _, r := range s.Requests {
-		used[r.Address] = true
-	}
 	for k := range extraUsed {
 		used[k] = true
 	}
@@ -314,40 +286,6 @@ func (s *State) AllocateIPAndAddPeer(p *Peer, subnet string, extraUsed map[strin
 	return ip, nil
 }
 
-func (s *State) ReserveIPAndAddRequest(r Request, subnet string) (string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if _, ok := s.Requests[r.ID]; ok {
-		return "", fmt.Errorf("request %q already exists", r.ID)
-	}
-
-	for _, existing := range s.Requests {
-		if existing.Hostname == r.Hostname && (existing.Status == "" || existing.Status == "pending") {
-			return "", fmt.Errorf("a pending request for %q already exists", r.Hostname)
-		}
-	}
-
-	ip, err := s.nextIPInLock(subnet, nil)
-	if err != nil {
-		return "", err
-	}
-
-	r.Address = ip
-	if r.CreatedAt == "" {
-		r.CreatedAt = time.Now().UTC().Format(time.RFC3339)
-	}
-	if r.ExpiresAt == "" {
-		r.ExpiresAt = time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339)
-	}
-	if r.Keepalive == 0 {
-		r.Keepalive = 25
-	}
-
-	s.Requests[r.ID] = r
-	return ip, nil
-}
-
 func (s *State) Save() error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -389,7 +327,6 @@ func (s *State) Save() error {
 func Load(path string, crypto *Crypto) (*State, error) {
 	s := &State{
 		Peers:    make(map[string]Peer),
-		Requests: make(map[string]Request),
 		Users:    make(map[string]User),
 		Sessions: make(map[string]Session),
 		Invites:  make(map[string]Invite),
@@ -460,9 +397,6 @@ unmarshal:
 	if s.Peers == nil {
 		s.Peers = make(map[string]Peer)
 	}
-	if s.Requests == nil {
-		s.Requests = make(map[string]Request)
-	}
 	if s.Users == nil {
 		s.Users = make(map[string]User)
 	}
@@ -476,83 +410,6 @@ unmarshal:
 	return s, nil
 }
 
-// ── Request management ──────────────────────────
-
-func GenerateRequestID() string {
-	b := make([]byte, 12)
-	if _, err := rand.Read(b); err != nil {
-		for i := range b {
-			b[i] = byte((time.Now().UnixNano() >> (i * 4)) & 0xFF)
-		}
-	}
-	return hex.EncodeToString(b)
-}
-
-func (s *State) GetRequest(id string) (Request, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	r, ok := s.Requests[id]
-	return r, ok
-}
-
-func (s *State) ApproveRequest(id string) (Peer, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	r, ok := s.Requests[id]
-	if !ok {
-		return Peer{}, fmt.Errorf("request %q not found", id)
-	}
-
-	if _, ok := s.Peers[r.Hostname]; ok {
-		return Peer{}, fmt.Errorf("peer %q already exists", r.Hostname)
-	}
-
-	peer := Peer{
-		Name:       r.Hostname,
-		PublicKey:  r.PublicKey,
-		PrivateKey: r.PrivateKey,
-		Address:    r.Address,
-		DNS:        r.DNS,
-		Keepalive:  r.Keepalive,
-		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
-	}
-
-	s.Peers[r.Hostname] = peer
-	r.Status = "approved"
-	r.ExpiresAt = time.Now().UTC().Add(5 * time.Minute).Format(time.RFC3339)
-	s.Requests[id] = r
-	return peer, nil
-}
-
-func (s *State) RejectRequest(id string) (Request, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	r, ok := s.Requests[id]
-	if !ok {
-		return Request{}, fmt.Errorf("request %q not found", id)
-	}
-
-	r.Status = "rejected"
-	r.ExpiresAt = time.Now().UTC().Add(5 * time.Minute).Format(time.RFC3339)
-	s.Requests[id] = r
-	return r, nil
-}
-
-func (s *State) PendingRequests() []Request {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	reqs := make([]Request, 0, len(s.Requests))
-	for _, r := range s.Requests {
-		if r.Status == "" || r.Status == "pending" {
-			reqs = append(reqs, r)
-		}
-	}
-	return reqs
-}
-
 func (s *State) Replace(other *State) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -562,28 +419,10 @@ func (s *State) Replace(other *State) {
 	s.crypto = other.crypto
 	s.Peers = make(map[string]Peer)
 	maps.Copy(s.Peers, other.Peers)
-	s.Requests = make(map[string]Request)
-	maps.Copy(s.Requests, other.Requests)
 	s.Users = make(map[string]User)
 	maps.Copy(s.Users, other.Users)
 	s.Sessions = make(map[string]Session)
 	maps.Copy(s.Sessions, other.Sessions)
 	s.Invites = make(map[string]Invite)
 	maps.Copy(s.Invites, other.Invites)
-}
-
-func (s *State) ExpireRequests() []Request {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	now := time.Now().UTC()
-	var expired []Request
-	for id, r := range s.Requests {
-		expAt, err := time.Parse(time.RFC3339, r.ExpiresAt)
-		if err != nil || now.After(expAt) {
-			expired = append(expired, r)
-			delete(s.Requests, id)
-		}
-	}
-	return expired
 }

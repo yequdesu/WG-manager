@@ -38,10 +38,10 @@ func (c *Config) ServerEndpoint() string {
 }
 
 type Handler struct {
-	store     *store.State
-	wgMgr     *wg.Manager
-	config_   atomic.Pointer[Config]
-	wgCache   atomic.Pointer[wgCacheEntry]
+	store   *store.State
+	wgMgr   *wg.Manager
+	config_ atomic.Pointer[Config]
+	wgCache atomic.Pointer[wgCacheEntry]
 }
 
 type wgCacheEntry struct {
@@ -95,242 +95,6 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 		"error":   "endpoint deprecated",
 		"message": "Use POST /api/v1/redeem to join with an invite token from your administrator.",
 	})
-}
-
-func (h *Handler) serveDirectBash(w http.ResponseWriter, r *http.Request, name string) {
-	script := embedConnectSh
-	script = strings.ReplaceAll(script, "__SERVER_PUBLIC_IP__", h.cfg().ServerPublicIP)
-	script = strings.ReplaceAll(script, "__MGMT_PORT__", portStr(h.cfg().MgmtListen))
-	script = strings.ReplaceAll(script, "__API_KEY__", h.cfg().APIKey)
-	script = strings.ReplaceAll(script, "__DEFAULT_DNS__", h.cfg().DefaultDNS)
-	script = strings.ReplaceAll(script, "__WG_ALLOWED_IPS__", h.cfg().WGSubnet)
-	script = strings.ReplaceAll(script, "__PEER_NAME__", name)
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(script))
-}
-
-func (h *Handler) serveApprovalBash(w http.ResponseWriter, r *http.Request, name string) {
-	script := embedApprovalSh
-	script = strings.ReplaceAll(script, "__SERVER_IP__", h.cfg().ServerPublicIP)
-	script = strings.ReplaceAll(script, "__MGMT_PORT__", portStr(h.cfg().MgmtListen))
-	script = strings.ReplaceAll(script, "__WG_ALLOWED_IPS__", h.cfg().WGSubnet)
-	script = strings.ReplaceAll(script, "__DEFAULT_DNS__", h.cfg().DefaultDNS)
-	script = strings.ReplaceAll(script, "__PEER_NAME__", name)
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(script))
-}
-
-func (h *Handler) serveDirectWin(w http.ResponseWriter, r *http.Request, name string) {
-	q := r.URL.Query()
-	if name == "" {
-		name = strings.TrimSpace(q.Get("name"))
-	}
-	if name == "" {
-		name = "client"
-	}
-	if err := validatePeerName(name); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	dns := strings.TrimSpace(q.Get("dns"))
-	if dns == "" {
-		dns = h.cfg().DefaultDNS
-	}
-	if err := validateDNS(dns); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-
-	var privateKey, publicKey, ip string
-	if existing, ok := h.store.GetPeer(name); ok {
-		privateKey = existing.PrivateKey
-		publicKey = existing.PublicKey
-		ip = existing.Address
-	} else {
-		var err error
-		privateKey, publicKey, err = h.wgMgr.GenKeyPair()
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate keys"})
-			return
-		}
-		peer := store.Peer{
-			Name: name, PublicKey: publicKey, PrivateKey: privateKey,
-			DNS: dns, Keepalive: h.cfg().PeerKeepalive,
-			CreatedAt: time.Now().UTC().Format(time.RFC3339),
-		}
-		ip, err = h.store.AllocateIPAndAddPeer(&peer, h.cfg().WGSubnet, h.getWGPeerIPs(publicKey))
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "no available IP addresses"})
-			return
-		}
-		if err := h.commitPeerToWG(name); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-		audit.Log("peer_registered", auditFields("name", name, "ip", ip, "source", remoteIP(r)))
-	}
-
-	conf := fmt.Sprintf(`[Interface]
-Address = %s/24
-PrivateKey = %s
-DNS = %s
-
-[Peer]
-PublicKey = %s
-Endpoint = %s
-AllowedIPs = %s
-PersistentKeepalive = %d
-`, ip, privateKey, dns, h.store.Server().PublicKey, h.cfg().ServerEndpoint(), h.cfg().WGSubnet, h.cfg().PeerKeepalive)
-
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s.conf", name))
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(conf))
-}
-
-func (h *Handler) serveApprovalPS1(w http.ResponseWriter, r *http.Request) {
-	script := embedApprovalPs1
-	script = strings.ReplaceAll(script, "__SERVER_IP__", h.cfg().ServerPublicIP)
-	script = strings.ReplaceAll(script, "__MGMT_PORT__", portStr(h.cfg().MgmtListen))
-	script = strings.ReplaceAll(script, "__WG_ALLOWED_IPS__", h.cfg().WGSubnet)
-	script = strings.ReplaceAll(script, "__DEFAULT_DNS__", h.cfg().DefaultDNS)
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(script))
-}
-
-func (h *Handler) serveHTML(w http.ResponseWriter, r *http.Request) {
-	ip := h.cfg().ServerPublicIP
-	p := portStr(h.cfg().MgmtListen)
-	wgSubnet := h.cfg().WGSubnet
-	html := `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WG-Manager</title>
-<style>*{margin:0;padding:0;box-sizing:border-box}
-body{font:14px/1.6 system-ui,-apple-system,monospace;background:#0d1117;color:#c9d1d9;max-width:780px;margin:0 auto;padding:24px 16px}
-h1{color:#58a6ff;font-size:20px;margin-bottom:4px}
-.sub{color:#8b949e;font-size:12px;margin-bottom:20px}
-.tabs{display:flex;gap:0;border-bottom:1px solid #30363d;margin-bottom:16px}
-.tab{padding:8px 16px;cursor:pointer;border:1px solid transparent;border-radius:6px 6px 0 0;color:#8b949e;font-size:13px;transition:.15s}
-.tab:hover{color:#c9d1d9;background:#161b22}
-.tab.active{color:#58a6ff;border-color:#30363d;border-bottom-color:#0d1117;background:#161b22;font-weight:600}
-.section{display:none}.section.active{display:block}
-.box{background:#161b22;border:1px solid #30363d;border-radius:6px;padding:14px;margin-bottom:12px}
-.box h3{font-size:13px;color:#8b949e;margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px}
-pre{background:#0d1117;padding:10px 14px;border-radius:4px;overflow-x:auto;font-size:13px;color:#7ee787;border:1px solid #21262d;white-space:pre-wrap;word-break:break-all}
-pre.cmd{color:#d2a8ff}
-.hint{color:#8b949e;font-size:12px;margin-top:6px}
-.badge{font-size:11px;padding:1px 6px;border-radius:10px;margin-left:6px}
-.badge-green{background:#0a4225;color:#7ee787}
-.badge-yellow{background:#3b2700;color:#d2991d}
-.badge-blue{background:#04244a;color:#79c0ff}
-a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
-.steps{font-size:13px;color:#c9d1d9;line-height:2;padding-left:16px}
-.footer{margin-top:24px;border-top:1px solid #30363d;padding-top:12px;font-size:12px;color:#484f58}
-.footer a{color:#6e7681}
-</style></head><body>
-<h1>WG-Manager</h1>
-<p class="sub">Server: ` + ip + `  |  Port: ` + p + `  |  Subnet: ` + wgSubnet + `</p>
-<div class="tabs">
-  <span class="tab active" onclick="show('linux')">Linux / macOS / WSL</span>
-  <span class="tab" onclick="show('windows')">Windows</span>
-  <span class="tab" onclick="show('mobile')">Mobile QR</span>
-  <span class="tab" onclick="show('admin')">Admin</span>
-</div>
-
-<div id="linux" class="section active">
-  <div class="box">
-    <h3>Approval Mode <span class="badge badge-green">default</span></h3>
-    <p class="hint">Submit a request, an admin approves it, then you auto-connect.</p>
-    <pre>curl -sSf http://` + ip + `:` + p + `/connect | sudo bash</pre>
-    <p class="hint">With custom name: append ?name=myname to the URL</p>
-  </div>
-  <div class="box">
-    <h3>Direct Mode <span class="badge badge-yellow">requires API key</span></h3>
-    <p class="hint">Trusted users join instantly with just one command.</p>
-    <pre class="cmd">curl -sSf "http://` + ip + `:` + p + `/connect?mode=direct&name=my-laptop" | sudo bash</pre>
-  </div>
-  <div class="box">
-    <h3>Verify</h3>
-    <ol class="steps"><li><pre>sudo wg show</pre></li><li><pre>ping 10.0.0.1</pre></li></ol>
-  </div>
-</div>
-
-<div id="windows" class="section">
-  <div class="box">
-    <h3>PowerShell — Approval</h3>
-    <pre>Invoke-WebRequest http://` + ip + `:` + p + `/connect -OutFile join.ps1
-.\join.ps1</pre>
-    <p class="hint">Enter peer name when prompted. Wait for admin approval.</p>
-  </div>
-  <div class="box">
-    <h3>PowerShell — Direct <span class="badge badge-yellow">API key embedded</span></h3>
-    <pre class="cmd">Invoke-WebRequest "http://` + ip + `:` + p + `/connect?mode=direct&name=MYPC" -OutFile wg0.conf</pre>
-  </div>
-  <div class="box">
-    <h3>CMD — Approval</h3>
-    <pre>curl -X POST http://` + ip + `:` + p + `/api/v1/request -H "Content-Type: application/json" -d "{\"hostname\":\"MYPC\",\"dns\":\"1.1.1.1\"}"</pre>
-  </div>
-  <div class="box">
-    <h3>CMD — Direct</h3>
-    <pre class="cmd">curl -o wg0.conf "http://` + ip + `:` + p + `/connect?mode=direct&name=MYPC"</pre>
-  </div>
-  <div class="box">
-    <h3>Import .conf into WireGuard</h3>
-    <ol class="steps">
-      <li>Install <a href="https://download.wireguard.com/windows-client/" target="_blank">WireGuard for Windows</a></li>
-      <li>WireGuard → Import Tunnel(s) from file → select .conf</li>
-      <li>Click Activate</li>
-    </ol>
-    <p class="hint">If ping fails: New-NetFirewallRule -DisplayName "WG ICMP" -Direction Inbound -Protocol ICMPv4 -IcmpType 8 -Action Allow</p>
-  </div>
-</div>
-
-<div id="mobile" class="section">
-  <div class="box">
-    <h3>Generate QR on Server <span class="badge badge-yellow">direct only</span></h3>
-    <p class="hint">Admin runs this on the server to create a QR image for a device (direct mode only):</p>
-    <pre>curl -s "http://localhost:` + p + `/connect?qrcode&mode=direct&name=phone1" -o phone1.svg</pre>
-    <p class="hint">Send phone1.svg to the mobile device → WireGuard App → Scan from QR code</p>
-  </div>
-  <div class="box">
-    <h3>QR from Browser</h3>
-    <p class="hint">Direct-registration QR (API key embedded, mobile only):</p>
-    <pre>http://` + ip + `:` + p + `/connect?qrcode&mode=direct&name=phone1</pre>
-    <p class="hint">Open in browser to see the QR, then scan with WireGuard app. For approval flow, use desktop /connect.</p>
-  </div>
-</div>
-
-<div id="admin" class="section">
-  <div class="box">
-    <h3>Server Management</h3>
-    <pre>wg-mgmt-tui                           # Interactive TUI dashboard
-bash scripts/health-check.sh          # System health check
-bash scripts/list-peers.sh            # List peers with status
-tail -f /var/log/wg-mgmt/audit.log    # Audit log</pre>
-  </div>
-  <div class="box">
-    <h3>API Reference</h3>
-    <pre>GET  /api/v1/health                    Health check (no auth)
-GET  /api/v1/peers                     List peers (server-local)
-GET  /api/v1/requests                  Pending requests (server-local)
-GET  /api/v1/status                    Daemon + WG status (server-local)
-POST /api/v1/register                  Register peer (API key)
-POST /api/v1/request                   Submit approval request (rate-limited)
-POST /api/v1/requests/{id}/approve     Approve request (server-local)
-DELETE /api/v1/peers/{name}            Remove peer (server-local)
-DELETE /api/v1/requests/{id}           Reject request (server-local)</pre>
-  </div>
-</div>
-
-<div class="footer">
-  WG-Manager  |  <a href="/api/v1/health">health</a>  |  <a href="/api/v1/status">status</a>
-</div>
-<script>function show(id){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));document.getElementById(id).classList.add('active');event.target.classList.add('active')}</script>
-</body></html>`
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(html))
 }
 
 func (h *Handler) serveBootstrapHTML(w http.ResponseWriter, r *http.Request) {
@@ -496,14 +260,6 @@ func (h *Handler) ListRequests(w http.ResponseWriter, r *http.Request) {
 	writeDeprecated(w, "approval flow deprecated; use invite-based onboarding: GET /api/v1/invites")
 }
 
-func (h *Handler) ApproveRequest(w http.ResponseWriter, r *http.Request) {
-	writeDeprecated(w, "approval flow deprecated; use invite-based onboarding: POST /api/v1/invites")
-}
-
-func (h *Handler) RejectRequest(w http.ResponseWriter, r *http.Request) {
-	writeDeprecated(w, "approval flow deprecated; use invite-based onboarding")
-}
-
 func (h *Handler) ManageRequest(w http.ResponseWriter, r *http.Request) {
 	writeDeprecated(w, "approval flow deprecated; use invite-based onboarding")
 }
@@ -514,15 +270,6 @@ func remoteIP(r *http.Request) string {
 		return r.RemoteAddr
 	}
 	return host
-}
-
-func (h *Handler) hasPendingRequest(hostname string) bool {
-	for _, rq := range h.store.PendingRequests() {
-		if rq.Hostname == hostname {
-			return true
-		}
-	}
-	return false
 }
 
 func auditFields(pairs ...string) map[string]string {
@@ -1180,10 +927,10 @@ set -euo pipefail
 # Served by /bootstrap — inspect before running: curl -sSf https://%s/bootstrap
 # Usage: curl -sSf "https://%s/bootstrap?token=INVITE_TOKEN&name=MYDEVICE" | sudo bash
 
-SERVER_HOST="%s"
-INVITE_TOKEN="%s"
-PEER_NAME="%s"
-DEFAULT_DNS="%s"
+SERVER_HOST=%s
+INVITE_TOKEN=%s
+PEER_NAME=%s
+DEFAULT_DNS=%s
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; CYAN='\033[0;36m'; NC='\033[0m'
 log()  { echo -e "${GREEN}[+]${NC} $*"; }
@@ -1347,12 +1094,16 @@ fi
 
 log "Done!"
 `, serverHost, serverHost,
-		serverHost, token, name,
-		h.cfg().DefaultDNS, h.cfg().WGServerIP)
+		shellQuote(serverHost), shellQuote(token), shellQuote(name),
+		shellQuote(h.cfg().DefaultDNS), h.cfg().WGServerIP)
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(script))
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
 func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
@@ -1416,8 +1167,12 @@ func (h *Handler) commitPeerToWG(name string) error {
 
 func portStr(addr string) string {
 	_, p, err := net.SplitHostPort(addr)
-	if err != nil { return "58880" }
-	if n, _ := strconv.Atoi(p); n > 0 { return p }
+	if err != nil {
+		return "58880"
+	}
+	if n, _ := strconv.Atoi(p); n > 0 {
+		return p
+	}
 	return "58880"
 }
 

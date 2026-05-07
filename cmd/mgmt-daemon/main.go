@@ -22,19 +22,19 @@ import (
 )
 
 type AppConfig struct {
-	WGInterface      string
-	WGPort           int
-	WGSubnet         string
-	WGServerIP       string
-	MgmtListen       string
-	APIKey           string
-	ServerPublicIP   string
-	DefaultDNS       string
-	PeerKeepalive    int
-	PeersDBPath      string
-	WGConfPath       string
-	AuditLogPath     string
-	CleanPeersOnExit bool
+	WGInterface            string
+	WGPort                 int
+	WGSubnet               string
+	WGServerIP             string
+	MgmtListen             string
+	APIKey                 string
+	ServerPublicIP         string
+	DefaultDNS             string
+	PeerKeepalive          int
+	PeersDBPath            string
+	WGConfPath             string
+	AuditLogPath           string
+	CleanPeersOnExit       bool
 	BootstrapOwnerPassword string
 }
 
@@ -45,16 +45,16 @@ func loadConfig(path string) (*AppConfig, error) {
 	}
 
 	cfg := &AppConfig{
-		WGInterface:          "wg0",
-		WGPort:               51820,
-		WGSubnet:             "10.0.0.0/24",
-		WGServerIP:           "10.0.0.1/24",
-		MgmtListen:           "127.0.0.1:58880",
-		DefaultDNS:           "1.1.1.1,8.8.8.8",
-		PeerKeepalive:        25,
-		PeersDBPath:          "./server/peers.json",
-		WGConfPath:           "/etc/wireguard/wg0.conf",
-		AuditLogPath:         "/var/log/wg-mgmt/wg-mgmt.log",
+		WGInterface:   "wg0",
+		WGPort:        51820,
+		WGSubnet:      "10.0.0.0/24",
+		WGServerIP:    "10.0.0.1/24",
+		MgmtListen:    "127.0.0.1:58880",
+		DefaultDNS:    "1.1.1.1,8.8.8.8",
+		PeerKeepalive: 25,
+		PeersDBPath:   "./server/peers.json",
+		WGConfPath:    "/etc/wireguard/wg0.conf",
+		AuditLogPath:  "/var/log/wg-mgmt/wg-mgmt.log",
 	}
 
 	lines := strings.Split(string(data), "\n")
@@ -198,8 +198,7 @@ func reloadConfig(path string, appCfg *AppConfig, handler *api.Handler, state *s
 		log.Printf("Warning: failed to reload peers db (%s): %v — keeping current state", appCfg.PeersDBPath, err)
 	} else {
 		state.Replace(newState)
-		log.Printf("Reloaded %d peer(s) and %d request(s) from %s",
-			len(newState.AllPeers()), len(newState.PendingRequests()), appCfg.PeersDBPath)
+		log.Printf("Reloaded %d peer(s) from %s", len(newState.AllPeers()), appCfg.PeersDBPath)
 	}
 
 	if appCfg.AuditLogPath != "" {
@@ -252,7 +251,7 @@ func main() {
 		}
 	}
 
-		ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	if _, err := exec.LookPath("wg"); err != nil {
@@ -283,18 +282,6 @@ func main() {
 	}
 	defer audit.Close()
 
-	// Migration: expire old pending approval requests on startup.
-	// The approval flow has been replaced by invite-based onboarding.
-	// Any leftover pending requests from previous versions are expired here.
-	if pending := state.PendingRequests(); len(pending) > 0 {
-		log.Printf("WARNING: Found %d legacy pending request(s) from deprecated approval flow — expiring all", len(pending))
-		expired := state.ExpireRequests()
-		log.Printf("Expired %d legacy request(s)", len(expired))
-		if err := state.Save(); err != nil {
-			log.Printf("WARNING: Failed to save after request expiry: %v", err)
-		}
-	}
-
 	// Bootstrap owner on first run if password is set and no users exist.
 	if !state.HasUsers() && appCfg.BootstrapOwnerPassword != "" {
 		ownerHash, err := store.HashPassword(appCfg.BootstrapOwnerPassword)
@@ -322,10 +309,10 @@ func main() {
 				ip = parts[0]
 			}
 			wgPeers[p.PublicKey] = store.Peer{
-				Name:       "recovered-" + p.PublicKey[:12],
-				PublicKey:  p.PublicKey,
-				Address:    ip,
-				Keepalive:  appCfg.PeerKeepalive,
+				Name:      "recovered-" + p.PublicKey[:12],
+				PublicKey: p.PublicKey,
+				Address:   ip,
+				Keepalive: appCfg.PeerKeepalive,
 			}
 		}
 		recovered := state.ReconcileFromWG(wgPeers)

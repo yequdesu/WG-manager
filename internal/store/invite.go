@@ -12,10 +12,10 @@ import (
 type InviteStatus string
 
 const (
-	InviteCreated   InviteStatus = "created"
-	InviteRedeemed  InviteStatus = "redeemed"
-	InviteRevoked   InviteStatus = "revoked"
-	InviteExpired   InviteStatus = "expired"
+	InviteCreated  InviteStatus = "created"
+	InviteRedeemed InviteStatus = "redeemed"
+	InviteRevoked  InviteStatus = "revoked"
+	InviteExpired  InviteStatus = "expired"
 )
 
 // Invite is a first-class invitation model for zero-touch client onboarding.
@@ -79,7 +79,7 @@ func WithDeviceID(id string) InviteOption {
 // ── ID and token generation ────────────────────────────────────────────
 
 // GenerateInviteID returns a cryptographically random invite ID.
-// Uses the same 12‑byte → hex pattern as GenerateRequestID.
+// Uses the same 12-byte to hex pattern as existing short IDs.
 func GenerateInviteID() string {
 	b := make([]byte, 12)
 	if _, err := rand.Read(b); err != nil {
