@@ -20,10 +20,12 @@ const (
 )
 
 // Invite is a first-class invitation model for zero-touch client onboarding.
-// The raw token is never stored — only its SHA‑256 hash (TokenHash).
-// No private keys or IP addresses are pre‑allocated until the invite is redeemed.
+// TokenHash is used for redemption checks; RawToken is stored so local admins
+// can re-display the onboarding link for already-issued invites.
+// No private keys or IP addresses are pre-allocated until the invite is redeemed.
 type Invite struct {
 	ID              string            `json:"id"`
+	RawToken        string            `json:"raw_token,omitempty"`
 	TokenHash       string            `json:"token_hash"`
 	IssuedBy        string            `json:"issued_by"`
 	Status          InviteStatus      `json:"status"`
@@ -136,8 +138,8 @@ func GenerateInviteID() string {
 }
 
 // GenerateInviteToken returns a raw invite token and its SHA‑256 hash.
-// The raw token is 32 bytes (64 hex chars); only the hash is persisted.
-// Uses the same pattern as GenerateSessionToken.
+// The raw token is 32 bytes (64 hex chars). CreateInvite persists both the
+// raw token and hash so local admins can re-display onboarding links later.
 func GenerateInviteToken() (rawToken string, tokenHash string, err error) {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
@@ -153,8 +155,7 @@ func GenerateInviteToken() (rawToken string, tokenHash string, err error) {
 // ── Store methods ──────────────────────────────────────────────────────
 
 // CreateInvite creates a new invite with the given issuer, optional expiry
-// duration, and functional options. It returns the raw token (never persisted),
-// the stored Invite, and any error.
+// duration, and functional options. It returns the raw token and stored Invite.
 func (s *State) CreateInvite(issuedBy string, expiry time.Duration, opts ...InviteOption) (string, Invite, error) {
 	rawToken, tokenHash, err := GenerateInviteToken()
 	if err != nil {
@@ -166,6 +167,7 @@ func (s *State) CreateInvite(issuedBy string, expiry time.Duration, opts ...Invi
 
 	inv := Invite{
 		ID:         id,
+		RawToken:   rawToken,
 		TokenHash:  tokenHash,
 		IssuedBy:   issuedBy,
 		Status:     InviteCreated,
@@ -273,6 +275,36 @@ func (s *State) DeleteInvite(id string, deletedBy string) error {
 	inv.DeletedBy = deletedBy
 	s.Invites[id] = inv
 	return nil
+}
+
+// ForceDeleteInvite permanently removes an invite by ID from the store,
+// regardless of its current state (created, redeemed, revoked, or deleted).
+// This operation is irreversible and leaves no audit trail in the invite map.
+func (s *State) ForceDeleteInvite(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.Invites[id]; !ok {
+		return fmt.Errorf("invite %q not found", id)
+	}
+
+	delete(s.Invites, id)
+	return nil
+}
+
+// ForceDeleteInviteByTokenHash permanently removes an invite by its token
+// hash regardless of state. Returns an error if not found.
+func (s *State) ForceDeleteInviteByTokenHash(tokenHash string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for id, inv := range s.Invites {
+		if inv.TokenHash == tokenHash {
+			delete(s.Invites, id)
+			return nil
+		}
+	}
+	return fmt.Errorf("invite not found")
 }
 
 // RedeemInvite marks the invite with the given ID as redeemed by the given

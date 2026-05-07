@@ -392,6 +392,9 @@ func TestCreateInvite(t *testing.T) {
 	if inv.TokenHash == "" {
 		t.Error("invite TokenHash should be non-empty")
 	}
+	if inv.RawToken != rawToken {
+		t.Error("invite RawToken should persist the raw token for later link display")
+	}
 	if inv.ID == "" {
 		t.Error("invite ID should be non-empty")
 	}
@@ -418,6 +421,9 @@ func TestCreateInvite(t *testing.T) {
 	}
 	if found2.TokenHash != inv.TokenHash {
 		t.Errorf("found invite TokenHash mismatch")
+	}
+	if found2.RawToken != rawToken {
+		t.Errorf("found invite RawToken mismatch")
 	}
 }
 
@@ -582,7 +588,7 @@ func TestDuplicateName(t *testing.T) {
 	}
 }
 
-// ── Invite token hashing ────────────────────────────────────────────────
+// ── Invite token storage ────────────────────────────────────────────────
 
 func TestInviteTokenStorage(t *testing.T) {
 	s := NewState("/tmp/test_token_storage.json", nil)
@@ -607,9 +613,13 @@ func TestInviteTokenStorage(t *testing.T) {
 		t.Error("marshaled JSON should contain token_hash field")
 	}
 
-	// the JSON must NOT contain the raw token
-	if strings.Contains(jsonStr, rawToken) {
-		t.Error("marshaled JSON must NOT contain the raw token")
+	// The raw token is intentionally retained so local admins can re-display
+	// the full onboarding link for already-issued invites.
+	if !strings.Contains(jsonStr, rawToken) {
+		t.Error("marshaled JSON should contain the raw token for invite link redisplay")
+	}
+	if !strings.Contains(jsonStr, `"raw_token"`) {
+		t.Error("marshaled JSON should contain raw_token field")
 	}
 }
 
@@ -1247,4 +1257,139 @@ func invokeWGMgmtStatus(t *testing.T, configPath string) (stdout, stderr string,
 	cmd.Stderr = &stderrBuf
 	err = cmd.Run()
 	return stdoutBuf.String(), stderrBuf.String(), err
+}
+
+// ── Force-delete invite ─────────────────────────────────────────────────
+
+func TestForceDeleteInviteCreated(t *testing.T) {
+	s := NewState("/tmp/test_force_del_created.json", nil)
+
+	_, inv, err := s.CreateInvite("admin", 1*time.Hour)
+	if err != nil {
+		t.Fatalf("CreateInvite failed: %v", err)
+	}
+
+	// Force-delete a created invite.
+	if err := s.ForceDeleteInvite(inv.ID); err != nil {
+		t.Fatalf("ForceDeleteInvite failed: %v", err)
+	}
+
+	// It should be gone.
+	_, ok := s.GetInviteByID(inv.ID)
+	if ok {
+		t.Error("Force-deleted invite should not exist")
+	}
+
+	// Force-delete again should fail.
+	if err := s.ForceDeleteInvite(inv.ID); err == nil {
+		t.Error("Second ForceDeleteInvite should fail")
+	}
+}
+
+func TestForceDeleteInviteRedeemed(t *testing.T) {
+	s := NewState("/tmp/test_force_del_redeemed.json", nil)
+
+	_, inv, err := s.CreateInvite("admin", 1*time.Hour)
+	if err != nil {
+		t.Fatalf("CreateInvite failed: %v", err)
+	}
+
+	// Redeem it first.
+	if _, err := s.RedeemInvite(inv.ID, "peer1"); err != nil {
+		t.Fatalf("RedeemInvite failed: %v", err)
+	}
+
+	// Force-delete a redeemed invite (not allowed by soft-delete).
+	if err := s.ForceDeleteInvite(inv.ID); err != nil {
+		t.Fatalf("ForceDeleteInvite on redeemed invite failed: %v", err)
+	}
+
+	_, ok := s.GetInviteByID(inv.ID)
+	if ok {
+		t.Error("Force-deleted redeemed invite should not exist")
+	}
+}
+
+func TestForceDeleteInviteDeleted(t *testing.T) {
+	s := NewState("/tmp/test_force_del_deleted.json", nil)
+
+	_, inv, err := s.CreateInvite("admin", 1*time.Hour)
+	if err != nil {
+		t.Fatalf("CreateInvite failed: %v", err)
+	}
+
+	// Soft-delete first.
+	if err := s.DeleteInvite(inv.ID, "admin"); err != nil {
+		t.Fatalf("DeleteInvite failed: %v", err)
+	}
+
+	// Verify it's soft-deleted.
+	softDel, ok := s.GetInviteByID(inv.ID)
+	if !ok || softDel.Status != InviteDeleted {
+		t.Fatal("Invite should be soft-deleted")
+	}
+
+	// Force-delete should work on already-soft-deleted invite.
+	if err := s.ForceDeleteInvite(inv.ID); err != nil {
+		t.Fatalf("ForceDeleteInvite on soft-deleted invite failed: %v", err)
+	}
+
+	_, ok = s.GetInviteByID(inv.ID)
+	if ok {
+		t.Error("Force-deleted invite should not exist after force-delete")
+	}
+}
+
+func TestForceDeleteInviteRevoked(t *testing.T) {
+	s := NewState("/tmp/test_force_del_revoked.json", nil)
+
+	_, inv, err := s.CreateInvite("admin", 1*time.Hour)
+	if err != nil {
+		t.Fatalf("CreateInvite failed: %v", err)
+	}
+
+	// Revoke it.
+	if err := s.RevokeInvite(inv.ID); err != nil {
+		t.Fatalf("RevokeInvite failed: %v", err)
+	}
+
+	// Force-delete should work on revoked invite.
+	if err := s.ForceDeleteInvite(inv.ID); err != nil {
+		t.Fatalf("ForceDeleteInvite on revoked invite failed: %v", err)
+	}
+
+	_, ok := s.GetInviteByID(inv.ID)
+	if ok {
+		t.Error("Force-deleted revoked invite should not exist")
+	}
+}
+
+func TestForceDeleteInviteByTokenHash(t *testing.T) {
+	s := NewState("/tmp/test_force_del_byhash.json", nil)
+
+	_, inv, err := s.CreateInvite("admin", 1*time.Hour)
+	if err != nil {
+		t.Fatalf("CreateInvite failed: %v", err)
+	}
+
+	// Redeem it.
+	if _, err := s.RedeemInvite(inv.ID, "peer1"); err != nil {
+		t.Fatalf("RedeemInvite failed: %v", err)
+	}
+
+	// Force-delete by token hash (which is the canonical way an external
+	// caller with only the raw token would identify the invite).
+	if err := s.ForceDeleteInviteByTokenHash(inv.TokenHash); err != nil {
+		t.Fatalf("ForceDeleteInviteByTokenHash failed: %v", err)
+	}
+
+	_, ok := s.GetInviteByTokenHash(inv.TokenHash)
+	if ok {
+		t.Error("Force-deleted invite should not be found by token hash")
+	}
+
+	// Second attempt should fail.
+	if err := s.ForceDeleteInviteByTokenHash(inv.TokenHash); err == nil {
+		t.Error("Second ForceDeleteInviteByTokenHash should fail")
+	}
 }
