@@ -163,14 +163,11 @@ if [[ ! -w /usr/local/bin ]]; then
 fi
 cat > "$WRAPPER" << 'WRAPPER_EOF'
 #!/bin/bash
-if [ "${1:-}" = "--legacy" ]; then
-    shift
-    exec wg-tui-legacy "$@"
-elif command -v wg-tui-ratatui &>/dev/null; then
+if command -v wg-tui-ratatui &>/dev/null; then
     exec wg-tui-ratatui "$@"
-else
-    exec wg-tui-legacy "$@"
 fi
+echo "wg-tui-ratatui is not installed. Run: cd ~/WG-manager/wg-tui && bash install.sh" >&2
+exit 127
 WRAPPER_EOF
 chmod +x "$WRAPPER"
 
@@ -180,7 +177,6 @@ log "Installed to: ${BOLD}$DEST${NC}"
 log "Launcher: ${BOLD}$WRAPPER${NC}"
 echo ""
 info "Usage:"
-echo "  ${BOLD}wg-tui${NC}              Enhanced Ratatui TUI"
-echo "  ${BOLD}wg-tui --legacy${NC}     Original Go TUI"
+echo "  ${BOLD}wg-tui${NC}              Ratatui dashboard"
 echo ""
 info "Make sure the WG-Manager daemon is running on localhost."

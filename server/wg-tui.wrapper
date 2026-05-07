@@ -1,12 +1,10 @@
 #!/bin/bash
-# WG-TUI Launcher — dispatches to enhanced (Ratatui) or legacy (Go) TUI
+# WG-TUI Launcher — dispatches to the Rust Ratatui dashboard
 # Always named /usr/local/bin/wg-tui
 
-if [ "${1:-}" = "--legacy" ]; then
-    shift
-    exec wg-tui-legacy "$@"
-elif command -v wg-tui-ratatui &>/dev/null; then
+if command -v wg-tui-ratatui &>/dev/null; then
     exec wg-tui-ratatui "$@"
-else
-    exec wg-tui-legacy "$@"
 fi
+
+echo "wg-tui-ratatui is not installed. Run: cd ~/WG-manager/wg-tui && bash install.sh" >&2
+exit 127

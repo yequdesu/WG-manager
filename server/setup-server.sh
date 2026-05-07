@@ -520,36 +520,7 @@ deploy_daemon() {
         log "Binary is up to date (commit $installed_hash)"
     fi
 
-    # ── 2b. Build and deploy legacy TUI ──
-    local tui_dst="/usr/local/bin/wg-tui-legacy"
-    local tui_src_hash=""
-    local tui_installed_hash=""
-
-    if command -v git &>/dev/null; then
-        cd "$PROJECT_DIR"
-        tui_src_hash=$(git log -1 --format=%H -- cmd/mgmt-tui/ 2>/dev/null || echo "")
-    fi
-    if [[ -f "$tui_dst" ]]; then
-        tui_installed_hash=$(cat "${tui_dst}.version" 2>/dev/null || echo "")
-    fi
-
-    if [[ -n "$tui_src_hash" ]] && { [[ -z "$tui_installed_hash" ]] || [[ "$tui_src_hash" != "$tui_installed_hash" ]]; }; then
-        cd "$PROJECT_DIR"
-        log "Rebuilding legacy TUI..."
-        go build -ldflags="-s -w" -o "$tui_dst" ./cmd/mgmt-tui/
-        chmod +x "$tui_dst"
-        echo "$tui_src_hash" > "${tui_dst}.version"
-        log "Legacy TUI build complete"
-    elif $needs_rebuild && [[ ! -f "$tui_dst" ]]; then
-        cd "$PROJECT_DIR"
-        log "Building legacy TUI (first time)..."
-        go build -ldflags="-s -w" -o "$tui_dst" ./cmd/mgmt-tui/
-        chmod +x "$tui_dst"
-        [[ -n "$tui_src_hash" ]] && echo "$tui_src_hash" > "${tui_dst}.version"
-        log "Legacy TUI build complete"
-    fi
-
-    # ── 2c. Install TUI launcher wrapper ──
+    # ── 2b. Install TUI launcher wrapper ──
     local wrapper_dst="/usr/local/bin/wg-tui"
     local wrapper_src="$PROJECT_DIR/server/wg-tui.wrapper"
     if [[ -f "$wrapper_src" ]]; then
@@ -610,8 +581,8 @@ print_summary() {
 
     echo -e "  ${BOLD}${YELLOW}Owner Password (save this!)${NC}"
     echo -e "    ${BOLD}${owner_pw}${NC}"
-    echo -e "    Log in at http://${SERVER_PUBLIC_IP}:${mgmt_port}/connect (browser)"
-    echo -e "    or use the API to create invites for your users."
+    echo -e "    Use this on the server with wg-tui or localhost API calls."
+    echo -e "    For browser onboarding, publish HTTPS via nginx/Caddy to 127.0.0.1:${mgmt_port}."
     echo ""
 
     echo -e "  ${BOLD}${CYAN}Next Steps: Create an Invite${NC}"
@@ -626,7 +597,7 @@ print_summary() {
 
     echo -e "  ${BOLD}${CYAN}User Onboarding${NC} ${YELLOW}-- share the invite bootstrap URL${NC}"
     echo ""
-    echo -e "    Replace https://vpn.example.com with your actual domain (or server IP)."
+    echo -e "    Replace https://vpn.example.com with your HTTPS domain."
     echo -e "    Replace TOKEN with the invite token from the create step above."
     echo ""
 
@@ -649,15 +620,15 @@ print_summary() {
     echo ""
 
     echo -e "  ${BOLD}${CYAN}Server Management${NC}"
-    echo -e "    ${BOLD}wg-tui${NC}                                 Interactive dashboard (enhanced or legacy)"
-    echo -e "    ${BOLD}wg-tui --legacy${NC}                        Legacy TUI only"
+    echo -e "    ${BOLD}wg-tui${NC}                                 Interactive Rust dashboard (if installed)"
+    echo -e "    ${BOLD}cd wg-tui && bash install.sh${NC}            Install or update Rust dashboard"
     echo -e "    ${BOLD}bash scripts/health-check.sh${NC}            System health check"
     echo -e "    ${BOLD}bash scripts/list-peers.sh${NC}             View all peers"
     echo -e "    ${BOLD}tail -f /var/log/wg-mgmt/audit.log${NC}     Live audit trail"
     echo ""
 
     echo -e "  ${BOLD}${YELLOW}Security${NC}"
-    echo -e "    Firewall:       allow UDP ${WG_PORT} + TCP ${mgmt_port}"
+    echo -e "    Firewall:       allow UDP ${WG_PORT} + TCP 443; keep TCP ${mgmt_port} localhost-only"
     echo -e "    peers.json:     encrypted at rest (AES-256-GCM)"
     echo ""
 }
