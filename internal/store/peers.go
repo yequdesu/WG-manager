@@ -13,6 +13,7 @@ import (
 
 type Peer struct {
 	Name       string `json:"name"`
+	Alias      string `json:"alias,omitempty"`
 	PublicKey  string `json:"public_key"`
 	PrivateKey string `json:"private_key"`
 	Address    string `json:"address"`
@@ -36,6 +37,7 @@ type State struct {
 	Users    map[string]User    `json:"users,omitempty"`
 	Sessions map[string]Session `json:"sessions,omitempty"`
 	Invites  map[string]Invite  `json:"invites,omitempty"`
+	Pools    map[string]*Pool   `json:"pools,omitempty"`
 
 	mu     sync.RWMutex `json:"-"`
 	path   string       `json:"-"`
@@ -48,6 +50,7 @@ func NewState(path string, crypto *Crypto) *State {
 		Users:    make(map[string]User),
 		Sessions: make(map[string]Session),
 		Invites:  make(map[string]Invite),
+		Pools:    make(map[string]*Pool),
 		path:     path,
 		crypto:   crypto,
 	}
@@ -60,6 +63,7 @@ func (s *State) MarshalJSON() ([]byte, error) {
 		Users    map[string]User    `json:"users,omitempty"`
 		Sessions map[string]Session `json:"sessions,omitempty"`
 		Invites  map[string]Invite  `json:"invites,omitempty"`
+		Pools    map[string]*Pool   `json:"pools,omitempty"`
 	}
 	return json.Marshal(&Alias{
 		Server:   s.server,
@@ -67,6 +71,7 @@ func (s *State) MarshalJSON() ([]byte, error) {
 		Users:    s.Users,
 		Sessions: s.Sessions,
 		Invites:  s.Invites,
+		Pools:    s.Pools,
 	})
 }
 
@@ -77,6 +82,7 @@ func (s *State) UnmarshalJSON(data []byte) error {
 		Users    map[string]User    `json:"users,omitempty"`
 		Sessions map[string]Session `json:"sessions,omitempty"`
 		Invites  map[string]Invite  `json:"invites,omitempty"`
+		Pools    map[string]*Pool   `json:"pools,omitempty"`
 	}
 	var alias Alias
 	if err := json.Unmarshal(data, &alias); err != nil {
@@ -87,6 +93,7 @@ func (s *State) UnmarshalJSON(data []byte) error {
 	s.Users = alias.Users
 	s.Sessions = alias.Sessions
 	s.Invites = alias.Invites
+	s.Pools = alias.Pools
 	if s.Peers == nil {
 		s.Peers = make(map[string]Peer)
 	}
@@ -99,6 +106,9 @@ func (s *State) UnmarshalJSON(data []byte) error {
 	if s.Invites == nil {
 		s.Invites = make(map[string]Invite)
 	}
+	if s.Pools == nil {
+		s.Pools = make(map[string]*Pool)
+	}
 	return nil
 }
 
@@ -106,6 +116,19 @@ func (s *State) Server() ServerConfig {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.server
+}
+
+func (s *State) SetPools(pools map[string]*Pool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Pools = pools
+}
+
+func (s *State) GetPool(name string) (*Pool, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	p, ok := s.Pools[name]
+	return p, ok
 }
 
 func (s *State) AddPeer(p Peer) error {
@@ -164,6 +187,34 @@ func (s *State) AllPeers() []Peer {
 	return peers
 }
 
+func (s *State) PeerByAlias(alias string) []Peer {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var peers []Peer
+	for _, p := range s.Peers {
+		if p.Alias == alias {
+			peers = append(peers, p)
+		}
+	}
+	return peers
+}
+
+func (s *State) SetPeerAlias(name string, alias string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	p, ok := s.Peers[name]
+	if !ok {
+		return fmt.Errorf("peer %q not found", name)
+	}
+	if alias == "" {
+		return fmt.Errorf("alias must not be empty")
+	}
+	p.Alias = alias
+	s.Peers[name] = p
+	return nil
+}
+
 func (s *State) PeerByPublicKey(pubKey string) (Peer, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -208,10 +259,10 @@ func (s *State) ReconcileFromWG(wgPeers map[string]Peer) int {
 func (s *State) NextAvailableIP(subnet string) (string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.nextIPInLock(subnet, nil)
+	return s.nextIPInLock(subnet, nil, nil)
 }
 
-func (s *State) nextIPInLock(subnet string, extraUsed map[string]bool) (string, error) {
+func (s *State) nextIPInLock(subnet string, extraUsed map[string]bool, pool *Pool) (string, error) {
 	_, ipNet, err := net.ParseCIDR(subnet)
 	if err != nil {
 		return "", fmt.Errorf("invalid subnet %q: %w", subnet, err)
@@ -244,7 +295,26 @@ func (s *State) nextIPInLock(subnet string, extraUsed map[string]bool) (string, 
 
 	netUint := uint32(ipv4[0])<<24 | uint32(ipv4[1])<<16 | uint32(ipv4[2])<<8 | uint32(ipv4[3])
 
-	for i := uint32(2); i < maxHost-1; i++ {
+	// Determine iteration range.
+	startOff := uint32(2)
+	endOff := maxHost - 1
+	if pool != nil {
+		poolStart := ipToUint32(pool.StartIP)
+		poolEnd := ipToUint32(pool.EndIP)
+		if poolStart < netUint || poolEnd < netUint || poolStart > netUint+maxHost || poolEnd > netUint+maxHost {
+			return "", fmt.Errorf("pool %q range is outside subnet %s", pool.Name, subnet)
+		}
+		startOff = poolStart - netUint
+		endOff = poolEnd - netUint
+		if startOff < 2 {
+			startOff = 2
+		}
+		if endOff > maxHost-1 {
+			endOff = maxHost - 1
+		}
+	}
+
+	for i := startOff; i <= endOff; i++ {
 		addrUint := netUint + i
 		ip := net.IPv4(
 			byte(addrUint>>24),
@@ -258,6 +328,9 @@ func (s *State) nextIPInLock(subnet string, extraUsed map[string]bool) (string, 
 		}
 	}
 
+	if pool != nil {
+		return "", fmt.Errorf("no available IP in pool %q (%s-%s) within subnet %s", pool.Name, pool.StartIP, pool.EndIP, subnet)
+	}
 	return "", fmt.Errorf("no available IP in subnet %s", subnet)
 }
 
@@ -269,7 +342,7 @@ func (s *State) AllocateIPAndAddPeer(p *Peer, subnet string, extraUsed map[strin
 		return "", fmt.Errorf("peer %q already exists", p.Name)
 	}
 
-	ip, err := s.nextIPInLock(subnet, extraUsed)
+	ip, err := s.nextIPInLock(subnet, extraUsed, nil)
 	if err != nil {
 		return "", err
 	}
@@ -284,6 +357,15 @@ func (s *State) AllocateIPAndAddPeer(p *Peer, subnet string, extraUsed map[strin
 
 	s.Peers[p.Name] = *p
 	return ip, nil
+}
+
+// AllocateIPInPool returns an available IP from the given pool within the
+// subnet, or an error if the pool is exhausted.  The pool must have been
+// created via ParsePools and stored in State.Pools.
+func (s *State) AllocateIPInPool(pool *Pool, subnet string, extraUsed map[string]bool) (string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.nextIPInLock(subnet, extraUsed, pool)
 }
 
 func (s *State) Save() error {
@@ -330,6 +412,7 @@ func Load(path string, crypto *Crypto) (*State, error) {
 		Users:    make(map[string]User),
 		Sessions: make(map[string]Session),
 		Invites:  make(map[string]Invite),
+		Pools:    make(map[string]*Pool),
 		path:     path,
 		crypto:   crypto,
 	}
@@ -406,6 +489,17 @@ unmarshal:
 	if s.Invites == nil {
 		s.Invites = make(map[string]Invite)
 	}
+	if s.Pools == nil {
+		s.Pools = make(map[string]*Pool)
+	}
+
+	// Migrate: set Alias = Name for any peer loaded from disk without an alias.
+	for name, p := range s.Peers {
+		if p.Alias == "" {
+			p.Alias = p.Name
+			s.Peers[name] = p
+		}
+	}
 
 	return s, nil
 }
@@ -425,4 +519,6 @@ func (s *State) Replace(other *State) {
 	maps.Copy(s.Sessions, other.Sessions)
 	s.Invites = make(map[string]Invite)
 	maps.Copy(s.Invites, other.Invites)
+	s.Pools = make(map[string]*Pool)
+	maps.Copy(s.Pools, other.Pools)
 }

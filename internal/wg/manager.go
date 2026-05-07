@@ -137,6 +137,7 @@ func (m *Manager) RemoveAllPeers(iface string) error {
 }
 
 type PeerInfo struct {
+	Alias     string
 	PubKey    string
 	Address   string
 	Keepalive int
@@ -156,7 +157,11 @@ func WriteFullConfig(cfgPath, iface string, listenPort int, keepalive int, serve
 
 	for name, p := range peers {
 		b.WriteString("\n")
-		b.WriteString(fmt.Sprintf("# %s\n", name))
+		comment := p.Alias
+		if comment == "" {
+			comment = name
+		}
+		b.WriteString(fmt.Sprintf("# %s\n", comment))
 		b.WriteString("[Peer]\n")
 		b.WriteString(fmt.Sprintf("PublicKey = %s\n", p.PubKey))
 		b.WriteString(fmt.Sprintf("AllowedIPs = %s/32\n", p.Address))
