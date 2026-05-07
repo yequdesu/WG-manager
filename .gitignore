@@ -27,13 +27,13 @@ vendor/
 Thumbs.db
 
 # Project specific
+.sisyphus/
 server/peers.json
 testdata/
 *.log
 
 # Rust / wg-tui
 wg-tui/target/
-TUI-template/target/
 
 # WireGuard keys (security)
 *.key

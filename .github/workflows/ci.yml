@@ -29,9 +29,6 @@ jobs:
       - name: make build
         run: make build
 
-      - name: make build-tui
-        run: make build-tui
-
       - name: cargo check
         run: cargo check --manifest-path wg-tui/Cargo.toml
 

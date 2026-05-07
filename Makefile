@@ -1,10 +1,8 @@
-.PHONY: build build-tui build-all clean run dev help
+.PHONY: build build-all clean run dev help vet
 
 BINARY_NAME := wg-mgmt-daemon
-TUI_NAME    := wg-tui-legacy
 OUTPUT_DIR  := bin
 CMD_DIR     := ./cmd/mgmt-daemon
-TUI_DIR     := ./cmd/mgmt-tui
 
 GOOS        ?= linux
 GOARCH      ?= amd64
@@ -17,8 +15,7 @@ help:
 	@echo ""
 	@echo "Usage:"
 	@echo "  make build      Build daemon for Linux amd64"
-	@echo "  make build-tui  Build TUI for Linux amd64"
-	@echo "  make build-all  Build both binaries"
+	@echo "  make build-all  Build daemon"
 	@echo "  make build-win  Build daemon for Windows (testing)"
 	@echo "  make clean      Remove build artifacts"
 	@echo "  make vet        Run go vet"
@@ -32,15 +29,7 @@ build:
 	@echo "Done: $(OUTPUT_DIR)/$(BINARY_NAME)"
 	@ls -lh $(OUTPUT_DIR)/$(BINARY_NAME)
 
-build-tui:
-	@echo "Building $(TUI_NAME) for $(GOOS)/$(GOARCH)..."
-	@mkdir -p $(OUTPUT_DIR)
-	GOOS=$(GOOS) GOARCH=$(GOARCH) CGO_ENABLED=$(CGO_ENABLED) GOPROXY=$(GOPROXY) \
-		go build -ldflags="$(LDFLAGS)" -o $(OUTPUT_DIR)/$(TUI_NAME) $(TUI_DIR)
-	@echo "Done: $(OUTPUT_DIR)/$(TUI_NAME)"
-	@ls -lh $(OUTPUT_DIR)/$(TUI_NAME)
-
-build-all: build build-tui
+build-all: build
 
 build-win:
 	@echo "Building $(BINARY_NAME) for windows/amd64..."
