@@ -84,7 +84,76 @@ func TestCreateInviteIncludesBootstrapURL(t *testing.T) {
 			if bootstrapURL != want {
 				t.Fatalf("bootstrap_url = %q, want %q", bootstrapURL, want)
 			}
+
+			command, ok := payload["command"].(string)
+			if !ok || command == "" {
+				t.Fatalf("CreateInvite response missing command: %v", payload)
+			}
+			if !strings.Contains(command, bootstrapURL+"&name=DEVICE_NAME") {
+				t.Fatalf("command = %q, want it to include bootstrap URL with device placeholder", command)
+			}
 		})
+	}
+}
+
+func TestInviteLinkByIDUsesStoredRawToken(t *testing.T) {
+	handler, state := newContractHandler(t, "vpn.example.test")
+	rawToken, inv, err := state.CreateInvite("admin", time.Hour)
+	if err != nil {
+		t.Fatalf("CreateInvite seed failed: %v", err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/invites/"+inv.ID+"/link?name=my-device", nil)
+	recorder := httptest.NewRecorder()
+
+	handler.InviteLink(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("InviteLink status = %d, want %d; body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal InviteLink response: %v", err)
+	}
+
+	wantURL := connectBootstrapURL("vpn.example.test", rawToken, "my-device")
+	if got := payload["bootstrap_url"]; got != wantURL {
+		t.Fatalf("bootstrap_url = %q, want %q", got, wantURL)
+	}
+	command, ok := payload["command"].(string)
+	if !ok || !strings.Contains(command, wantURL) {
+		t.Fatalf("command = %v, want it to include %q", payload["command"], wantURL)
+	}
+}
+
+func TestInviteLinkByIDHandlesLegacyMissingRawToken(t *testing.T) {
+	handler, state := newContractHandler(t, "vpn.example.test")
+	_, inv, err := state.CreateInvite("admin", time.Hour)
+	if err != nil {
+		t.Fatalf("CreateInvite seed failed: %v", err)
+	}
+	inv.RawToken = ""
+	state.Invites[inv.ID] = inv
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/invites/"+inv.ID+"/link?name=my-device", nil)
+	recorder := httptest.NewRecorder()
+
+	handler.InviteLink(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("InviteLink status = %d, want %d; body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal InviteLink response: %v", err)
+	}
+	if _, ok := payload["bootstrap_url"]; ok {
+		t.Fatalf("legacy invite without raw token should not return bootstrap_url: %v", payload)
+	}
+	if note, ok := payload["note"].(string); !ok || !strings.Contains(note, "cannot be reconstructed") {
+		t.Fatalf("legacy invite response note = %v", payload["note"])
 	}
 }
 

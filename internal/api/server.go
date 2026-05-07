@@ -56,7 +56,16 @@ func NewServer(ctx context.Context, cfg *Config, s *store.State, m *wg.Manager) 
 		}
 	})))
 	mux.Handle("/api/v1/invites/qrcode", methodGuard(http.MethodGet, LocalOnly(adminMW(h.ServeInviteQR))))
-	mux.Handle("/api/v1/invites/", methodGuard(http.MethodDelete, LocalOnly(adminMW(h.RevokeInvite))))
+	mux.HandleFunc("/api/v1/invites/", LocalOnly(adminMW(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodDelete:
+			h.RevokeInvite(w, r)
+		case http.MethodGet:
+			h.InviteLink(w, r)
+		default:
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		}
+	})))
 
 	ownerMW := RequireRole(s, cfg.APIKey, store.RoleOwner)
 	mux.HandleFunc("/api/v1/users", LocalOnly(ownerMW(func(w http.ResponseWriter, r *http.Request) {

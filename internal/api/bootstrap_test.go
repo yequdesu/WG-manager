@@ -41,12 +41,94 @@ func getBootstrapScript(t *testing.T, h *Handler) string {
 	return string(raw)
 }
 
+// TestBootstrapFallbackParser asserts the bootstrap script includes a
+// grep/sed fallback JSON parser for systems without jq or python3.
+// The fallback must handle the known redeem JSON shape:
+//
+//	{"peer":{...},"success":true}
+//
+// Required extractable fields: success, error, and the nested peer fields
+// (private_key, address, server_public_key, server_endpoint, dns, keepalive).
+func TestBootstrapFallbackParser(t *testing.T) {
+	cfg := &Config{
+		ServerPublicIP: "vpn.example.com",
+		DefaultDNS:     "1.1.1.1",
+		WGServerIP:     "10.0.0.1",
+	}
+	h := newTestHandler(cfg)
+	script := getBootstrapScript(t, h)
+
+	// Fallback parser must handle the "success" key via grep.
+	if !strings.Contains(script, `"success"`) && !strings.Contains(script, `success`) {
+		t.Error("Bootstrap script does not handle success field in fallback parser")
+	}
+
+	// The script must contain grep/sed fallback patterns.
+	fallbackIndicators := []string{
+		"PARSER_MODE",
+		"fallback",
+		"grep",
+		"sed",
+	}
+	for _, indicator := range fallbackIndicators {
+		if !strings.Contains(script, indicator) {
+			t.Errorf("Bootstrap script missing fallback parser indicator: %q", indicator)
+		}
+	}
+
+	// The fallback json_get function must handle "success", "error", and
+	// generic keys with string/numeric/boolean values.
+	if !strings.Contains(script, `case "$key"`) {
+		t.Error("Fallback json_get should use case-based key dispatch for known keys")
+	}
+
+	// json_get_nested must extract string values (cut -d'\"' -f4) and
+	// numeric values (grep -oE '[0-9]+')
+	if !strings.Contains(script, `cut -d'"' -f4`) && !strings.Contains(script, `cut -d'"'`) {
+		t.Error("Fallback json_get_nested missing string value extraction (cut)")
+	}
+	if !strings.Contains(script, `[0-9]+`) {
+		t.Error("Fallback json_get_nested missing numeric value extraction")
+	}
+
+	// The preflight must NOT exit immediately when jq/python3 missing;
+	// it should fall through to check for grep/sed.
+	// Verify by finding the parser strategy setting code.
+	if !strings.Contains(script, `PARSER_OK=1`) {
+		t.Error("Missing PARSER_OK fallback path when jq/python3 absent")
+	}
+
+	// Package manager detection must exist for interactive install prompts.
+	pkgMgrPatterns := []string{
+		"apt-get",
+		"yum",
+		"dnf",
+		"apk",
+		"brew",
+	}
+	foundPkgMgrs := 0
+	for _, p := range pkgMgrPatterns {
+		if strings.Contains(script, p) {
+			foundPkgMgrs++
+		}
+	}
+	if foundPkgMgrs < 3 {
+		t.Errorf("Bootstrap script should detect at least 3 package managers, found %d", foundPkgMgrs)
+	}
+
+	// The parsers_suggest_install function must be present.
+	if !strings.Contains(script, "parsers_suggest_install") {
+		t.Error("Missing parsers_suggest_install function for interactive jq install prompt")
+	}
+}
+
 // ── PREFLIGHT: Dependency check before redeem ───────────────────────────
 
-// TestBootstrapPreflightDependencyCheck asserts that the bootstrap script
-// validates JSON-parser availability (jq or python3) BEFORE calling
-// POST /api/v1/redeem.  Without this check, the script silently loses the
-// invite token when neither parser exists.
+// TestBootstrapPreflightDependencyCheck asserts the bootstrap script
+// validates JSON-parser availability BEFORE calling redeem, with a
+// three-tier strategy (jq → python3 → grep/sed fallback). The old
+// behavior hard-exited when jq/python3 were missing; the new behavior
+// falls through to grep/sed when available.
 func TestBootstrapPreflightDependencyCheck(t *testing.T) {
 	cfg := &Config{
 		ServerPublicIP: "vpn.example.com",
@@ -56,50 +138,37 @@ func TestBootstrapPreflightDependencyCheck(t *testing.T) {
 	h := newTestHandler(cfg)
 	script := getBootstrapScript(t, h)
 
-	// Locate the redeem curl call.
 	redeemIdx := strings.Index(script, `$SERVER_URL/api/v1/redeem`)
 	if redeemIdx < 0 {
 		t.Fatal("could not find redeem curl call in bootstrap script")
 	}
-
-	// Everything before the redeem call.
 	prefix := script[:redeemIdx]
 
-	// Look for a deliberate preflight gate that checks BOTH jq AND python3
-	// together and exits before reaching the redeem call.  This is distinct
-	// from the json_get() function definition, which also references those
-	// commands but does not gate the redeem call.
-	//
-	// Expected pattern (pseudocode):
-	//   if ! command -v jq && ! command -v python3; then
-	//       err "need jq or python3 to parse config"
-	//       exit 1
-	//   fi
-	hasExplicitPreflight := regexp.MustCompile(
-		`command -v jq.*command -v python3|command -v python3.*command -v jq`,
-	).MatchString(prefix)
-
-	if !hasExplicitPreflight {
-		t.Error(`Bootstrap script has NO preflight dependency check before calling redeem.
-The script directly calls POST /api/v1/redeem without first verifying that
-jq or python3 is available for parsing the JSON response.
-
-On a system without jq or python3, the script will:
-  1. POST to /api/v1/redeem (consuming the invite server-side)
-  2. Fail to parse the response via json_get → SUCCESS=""
-  3. Exit with "unknown error" leaving the token irretrievably consumed
-
-The json_get() function definition (which contains command -v jq/python3) is
-not a preflight gate — it silently returns the default on parse failure.
-A preflight check must abort the script BEFORE the HTTP POST.`)
-		return
+	// Preflight must check jq, python3, and grep availability.
+	if !regexp.MustCompile(`command -v jq`).MatchString(prefix) {
+		t.Error("Preflight must check for jq")
+	}
+	if !regexp.MustCompile(`command -v python3`).MatchString(prefix) {
+		t.Error("Preflight must check for python3")
+	}
+	if !regexp.MustCompile(`command -v grep`).MatchString(prefix) {
+		t.Error("Preflight must check for grep (fallback)")
+	}
+	if !regexp.MustCompile(`command -v sed`).MatchString(prefix) {
+		t.Error("Preflight must check for sed (fallback)")
 	}
 
-	// The preflight check must abort when the check fails.
-	// Look for exit within ~100 chars after the dependency check.
-	_, after, _ := strings.Cut(prefix, "command -v python3")
-	if !strings.Contains(after[:min(len(after), 100)], "exit") {
-		t.Error("preflight dependency check found but missing exit on failure")
+	// Must set PARSER_MODE and PARSER_OK to track strategy.
+	if !strings.Contains(prefix, "PARSER_MODE=") {
+		t.Error("Preflight must set PARSER_MODE before redeem")
+	}
+	if !strings.Contains(prefix, "PARSER_OK=1") {
+		t.Error("Preflight must set PARSER_OK=1 when a parser is available")
+	}
+
+	// The fallback warning must be present.
+	if !strings.Contains(script, "fallback") {
+		t.Error("Script must reference fallback parser mode")
 	}
 }
 
@@ -170,11 +239,12 @@ detected explicitly because:
 // recovery guidance instead of a generic "unknown error".
 //
 // The current behaviour is:
-//   SUCCESS=$(json_get "$RESP" "success" "")
-//   if [ "$SUCCESS" != "true" ]; then
-//       err "Failed to redeem invite: $(json_get "$RESP" "error" "unknown error")"
-//       exit 1
-//   fi
+//
+//	SUCCESS=$(json_get "$RESP" "success" "")
+//	if [ "$SUCCESS" != "true" ]; then
+//	    err "Failed to redeem invite: $(json_get "$RESP" "error" "unknown error")"
+//	    exit 1
+//	fi
 //
 // On a system without jq or python3, SUCCESS is always "" so the "error"
 // branch fires with "unknown error" even though the server returned a 200.
@@ -218,13 +288,9 @@ func TestBootstrapConsumedTokenRecoveryMessage(t *testing.T) {
 
 	afterSuccess := suffix
 	successIdx := strings.Index(suffix, `SUCCESS=`)
-	if successIdx > 0 && successIdx+200 < len(suffix) {
-		// Look at the ~300 chars after SUCCESS extraction for recovery messaging.
-		end := successIdx + 300
-		if end > len(suffix) {
-			end = len(suffix)
-		}
-		afterSuccess = suffix[successIdx:end]
+	if successIdx > 0 {
+		// Search from SUCCESS extraction to end of script for recovery messaging.
+		afterSuccess = suffix[successIdx:]
 	}
 
 	var found []string

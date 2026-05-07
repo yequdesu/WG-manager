@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -644,6 +645,7 @@ func (h *Handler) CreateInvite(w http.ResponseWriter, r *http.Request) {
 		"token":         rawToken,
 		"expires_at":    inv.ExpiresAt,
 		"bootstrap_url": fmt.Sprintf("%s/bootstrap?token=%s", h.cfg().PublicURL(), rawToken),
+		"command":       fmt.Sprintf("curl -sSf \"%s/bootstrap?token=%s&name=DEVICE_NAME\" | sudo bash", h.cfg().PublicURL(), rawToken),
 		"message":       "Share this token with the client. It will only be shown once.",
 	})
 }
@@ -747,6 +749,26 @@ func (h *Handler) RevokeInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.URL.Query().Get("action") == "force-delete" {
+		if err := h.store.ForceDeleteInvite(id); err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+			return
+		}
+
+		if err := h.store.Save(); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist state"})
+			return
+		}
+
+		audit.Log("invite_force_deleted", auditFields("invite_id", id, "deleted_by", operator))
+
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"success": true,
+			"message": fmt.Sprintf("invite %q permanently force-deleted", id),
+		})
+		return
+	}
+
 	if err := h.store.RevokeInvite(id); err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 		return
@@ -765,7 +787,89 @@ func (h *Handler) RevokeInvite(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ── User Management Handlers ───────────────────────────────────────────
+// InviteLink returns the bootstrap URL and shell command for an existing
+// invite without consuming it. Accepts an invite ID or raw token via the
+// path segment, and an optional device name via ?name= query parameter.
+// Access: LocalOnly + RequireRole(admin, owner).
+func (h *Handler) InviteLink(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	// Path: /api/v1/invites/{id}/link
+	path := strings.TrimPrefix(r.URL.Path, "/api/v1/invites/")
+	if !strings.HasSuffix(path, "/link") {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "invite link endpoint not found"})
+		return
+	}
+	id := strings.TrimSpace(strings.TrimSuffix(path, "/link"))
+	if decodedID, err := url.PathUnescape(id); err == nil {
+		id = decodedID
+	}
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invite ID or token is required"})
+		return
+	}
+
+	name := strings.TrimSpace(r.URL.Query().Get("name"))
+	if name == "" {
+		name = "my-device"
+	}
+	if err := validatePeerName(name); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	// Try ID first, then token hash lookup.
+	inv, ok := h.store.GetInviteByID(id)
+	foundByID := ok
+	if !ok {
+		// Try as raw token hash.
+		tokenSum := sha256.Sum256([]byte(id))
+		tokenHash := hex.EncodeToString(tokenSum[:])
+		inv, ok = h.store.GetInviteByTokenHash(tokenHash)
+		if !ok {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "invite not found"})
+			return
+		}
+	}
+
+	// Build bootstrap URL using the server's public URL.
+	publicURL := h.cfg().PublicURL()
+	escapedName := url.QueryEscape(name)
+
+	if foundByID {
+		if inv.RawToken == "" {
+			writeJSON(w, http.StatusOK, map[string]interface{}{
+				"invite_id": inv.ID,
+				"status":    string(inv.Status),
+				"note":      "This invite was created before raw-token retention, so the full onboarding URL cannot be reconstructed. Use the original token if available, or create a new invite.",
+			})
+			return
+		}
+
+		bootstrapURL := fmt.Sprintf("%s/bootstrap?token=%s&name=%s", publicURL, url.QueryEscape(inv.RawToken), escapedName)
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"invite_id":     inv.ID,
+			"status":        string(inv.Status),
+			"bootstrap_url": bootstrapURL,
+			"command":       fmt.Sprintf("curl -sSf \"%s\" | sudo bash", bootstrapURL),
+			"inspect":       fmt.Sprintf("curl -sSf \"%s\"", bootstrapURL),
+		})
+		return
+	}
+
+	// Found by raw token — reconstruct the bootstrap URL.
+	bootstrapURL := fmt.Sprintf("%s/bootstrap?token=%s&name=%s", publicURL, url.QueryEscape(id), escapedName)
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"invite_id":     inv.ID,
+		"status":        string(inv.Status),
+		"bootstrap_url": bootstrapURL,
+		"command":       fmt.Sprintf("curl -sSf \"%s\" | sudo bash", bootstrapURL),
+		"inspect":       fmt.Sprintf("curl -sSf \"%s\"", bootstrapURL),
+	})
+}
 
 func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -1281,31 +1385,116 @@ install_wg() {
     log "WireGuard installed successfully"
 }
 
-# ── Preflight: JSON parser required ──
-if ! command -v jq &>/dev/null && ! command -v python3 &>/dev/null; then
-    err "Need jq or python3 to parse JSON. Install one and re-run."
+# ── Preflight: determine JSON parser strategy ──
+PARSER_MODE=""
+PARSER_OK=0
+parsers_suggest_install() {
+    local reason="${1:-JSON parsing}"
+    local pkg=""
+    for mgr in apt-get yum dnf apk brew; do
+        if command -v "$mgr" &>/dev/null; then pkg="$mgr"; break; fi
+    done
+    if [ -n "$pkg" ]; then
+        echo ""
+        warn "Would you like to install jq? (y/N)"
+        local answer
+        read -r answer </dev/tty 2>/dev/null || true
+        if [ "$answer" = "y" ] || [ "$answer" = "Y" ]; then
+            case "$pkg" in
+                apt-get) sudo apt-get update -qq && sudo apt-get install -y -qq jq ;;
+                yum)     sudo yum install -y jq ;;
+                dnf)     sudo dnf install -y jq ;;
+                apk)     sudo apk add jq ;;
+                brew)    brew install jq ;;
+            esac
+            if command -v jq &>/dev/null; then
+                PARSER_MODE="jq"
+                PARSER_OK=1
+                return 0
+            fi
+        fi
+        err "Cannot proceed: ${reason}. Install jq or python3 and re-run."
+        if [ "$pkg" = "apt-get" ]; then
+            err "  sudo apt-get install jq"
+        elif [ "$pkg" = "brew" ]; then
+            err "  brew install jq"
+        else
+            err "  sudo $pkg install jq"
+        fi
+    else
+        err "Cannot proceed: ${reason}. Install jq or python3 and re-run."
+    fi
     exit 1
+}
+
+if command -v jq &>/dev/null; then
+    PARSER_MODE="jq"
+    PARSER_OK=1
+elif command -v python3 &>/dev/null; then
+    PARSER_MODE="python3"
+    PARSER_OK=1
+elif command -v grep &>/dev/null && command -v sed &>/dev/null; then
+    PARSER_MODE="fallback"
+    PARSER_OK=1
+    warn "jq and python3 not found — using basic grep/sed JSON parser."
+    warn "Install jq (sudo apt install jq) for more robust output."
+else
+    parsers_suggest_install "no JSON parser (jq, python3, or grep+sed) found"
 fi
 
-# ── JSON parsing without jq ──
+# ── JSON parsing (jq → python3 → grep/sed fallback) ──
 json_get() {
     local json="$1" key="$2" default="${3:-}"
-    if command -v jq &>/dev/null; then
+    if [ "$PARSER_MODE" = "jq" ]; then
         echo "$json" | jq -r ".$key" 2>/dev/null || echo "$default"
-    elif command -v python3 &>/dev/null; then
+    elif [ "$PARSER_MODE" = "python3" ]; then
         echo "$json" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('$key','$default'))" 2>/dev/null || echo "$default"
     else
-        echo "$default"
+        # grep/sed fallback: match known top-level keys
+        case "$key" in
+            success)
+                if echo "$json" | grep -qE '"success"[[:space:]]*:[[:space:]]*true'; then
+                    echo "true"
+                else
+                    echo "${default:-false}"
+                fi
+                ;;
+            error)
+                echo "$json" | sed -n 's/.*"error"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1
+                ;;
+            *)
+                # Try string value
+                local val
+                val=$(echo "$json" | grep -oE "\"${key}\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" | head -1 | cut -d'"' -f4)
+                [ -n "$val" ] && { echo "$val"; return; }
+                # Try numeric value
+                val=$(echo "$json" | grep -oE "\"${key}\"[[:space:]]*:[[:space:]]*[0-9]+" | head -1 | grep -oE '[0-9]+$')
+                [ -n "$val" ] && { echo "$val"; return; }
+                # Try boolean
+                if echo "$json" | grep -qE "\"${key}\"[[:space:]]*:[[:space:]]*true"; then echo "true"; return; fi
+                if echo "$json" | grep -qE "\"${key}\"[[:space:]]*:[[:space:]]*false"; then echo "false"; return; fi
+                echo "$default"
+                ;;
+        esac
     fi
 }
 
 json_get_nested() {
     local json="$1" key1="$2" key2="$3" default="${4:-}"
-    if command -v jq &>/dev/null; then
+    if [ "$PARSER_MODE" = "jq" ]; then
         echo "$json" | jq -r ".${key1}.${key2}" 2>/dev/null || echo "$default"
-    elif command -v python3 &>/dev/null; then
+    elif [ "$PARSER_MODE" = "python3" ]; then
         echo "$json" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('$key1',{}).get('$key2','$default'))" 2>/dev/null || echo "$default"
     else
+        # grep/sed fallback: extract string or numeric value for key2
+        local val
+        val=$(echo "$json" | grep -oE "\"${key2}\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" | head -1 | cut -d'"' -f4)
+        [ -n "$val" ] && { echo "$val"; return; }
+        val=$(echo "$json" | grep -oE "\"${key2}\"[[:space:]]*:[[:space:]]*[0-9]+" | head -1 | grep -oE '[0-9]+$')
+        [ -n "$val" ] && { echo "$val"; return; }
+        # Try boolean
+        if echo "$json" | grep -qE "\"${key2}\"[[:space:]]*:[[:space:]]*true"; then echo "true"; return; fi
+        if echo "$json" | grep -qE "\"${key2}\"[[:space:]]*:[[:space:]]*false"; then echo "false"; return; fi
         echo "$default"
     fi
 }
@@ -1350,19 +1539,54 @@ fi
 # HTTP 200 — server accepted, token IS consumed.
 SUCCESS=$(json_get "$RESP" "success" "")
 if [ "$SUCCESS" != "true" ]; then
-    err "Redeem succeeded (HTTP 200) but JSON parsing failed."
+    if [ "$PARSER_MODE" = "fallback" ]; then
+        err "Redeem succeeded (HTTP 200) but the grep/sed fallback could not parse the response."
+    else
+        err "Redeem succeeded (HTTP 200) but JSON parsing failed."
+    fi
     err ""
     err "The invite token WAS CONSUMED and is now a one-time used token."
     err "It cannot be reused — you need a NEW invite from your admin."
     err ""
     err "Recovery options:"
-    err "  1. Install jq/python3 and re-run with a fresh token"
+    err "  1. Install jq or python3 and re-run with a fresh token"
     err "  2. Contact your administrator to re-issue an invite"
-    err "  3. Show the raw response below to your admin for manual recovery"
+    err "  3. Share the raw response below with your admin for manual config recovery"
     err ""
-    err "Raw response from server:"
-    echo "$RESP"
-    exit 1
+    if [ "$PARSER_MODE" = "fallback" ]; then
+        pkg=""
+        for mgr in apt-get yum dnf apk brew; do
+            if command -v "$mgr" &>/dev/null; then pkg="$mgr"; break; fi
+        done
+        if [ -n "$pkg" ]; then
+            echo ""
+            warn "Would you like to install jq now? (y/N)"
+            answer=""
+            read -r answer </dev/tty 2>/dev/null || true
+            if [ "$answer" = "y" ] || [ "$answer" = "Y" ]; then
+                case "$pkg" in
+                    apt-get) sudo apt-get update -qq && sudo apt-get install -y -qq jq ;;
+                    yum)     sudo yum install -y jq ;;
+                    dnf)     sudo dnf install -y jq ;;
+                    apk)     sudo apk add jq ;;
+                    brew)    brew install jq ;;
+                esac
+                if command -v jq &>/dev/null; then
+                    log "jq installed. Re-running parse..."
+                    SUCCESS=$(echo "$RESP" | jq -r '.success' 2>/dev/null || echo "")
+                fi
+            fi
+        fi
+        if [ "$SUCCESS" != "true" ]; then
+            err "Raw response from server:"
+            echo "$RESP"
+            exit 1
+        fi
+    else
+        err "Raw response from server:"
+        echo "$RESP"
+        exit 1
+    fi
 fi
 
 log "Invite redeemed successfully!"
