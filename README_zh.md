@@ -47,8 +47,10 @@ owner/admin 创建邀请  ->  用户兑换邀请  ->  peer 原子创建并写入
 | 列出邀请 | ✅ | ✅ | ❌ | LocalOnly |
 | 创建邀请 | ✅ | ✅* | ❌ | LocalOnly |
 | 邀请 QR 码 | ✅ | ✅ | ❌ | LocalOnly |
+| 查看邀请链接/入网指令 | ✅ | ✅ | ❌ | LocalOnly |
 | 撤销邀请 | ✅ | ✅ | ❌ | LocalOnly |
 | 删除邀请（软删除） | ✅ | ✅ | ❌ | LocalOnly |
+| 强制删除邀请 | ✅ | ✅ | ❌ | LocalOnly |
 | 列出用户 | ✅ | ❌ | ❌ | LocalOnly + Owner |
 | 创建用户 | ✅ | ❌ | ❌ | LocalOnly + Owner |
 | 删除用户 | ✅ | ❌ | ❌ | LocalOnly + Owner |
@@ -247,6 +249,8 @@ wg-tui
 | `Tab` / `←→` | 切换标签页 |
 | `↑↓` / `j` `k` | 选择条目 |
 | `d` / `y` | 删除 peer / 撤销邀请 |
+| `v` | 查看所选邀请的完整链接和入网指令 |
+| `F` | 二次确认后强制删除所选邀请 |
 | `r` | 刷新 |
 | `?` | 帮助 |
 | `q` | 退出 |
@@ -415,6 +419,28 @@ wg-mgmt invite revoke --id <invite_id>
 
 ```bash
 wg-mgmt invite delete --id <invite_id>
+```
+
+### invite link
+
+再次查看已发出邀请的完整 bootstrap URL 和可复制入网指令。新邀请可通过 invite ID 查询；旧版本创建、未保存 raw token 的邀请需要使用原始 token，或重新创建邀请。
+
+```bash
+wg-mgmt invite link --id <invite_id_or_token> --name <device_name>
+```
+
+| 参数 | 必需 | 说明 |
+|------|------|------|
+| `--id` | 是 | 邀请 ID 或原始 token |
+| `--name` | 否 | 写入 bootstrap URL 的设备名 |
+| `--format` | 否 | 输出格式（`human` 或 `json`） |
+
+### invite force-delete
+
+永久删除任意状态的邀请。该操作不可恢复，必须通过 `--confirm` 再次输入相同 invite ID。
+
+```bash
+wg-mgmt invite force-delete --id <invite_id> --confirm <invite_id>
 ```
 
 ### invite qrcode
@@ -604,6 +630,14 @@ sudo bash server/deploy-proxy.sh --caddy
 | `/api/v1/invites` | 邀请管理 |
 | `/api/v1/users` | 用户管理 |
 | `/api/v1/status` | 状态 |
+
+邀请管理仅限本机访问，常用管理端点包括：
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/api/v1/invites/{id}/link` | 查看完整 bootstrap URL 和入网指令 |
+| `DELETE` | `/api/v1/invites/{id}` | 撤销邀请 |
+| `DELETE` | `/api/v1/invites/{id}?action=force-delete` | 永久强制删除邀请 |
 
 ### nginx 示例（由 deploy-proxy.sh --nginx 生成）
 
@@ -799,7 +833,7 @@ sudo systemctl kill -s HUP wg-mgmt
 | 日志为空 | 日志已轮转，运行 `sudo systemctl kill -s HUP wg-mgmt` |
 | WG 接口丢失 | `modprobe wireguard && ip link add wg0 type wireguard` |
 | WSL bootstrap 问题 | 脚本会自动检测 WSL 并提示在 Windows 宿主机上安装 WireGuard，而非 WSL 内部。请使用 Windows PowerShell 或 CMD 方式入网。 |
-| Bootstrap 解析错误 | bootstrap 脚本需要 `jq` 或 `python3` 解析服务端响应。安装其中一个（`sudo apt install jq`）后重新运行。邀请 token 在服务端确认兑换前不会被消耗。 |
+| Bootstrap 解析错误 | bootstrap 脚本会依次尝试 `jq`、`python3`、基础 `grep`/`sed` fallback。若全部失败，按提示安装 `jq` 或 `python3`；若服务端已返回 HTTP 200，则需要管理员重新发放邀请并保留原始响应用于排查。 |
 
 ---
 

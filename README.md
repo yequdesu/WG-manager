@@ -53,8 +53,10 @@ Three fixed roles: owner, admin, user. No custom roles.
 | List invites | ✅ | ✅ | ❌ | LocalOnly |
 | Create invite | ✅ | ✅* | ❌ | LocalOnly |
 | Invite QR code | ✅ | ✅ | ❌ | LocalOnly |
+| View invite link/command | ✅ | ✅ | ❌ | LocalOnly |
 | Revoke invite | ✅ | ✅ | ❌ | LocalOnly |
 | Delete invite (soft-delete) | ✅ | ✅ | ❌ | LocalOnly |
+| Force-delete invite | ✅ | ✅ | ❌ | LocalOnly |
 | List users | ✅ | ❌ | ❌ | LocalOnly + Owner |
 | Create user | ✅ | ❌ | ❌ | LocalOnly + Owner |
 | Delete user | ✅ | ❌ | ❌ | LocalOnly + Owner |
@@ -329,7 +331,7 @@ wg-mgmt --help
 | Command | Description |
 |---------|-------------|
 | `peer` | List, alias, delete peers |
-| `invite` | Create, list, revoke, delete invites and generate QR codes |
+| `invite` | Create, list, view links, revoke, delete, force-delete invites and generate QR codes |
 | `user` | List, create, delete users |
 | `status` | Daemon and WireGuard status |
 | `auth` | Login and logout (session management) |
@@ -451,6 +453,28 @@ Soft-deletes an invite (marks as deleted but preserves history).
 
 ```bash
 wg-mgmt invite delete --id <invite_id>
+```
+
+### invite link
+
+Shows the full bootstrap URL and copy-paste onboarding command for an issued invite. New invites can be looked up by invite ID because the server retains the raw token locally; legacy invites created before this change may require the original raw token.
+
+```bash
+wg-mgmt invite link --id <invite_id_or_token> --name <device_name>
+```
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `--id` | Yes | Invite ID or raw token |
+| `--name` | No | Device name embedded in the bootstrap URL |
+| `--format` | No | Output format (`human` or `json`) |
+
+### invite force-delete
+
+Permanently removes an invite in any state. This is irreversible and requires a second confirmation value matching the invite ID.
+
+```bash
+wg-mgmt invite force-delete --id <invite_id> --confirm <invite_id>
 ```
 
 ### invite qrcode
@@ -592,6 +616,8 @@ bash install.sh                  # Default
 | `↑↓` / `j` `k` | Navigate lists |
 | `/` | Search peers |
 | `d` / `y` | Delete peer / Revoke invite |
+| `v` | View selected invite URL and onboarding command |
+| `F` | Force-delete selected invite after confirmation |
 | `r` | Refresh data |
 | `=` / `-` / `0` | Zoom in / out / reset |
 | `Ctrl+Arrows` | Move window |
@@ -672,7 +698,9 @@ Localhost-only (enforced by daemon middleware). Do not expose via reverse proxy.
 | `GET` | `/api/v1/invites` | LocalOnly | List all invites |
 | `POST` | `/api/v1/invites` | LocalOnly | Create a new invite |
 | `GET` | `/api/v1/invites/qrcode` | LocalOnly | SVG QR code for invite token |
-| `DELETE` | `/api/v1/invites/{token}` | LocalOnly | Revoke an invite |
+| `GET` | `/api/v1/invites/{id}/link` | LocalOnly | Show bootstrap URL and onboarding command |
+| `DELETE` | `/api/v1/invites/{id}` | LocalOnly | Revoke an invite |
+| `DELETE` | `/api/v1/invites/{id}?action=force-delete` | LocalOnly | Permanently force-delete an invite |
 | `GET` | `/api/v1/users` | LocalOnly | List users |
 | `DELETE` | `/api/v1/users/{name}` | LocalOnly | Remove a user |
 | `GET` | `/api/v1/status` | LocalOnly | Server + daemon status |
@@ -988,7 +1016,7 @@ If you are upgrading from a version that used the approval flow:
 | Rust not found (wg-tui) | Install Rust: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
 | `wg-tui` command not found | Install the Rust TUI: `cd ~/WG-manager/wg-tui && bash install.sh` |
 | WSL bootstrap issues | WSL is detected by the bootstrap script. A warning recommends installing WireGuard on the Windows host, not inside WSL. Use the Windows PowerShell or CMD path instead. |
-| Bootstrap fails with parser error | The bootstrap script requires `jq` or `python3` to parse the server response. Install one (`sudo apt install jq`) and re-run. The invite token is NOT consumed until the server confirms redemption. |
+| Bootstrap fails with parser error | The bootstrap script tries `jq`, then `python3`, then a basic `grep`/`sed` fallback before redeeming. If all parsers fail, install `jq` or `python3`; if HTTP 200 was already returned, ask an admin for a fresh invite and share the raw response. |
 
 ---
 
