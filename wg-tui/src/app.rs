@@ -56,7 +56,7 @@ pub struct App {
     pub invite_form_role: String,
     pub invite_form_device: String,
     pub invite_form_confirm: bool,
-    pub invite_form_result: Option<String>,
+    pub invite_form_result: Option<ui::invites::InviteResult>,
 
     pub api: ApiClient,
     #[allow(dead_code)]
@@ -181,13 +181,26 @@ impl App {
                         .get("token")
                         .and_then(|v| v.as_str())
                         .unwrap_or("(no token)");
-                    self.invite_form_result = Some(token.to_string());
+                    let url = val
+                        .get("bootstrap_url")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| {
+                            format!("{}/bootstrap?token={}", self.config.public_url, token)
+                        });
+                    self.invite_form_result = Some(ui::invites::InviteResult {
+                        token: token.to_string(),
+                        url,
+                    });
                 }
                 self.refresh_data();
             }
             DataEvent::InviteCreated(Err(e)) => {
                 if self.invite_form_active {
-                    self.invite_form_result = Some(format!("Error: {}", e));
+                    self.invite_form_result = Some(ui::invites::InviteResult {
+                        token: String::new(),
+                        url: format!("Error: {}", e),
+                    });
                 } else {
                     self.error_msg = Some(e);
                 }

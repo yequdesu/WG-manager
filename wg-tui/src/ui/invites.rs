@@ -15,6 +15,12 @@ pub enum FlashKind {
     Revoke,
 }
 
+#[derive(Debug, Clone)]
+pub struct InviteResult {
+    pub token: String,
+    pub url: String,
+}
+
 pub fn render_invite_list(
     frame: &mut Frame,
     area: Rect,
@@ -192,8 +198,8 @@ static FORM_FIELD_COUNT: usize = FORM_FIELDS.len();
 pub fn render_create_invite_form(frame: &mut Frame, area: Rect, app: &App) {
     let inner = Card::new("Create Invite").render_block(frame, area);
 
-    if let Some(ref token) = app.invite_form_result {
-        render_invite_result(frame, inner, token);
+    if let Some(ref result) = app.invite_form_result {
+        render_invite_result(frame, inner, result);
         return;
     }
 
@@ -310,7 +316,7 @@ fn render_invite_confirmation(frame: &mut Frame, area: Rect, app: &App) {
     Card::new("Confirm").render(frame, area, lines);
 }
 
-fn render_invite_result(frame: &mut Frame, area: Rect, token: &str) {
+fn render_invite_result(frame: &mut Frame, area: Rect, result: &InviteResult) {
     let lines = vec![
         Line::from(""),
         Line::from(vec![
@@ -319,7 +325,7 @@ fn render_invite_result(frame: &mut Frame, area: Rect, token: &str) {
         Line::from(""),
         Line::from(vec![
             Span::styled("  Token: ", DARK_THEME.muted),
-            Span::styled(token, DARK_THEME.text),
+            Span::styled(result.token.as_str(), DARK_THEME.text),
         ]),
         Line::from(""),
         Line::from(vec![
@@ -327,7 +333,7 @@ fn render_invite_result(frame: &mut Frame, area: Rect, token: &str) {
         ]),
         Line::from(vec![
             Span::styled(
-                format!("  https://vpn.example.com/bootstrap?token={}", token),
+                format!("  {}", result.url),
                 DARK_THEME.text,
             ),
         ]),

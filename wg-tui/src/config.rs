@@ -1,11 +1,16 @@
 use std::env;
 use std::fs;
+use std::net::IpAddr;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub struct Config {
     pub api_url: String,
     pub api_key: String,
+    /// Full public URL with scheme, e.g. "https://vpn.example.com" or "http://203.0.113.10".
+    /// Derived from SERVER_HOST (preferred) or SERVER_PUBLIC_IP in config.env.
+    /// Empty if neither is configured.
+    pub public_url: String,
 }
 
 impl Config {
@@ -13,6 +18,8 @@ impl Config {
         let path = Self::config_path();
         let mut api_url = String::from("http://127.0.0.1:58880");
         let mut api_key = String::new();
+        let mut server_host = String::new();
+        let mut server_public_ip = String::new();
 
         if let Ok(content) = fs::read_to_string(&path) {
             for line in content.lines() {
@@ -30,13 +37,38 @@ impl Config {
                         "MGMT_API_KEY" => {
                             api_key = val.to_string();
                         }
+                        "SERVER_HOST" => {
+                            server_host = val.to_string();
+                        }
+                        "SERVER_PUBLIC_IP" => {
+                            server_public_ip = val.to_string();
+                        }
                         _ => {}
                     }
                 }
             }
         }
 
-        Self { api_url, api_key }
+        let public_url = Self::build_public_url(&server_host, &server_public_ip);
+
+        Self { api_url, api_key, public_url }
+    }
+
+    /// Mirror the daemon's PublicURL() logic:
+    /// - Prefer SERVER_HOST (domain name) → https://server_host
+    /// - Fall back to SERVER_PUBLIC_IP (raw IP) → http://ip
+    /// - Empty if neither is set
+    fn build_public_url(host: &str, ip: &str) -> String {
+        let candidate = if !host.is_empty() { host } else { ip };
+        if candidate.is_empty() {
+            return String::new();
+        }
+        let is_ip = candidate.parse::<IpAddr>().is_ok();
+        if is_ip {
+            format!("http://{}", candidate)
+        } else {
+            format!("https://{}", candidate)
+        }
     }
 
     fn config_path() -> PathBuf {

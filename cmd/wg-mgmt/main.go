@@ -259,8 +259,325 @@ func cmdPeerDelete(c *cli.Client, args []string) error {
 	return nil
 }
 
-func runInvite(_ *cli.Client, _ []string) error {
-	return printStub()
+func runInvite(c *cli.Client, args []string) error {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Usage: wg-mgmt invite <subcommand>")
+		fmt.Fprintln(os.Stderr, "Subcommands: create, list, revoke, delete, qrcode")
+		fmt.Fprintln(os.Stderr, "Try: wg-mgmt invite create --help")
+		return nil
+	}
+
+	sub := args[0]
+	subArgs := args[1:]
+	switch sub {
+	case "create":
+		return cmdInviteCreate(c, subArgs)
+	case "list":
+		return cmdInviteList(c, subArgs)
+	case "revoke":
+		return cmdInviteRevoke(c, subArgs)
+	case "delete":
+		return cmdInviteDelete(c, subArgs)
+	case "qrcode":
+		return cmdInviteQRCode(c, subArgs)
+	default:
+		fmt.Fprintf(os.Stderr, "unknown invite subcommand %q\n", sub)
+		return nil
+	}
+}
+
+// ── Invite response structs ────────────────────────────────────────────
+
+type inviteCreateResponse struct {
+	InviteID     string `json:"invite_id"`
+	Token        string `json:"token"`
+	ExpiresAt    string `json:"expires_at"`
+	BootstrapURL string `json:"bootstrap_url"`
+	Message      string `json:"message"`
+}
+
+type inviteInfo struct {
+	ID              string            `json:"id"`
+	Status          string            `json:"status"`
+	CreatedAt       string            `json:"created_at"`
+	ExpiresAt       string            `json:"expires_at,omitempty"`
+	RedeemedAt      string            `json:"redeemed_at,omitempty"`
+	RedeemedBy      string            `json:"redeemed_by,omitempty"`
+	RevokedAt       string            `json:"revoked_at,omitempty"`
+	DeletedAt       string            `json:"deleted_at,omitempty"`
+	DeletedBy       string            `json:"deleted_by,omitempty"`
+	IssuedBy        string            `json:"issued_by"`
+	DisplayNameHint string            `json:"display_name_hint,omitempty"`
+	DNSOverride     string            `json:"dns_override,omitempty"`
+	PoolName        string            `json:"pool_name,omitempty"`
+	TargetRole      string            `json:"target_role,omitempty"`
+	DeviceName      string            `json:"device_name,omitempty"`
+	MaxUses         int               `json:"max_uses,omitempty"`
+	UsedCount       int               `json:"used_count,omitempty"`
+	Labels          map[string]string `json:"labels,omitempty"`
+}
+
+type inviteListResponse struct {
+	InviteCount int          `json:"invite_count"`
+	Invites     []inviteInfo `json:"invites"`
+}
+
+type inviteActionResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+}
+
+// ── invite create ──────────────────────────────────────────────────────
+
+func cmdInviteCreate(c *cli.Client, args []string) error {
+	fs := flag.NewFlagSet("create", flag.ExitOnError)
+	ttl := fs.Int("ttl", 0, "TTL in hours (default 72)")
+	pool := fs.String("pool", "", "address pool name")
+	dns := fs.String("dns", "", "DNS server(s) for the peer")
+	role := fs.String("role", "", "target role (user or admin)")
+	maxUses := fs.Int("max-uses", 0, "maximum redemption count (default 1)")
+	labelsRaw := fs.String("labels", "", `comma-separated key=value pairs (e.g. "env=prod,team=frontend")`)
+	nameHint := fs.String("name-hint", "", "display name hint for the invite")
+	deviceName := fs.String("device-name", "", "pre-bound device name")
+	format := fs.String("format", "human", "output format (human|json)")
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *format != "human" && *format != "json" {
+		return fmt.Errorf("unsupported format %q", *format)
+	}
+
+	body := map[string]any{}
+	if *ttl > 0 {
+		body["ttl_hours"] = *ttl
+	}
+	if *pool != "" {
+		body["pool_name"] = *pool
+	}
+	if *dns != "" {
+		body["dns"] = *dns
+	}
+	if *role != "" {
+		body["target_role"] = *role
+	}
+	if *maxUses > 0 {
+		body["max_uses"] = *maxUses
+	}
+	if *nameHint != "" {
+		body["name_hint"] = *nameHint
+	}
+	if *deviceName != "" {
+		body["device_name"] = *deviceName
+	}
+	if *labelsRaw != "" {
+		labels, err := parseLabelsFlag(*labelsRaw)
+		if err != nil {
+			return fmt.Errorf("invalid --labels: %w", err)
+		}
+		body["labels"] = labels
+	}
+
+	var resp inviteCreateResponse
+	if len(body) == 0 {
+		if err := c.PostJSON("/api/v1/invites", struct{}{}, &resp); err != nil {
+			return fmt.Errorf("create invite: %w", err)
+		}
+	} else {
+		if err := c.PostJSON("/api/v1/invites", body, &resp); err != nil {
+			return fmt.Errorf("create invite: %w", err)
+		}
+	}
+
+	if *format == "json" {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(resp)
+	}
+
+	fmt.Printf("Invite created: %s\n", resp.InviteID)
+	fmt.Printf("Token:       %s\n", resp.Token)
+	fmt.Printf("Expires:     %s\n", resp.ExpiresAt)
+	fmt.Println()
+	fmt.Println("Bootstrap URL (share this with the client):")
+	fmt.Printf("  %s\n", resp.BootstrapURL)
+	fmt.Println()
+	fmt.Println("Copy-and-paste command:")
+	fmt.Printf("  curl -sSf \"%s\" | sudo bash\n", resp.BootstrapURL)
+	fmt.Println()
+	fmt.Printf("%s\n", resp.Message)
+	return nil
+}
+
+// ── invite list ────────────────────────────────────────────────────────
+
+func cmdInviteList(c *cli.Client, args []string) error {
+	fs := flag.NewFlagSet("list", flag.ExitOnError)
+	format := fs.String("format", "human", "output format (human|json)")
+	showDeleted := fs.Bool("show-deleted", false, "include soft-deleted invites")
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *format != "human" && *format != "json" {
+		return fmt.Errorf("unsupported format %q", *format)
+	}
+
+	path := "/api/v1/invites"
+	if *showDeleted {
+		path += "?show_deleted=true"
+	}
+
+	var resp inviteListResponse
+	if err := c.GetJSON(path, &resp); err != nil {
+		return fmt.Errorf("list invites: %w", err)
+	}
+
+	if *format == "json" {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(resp)
+	}
+
+	if len(resp.Invites) == 0 {
+		fmt.Println("No invites found.")
+		return nil
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 2, 2, 2, ' ', 0)
+	fmt.Fprintln(w, "ID\tSTATUS\tNAME HINT\tISSUED BY\tEXPIRES\tREDEEMED")
+	for _, inv := range resp.Invites {
+		id := inv.ID
+		if len(id) > 12 {
+			id = id[:12]
+		}
+		nameHint := inv.DisplayNameHint
+		if nameHint == "" {
+			nameHint = "-"
+		}
+		expires := "-"
+		if inv.ExpiresAt != "" {
+			expires = inv.ExpiresAt
+		}
+		redeemed := "-"
+		if inv.RedeemedAt != "" {
+			redeemed = fmt.Sprintf("%s by %s", inv.RedeemedAt, inv.RedeemedBy)
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			id,
+			inv.Status,
+			nameHint,
+			inv.IssuedBy,
+			expires,
+			redeemed,
+		)
+	}
+	return w.Flush()
+}
+
+// ── invite revoke ──────────────────────────────────────────────────────
+
+func cmdInviteRevoke(c *cli.Client, args []string) error {
+	fs := flag.NewFlagSet("revoke", flag.ExitOnError)
+	id := fs.String("id", "", "invite ID to revoke")
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *id == "" {
+		return fmt.Errorf("--id is required for invite revocation")
+	}
+
+	path := fmt.Sprintf("/api/v1/invites/%s", *id)
+	var resp inviteActionResponse
+	if err := c.DeleteJSON(path, &resp); err != nil {
+		return fmt.Errorf("revoke invite: %w", err)
+	}
+
+	fmt.Fprintln(os.Stdout, resp.Message)
+	return nil
+}
+
+// ── invite delete ──────────────────────────────────────────────────────
+
+func cmdInviteDelete(c *cli.Client, args []string) error {
+	fs := flag.NewFlagSet("delete", flag.ExitOnError)
+	id := fs.String("id", "", "invite ID to soft-delete")
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *id == "" {
+		return fmt.Errorf("--id is required for invite deletion")
+	}
+
+	path := fmt.Sprintf("/api/v1/invites/%s?action=delete", *id)
+	var resp inviteActionResponse
+	if err := c.DeleteJSON(path, &resp); err != nil {
+		return fmt.Errorf("delete invite: %w", err)
+	}
+
+	fmt.Fprintln(os.Stdout, resp.Message)
+	return nil
+}
+
+// ── invite qrcode ──────────────────────────────────────────────────────
+
+func cmdInviteQRCode(c *cli.Client, args []string) error {
+	fs := flag.NewFlagSet("qrcode", flag.ExitOnError)
+	id := fs.String("id", "", "invite token (raw token from invite create)")
+	name := fs.String("name", "mobile", "device name for the QR bootstrap URL")
+	output := fs.String("output", "", "output SVG file path (required)")
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *id == "" {
+		return fmt.Errorf("--id (invite token) is required for QR code generation")
+	}
+	if *output == "" {
+		return fmt.Errorf("--output is required for QR code generation")
+	}
+
+	path := fmt.Sprintf("/api/v1/invites/qrcode?token=%s&name=%s", *id, *name)
+	svgBytes, err := c.GetRaw(path)
+	if err != nil {
+		return fmt.Errorf("fetch QR code: %w", err)
+	}
+
+	if err := os.WriteFile(*output, svgBytes, 0644); err != nil {
+		return fmt.Errorf("write QR SVG: %w", err)
+	}
+
+	fmt.Printf("QR code written to %s\n", *output)
+	return nil
+}
+
+// parseLabelsFlag parses a comma-separated list of key=value pairs into a map.
+func parseLabelsFlag(raw string) (map[string]string, error) {
+	labels := make(map[string]string)
+	for pair := range strings.SplitSeq(raw, ",") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		kv := strings.SplitN(pair, "=", 2)
+		if len(kv) != 2 {
+			return nil, fmt.Errorf("invalid label pair %q: expected key=value format", pair)
+		}
+		key := strings.TrimSpace(kv[0])
+		val := strings.TrimSpace(kv[1])
+		if key == "" {
+			return nil, fmt.Errorf("invalid label pair %q: empty key", pair)
+		}
+		labels[key] = val
+	}
+	return labels, nil
 }
 
 func runUser(c *cli.Client, args []string) error {
