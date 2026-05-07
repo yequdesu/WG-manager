@@ -50,7 +50,8 @@ func (c *Config) PublicURL() string {
 	if host == "" {
 		return ""
 	}
-	if c.ServerHost != "" {
+	// Domain hostnames (non-IP) use https; raw IP addresses use http.
+	if net.ParseIP(host) == nil {
 		return "https://" + host
 	}
 	return "http://" + host
@@ -117,7 +118,8 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) serveBootstrapHTML(w http.ResponseWriter, r *http.Request) {
-	ip := h.cfg().ServerPublicIP
+	publicURL := h.cfg().PublicURL()
+	publicHost := h.cfg().PublicHost()
 	wgSubnet := h.cfg().WGSubnet
 	html := `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WG-Manager - Join</title>
 <style>*{margin:0;padding:0;box-sizing:border-box}
@@ -145,7 +147,7 @@ ol{font-size:13px;color:#c9d1d9;line-height:2;padding-left:16px;margin-top:4px}
 #result.error .title{color:#f85149}
 </style></head><body>
 <h1>WG-Manager</h1>
-<p class="sub">Server: ` + ip + `  |  Subnet: ` + wgSubnet + `</p>
+<p class="sub">Server: ` + publicHost + `  |  Subnet: ` + wgSubnet + `</p>
 <div class="box">
   <h3>Join This Network</h3>
   <p>Onboarding uses <strong>one-time invite tokens</strong>. Your administrator creates an invite and shares a token with you. The token is consumed on first use — one token, one device.</p>
@@ -162,17 +164,17 @@ ol{font-size:13px;color:#c9d1d9;line-height:2;padding-left:16px;margin-top:4px}
 <div class="box">
   <h3>Auto-Install (Linux / macOS / WSL)</h3>
   <p>Pipe the bootstrap script directly into bash. Always inspect first:</p>
-  <pre class="cmd" id="inspect-cmd">curl -sSf https://` + ip + `/bootstrap</pre>
+  <pre class="cmd" id="inspect-cmd">curl -sSf ` + publicURL + `/bootstrap</pre>
   <p class="hint">Replace TOKEN below and run:</p>
-  <pre class="cmd" id="run-cmd">curl -sSf "https://` + ip + `/bootstrap?token=TOKEN&name=my-device" | sudo bash</pre>
+  <pre class="cmd" id="run-cmd">curl -sSf "` + publicURL + `/bootstrap?token=TOKEN&name=my-device" | sudo bash</pre>
 </div>
 <div class="box">
   <h3>Manual Redemption (All Platforms)</h3>
   <p>Redeem via the API and save the config manually:</p>
-  <pre>curl -sSf -X POST https://` + ip + `/api/v1/redeem \
+  <pre>curl -sSf -X POST ` + publicURL + `/api/v1/redeem \
   -H "Content-Type: application/json" \
   -d '{"token":"YOUR_TOKEN","name":"my-device"}'</pre>
-  <p class="hint">Windows PowerShell: <code>Invoke-RestMethod -Uri https://` + ip + `/api/v1/redeem -Method Post -Body (@{token="TOKEN";name="MYPC"} | ConvertTo-Json) -ContentType "application/json"</code></p>
+  <p class="hint">Windows PowerShell: <code>Invoke-RestMethod -Uri ` + publicURL + `/api/v1/redeem -Method Post -Body (@{token="TOKEN";name="MYPC"} | ConvertTo-Json) -ContentType "application/json"</code></p>
 </div>
 <div class="box">
   <h3>After Redemption</h3>
@@ -198,7 +200,7 @@ function generateBootstrap() {
     result.classList.remove('hidden');
     return;
   }
-  var url = 'https://` + ip + `/bootstrap?token=' + encodeURIComponent(token) + '&name=' + encodeURIComponent(name);
+  var url = '` + publicURL + `/bootstrap?token=' + encodeURIComponent(token) + '&name=' + encodeURIComponent(name);
   result.className = '';
   result.innerHTML = '<div class="title">Bootstrap Command</div><pre style="margin-top:4px;word-break:break-all">curl -sSf "' + url + '" | sudo bash</pre><div class="hint">Tip: run <code>curl -sSf "' + url + '"</code> first to inspect the script before piping to bash.</div>';
   result.classList.remove('hidden');
@@ -214,7 +216,7 @@ function generateBootstrap() {
 // Access: LocalOnly + RequireRole(admin, owner).
 // Query params: ?token=RAW_TOKEN&name=DEVICE_NAME.
 // The raw token is verified by hashing it and checking against the invite store.
-// The QR encodes: https://SERVER_HOST/bootstrap?token=RAW_TOKEN&name=DEVICE_NAME
+// The QR encodes: PUBLIC_URL/bootstrap?token=RAW_TOKEN&name=DEVICE_NAME
 func (h *Handler) ServeInviteQR(w http.ResponseWriter, r *http.Request) {
 	token := strings.TrimSpace(r.URL.Query().Get("token"))
 	if token == "" {
@@ -257,9 +259,9 @@ func (h *Handler) ServeInviteQR(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Build the bootstrap URL — uses HTTPS reverse-proxy port, not the raw daemon port.
-	serverHost := h.cfg().ServerPublicIP
-	bootstrapURL := fmt.Sprintf("https://%s/bootstrap?token=%s&name=%s", serverHost, token, name)
+	// Build the bootstrap URL using the canonical public URL helper.
+	publicURL := h.cfg().PublicURL()
+	bootstrapURL := fmt.Sprintf("%s/bootstrap?token=%s&name=%s", publicURL, token, name)
 
 	svg := generateQR(bootstrapURL)
 	w.Header().Set("Content-Type", "image/svg+xml")
@@ -638,10 +640,11 @@ func (h *Handler) CreateInvite(w http.ResponseWriter, r *http.Request) {
 	audit.Log("invite_created", auditFields("invite_id", inv.ID, "issued_by", issuedBy))
 
 	writeJSON(w, http.StatusCreated, map[string]interface{}{
-		"invite_id":  inv.ID,
-		"token":      rawToken,
-		"expires_at": inv.ExpiresAt,
-		"message":    "Share this token with the client. It will only be shown once.",
+		"invite_id":     inv.ID,
+		"token":         rawToken,
+		"expires_at":    inv.ExpiresAt,
+		"bootstrap_url": fmt.Sprintf("%s/bootstrap?token=%s", h.cfg().PublicURL(), rawToken),
+		"message":       "Share this token with the client. It will only be shown once.",
 	})
 }
 
@@ -1193,14 +1196,16 @@ func (h *Handler) Bootstrap(w http.ResponseWriter, r *http.Request) {
 	token := r.URL.Query().Get("token")
 	name := r.URL.Query().Get("name")
 
-	serverHost := h.cfg().ServerPublicIP
+	publicHost := h.cfg().PublicHost()
+	publicURL := h.cfg().PublicURL()
 
 	script := fmt.Sprintf(`#!/bin/bash
 set -euo pipefail
 # WG-Manager — Invite Bootstrap Script
-# Served by /bootstrap — inspect before running: curl -sSf https://%s/bootstrap
-# Usage: curl -sSf "https://%s/bootstrap?token=INVITE_TOKEN&name=MYDEVICE" | sudo bash
+# Served by /bootstrap — inspect before running: curl -sSf %s/bootstrap
+# Usage: curl -sSf "%s/bootstrap?token=INVITE_TOKEN&name=MYDEVICE" | sudo bash
 
+SERVER_URL=%s
 SERVER_HOST=%s
 INVITE_TOKEN=%s
 PEER_NAME=%s
@@ -1212,7 +1217,7 @@ warn() { echo -e "${YELLOW}[!]${NC} $*"; }
 err()  { echo -e "${RED}[x]${NC} $*"; }
 
 if [ "${INVITE_TOKEN}" = "" ]; then
-    err "Missing invite token. Usage: curl -sSf \"https://$SERVER_HOST/bootstrap?token=INVITE_TOKEN&name=MYDEVICE\" | sudo bash"
+    err "Missing invite token. Usage: curl -sSf \"$SERVER_URL/bootstrap?token=INVITE_TOKEN&name=MYDEVICE\" | sudo bash"
     exit 1
 fi
 
@@ -1311,7 +1316,7 @@ fi
 install_wg
 
 log "Redeeming invite token..."
-RESP=$(curl -sSf -X POST "https://$SERVER_HOST/api/v1/redeem" \
+RESP=$(curl -sSf -X POST "$SERVER_URL/api/v1/redeem" \
     -H "Content-Type: application/json" \
     -d "{\"token\":\"$INVITE_TOKEN\",\"name\":\"$PEER_NAME\",\"dns\":\"$DEFAULT_DNS\"}")
 
@@ -1367,8 +1372,8 @@ else
 fi
 
 log "Done!"
-`, serverHost, serverHost,
-		shellQuote(serverHost), shellQuote(token), shellQuote(name),
+`, publicURL, publicURL,
+		shellQuote(publicURL), shellQuote(publicHost), shellQuote(token), shellQuote(name),
 		shellQuote(h.cfg().DefaultDNS), h.cfg().WGServerIP)
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")

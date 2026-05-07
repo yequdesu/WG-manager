@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"errors"
 	"encoding/json"
 	"flag"
@@ -8,6 +9,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 
@@ -128,6 +130,30 @@ type peerListResponse struct {
 	Peers     []peerListItem `json:"peers"`
 }
 
+type userInfo struct {
+	Name      string `json:"name"`
+	Role      string `json:"role"`
+	CreatedAt string `json:"created_at"`
+}
+
+type userListResponse struct {
+	UserCount int        `json:"user_count"`
+	Users     []userInfo `json:"users"`
+}
+
+type userCreateResponse struct {
+	Success bool `json:"success"`
+	User    struct {
+		Name string `json:"name"`
+		Role string `json:"role"`
+	} `json:"user"`
+}
+
+type userDeleteResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+}
+
 func cmdPeerList(c *cli.Client, args []string) error {
 	fs := flag.NewFlagSet("list", flag.ExitOnError)
 	formatJSON := fs.Bool("format", false, "output as JSON")
@@ -237,8 +263,104 @@ func runInvite(_ *cli.Client, _ []string) error {
 	return printStub()
 }
 
-func runUser(_ *cli.Client, _ []string) error {
-	return printStub()
+func runUser(c *cli.Client, args []string) error {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Usage: wg-mgmt user <subcommand>")
+		fmt.Fprintln(os.Stderr, "Subcommands: list, create, delete")
+		fmt.Fprintln(os.Stderr, "Try: wg-mgmt user list --help")
+		return nil
+	}
+
+	sub := args[0]
+	subArgs := args[1:]
+	switch sub {
+	case "list":
+		return cmdUserList(c, subArgs)
+	case "create":
+		return cmdUserCreate(c, subArgs)
+	case "delete":
+		return cmdUserDelete(c, subArgs)
+	default:
+		fmt.Fprintf(os.Stderr, "unknown user subcommand %q\n", sub)
+		return nil
+	}
+}
+
+func cmdUserList(c *cli.Client, args []string) error {
+	fs := flag.NewFlagSet("list", flag.ExitOnError)
+	formatJSON := fs.Bool("format", false, "output as JSON")
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	var resp userListResponse
+	if err := c.GetJSON("/api/v1/users", &resp); err != nil {
+		return fmt.Errorf("list users: %w", err)
+	}
+
+	if *formatJSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(resp)
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 2, 2, 2, ' ', 0)
+	fmt.Fprintln(w, "NAME\tROLE\tCREATED")
+	for _, u := range resp.Users {
+		fmt.Fprintf(w, "%s\t%s\t%s\n", u.Name, u.Role, u.CreatedAt)
+	}
+	return w.Flush()
+}
+
+func cmdUserCreate(c *cli.Client, args []string) error {
+	fs := flag.NewFlagSet("create", flag.ExitOnError)
+	name := fs.String("name", "", "username for the new account")
+	password := fs.String("password", "", "password for the new account")
+	role := fs.String("role", "user", "role (owner, admin, user)")
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *name == "" || *password == "" {
+		return fmt.Errorf("--name and --password are required")
+	}
+
+	body := map[string]string{
+		"name":     *name,
+		"password": *password,
+		"role":     *role,
+	}
+
+	var resp userCreateResponse
+	if err := c.PostJSON("/api/v1/users", body, &resp); err != nil {
+		return fmt.Errorf("create user: %w", err)
+	}
+
+	fmt.Fprintf(os.Stdout, "User %q created with role %s\n", resp.User.Name, resp.User.Role)
+	return nil
+}
+
+func cmdUserDelete(c *cli.Client, args []string) error {
+	fs := flag.NewFlagSet("delete", flag.ExitOnError)
+	name := fs.String("name", "", "username to delete")
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *name == "" {
+		return fmt.Errorf("--name is required for user deletion")
+	}
+
+	var resp userDeleteResponse
+	path := fmt.Sprintf("/api/v1/users/%s", *name)
+	if err := c.DeleteJSON(path, &resp); err != nil {
+		return fmt.Errorf("delete user: %w", err)
+	}
+	fmt.Fprintln(os.Stdout, resp.Message)
+	return nil
 }
 
 type outputFormat string
@@ -248,15 +370,30 @@ const (
 	outputJSON  outputFormat = "json"
 )
 
+// PortString unmarshals a WireGuard listen port from JSON (daemon returns string; tests may pass number).
+type PortString string
+
+func (p *PortString) UnmarshalJSON(b []byte) error {
+	if len(b) > 0 && b[0] == '"' {
+		return json.Unmarshal(b, (*string)(p))
+	}
+	var n int
+	if err := json.Unmarshal(b, &n); err != nil {
+		return err
+	}
+	*p = PortString(strconv.Itoa(n))
+	return nil
+}
+
 type statusResponse struct {
-	Interface  string `json:"interface"`
-	ListenPort int    `json:"listen_port,omitempty"`
-	Daemon     string `json:"daemon"`
-	WireGuard  string `json:"wireguard"`
-	WGError    string `json:"wg_error,omitempty"`
-	PeerOnline int    `json:"peer_online,omitempty"`
-	PeerTotal  int    `json:"peer_total,omitempty"`
-	PeerCount  int    `json:"peer_count,omitempty"`
+	Interface  string     `json:"interface"`
+	ListenPort PortString `json:"listen_port,omitempty"`
+	Daemon     string     `json:"daemon"`
+	WireGuard  string     `json:"wireguard"`
+	WGError    string     `json:"wg_error,omitempty"`
+	PeerOnline int        `json:"peer_online,omitempty"`
+	PeerTotal  int        `json:"peer_total,omitempty"`
+	PeerCount  int        `json:"peer_count,omitempty"`
 }
 
 func runStatus(client *cli.Client, args []string) error {
@@ -272,7 +409,7 @@ func runStatus(client *cli.Client, args []string) error {
 	if authClient.CurrentAuthMethod() == "none" {
 		sessionToken = resolveSessionToken(sessionToken)
 		if sessionToken == "" {
-			return fmt.Errorf("status requires an API key in config.env or a session token via MGMT_SESSION_TOKEN")
+			return fmt.Errorf("status requires an API key in config.env or a session token via MGMT_SESSION_TOKEN or --session-token")
 		}
 		authClient = client.WithSessionToken(sessionToken)
 	}
@@ -285,8 +422,93 @@ func runStatus(client *cli.Client, args []string) error {
 	return renderCLIOutput(format, response, renderStatusHuman, renderStatusJSON)
 }
 
-func runAuth(_ *cli.Client, _ []string) error {
-	return printStub()
+func runAuth(c *cli.Client, args []string) error {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Usage: wg-mgmt auth <subcommand>")
+		fmt.Fprintln(os.Stderr, "Subcommands: login, logout")
+		return nil
+	}
+
+	sub := args[0]
+	subArgs := args[1:]
+	switch sub {
+	case "login":
+		return cmdAuthLogin(c, subArgs)
+	case "logout":
+		return cmdAuthLogout(c, subArgs)
+	default:
+		fmt.Fprintf(os.Stderr, "unknown auth subcommand %q\n", sub)
+		return nil
+	}
+}
+
+func cmdAuthLogin(c *cli.Client, args []string) error {
+	fs := flag.NewFlagSet("login", flag.ExitOnError)
+	name := fs.String("name", "", "username")
+	password := fs.String("password", "", "password")
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if c.CurrentAuthMethod() == "API key" {
+		fmt.Println("Already authenticated with API key from config.env")
+		return nil
+	}
+
+	username := strings.TrimSpace(*name)
+	pass := strings.TrimSpace(*password)
+
+	if username == "" || pass == "" {
+		reader := bufio.NewReader(os.Stdin)
+		if username == "" {
+			fmt.Fprint(os.Stderr, "Username: ")
+			input, err := reader.ReadString('\n')
+			if err != nil {
+				return fmt.Errorf("read username: %w", err)
+			}
+			username = strings.TrimSpace(input)
+		}
+		if pass == "" {
+			fmt.Fprint(os.Stderr, "Password: ")
+			input, err := reader.ReadString('\n')
+			if err != nil {
+				return fmt.Errorf("read password: %w", err)
+			}
+			pass = strings.TrimSpace(input)
+		}
+	}
+
+	if username == "" || pass == "" {
+		return fmt.Errorf("username and password are required; use --name and --password flags or interactive prompts")
+	}
+
+	resp, err := c.Login(username, pass)
+	if err != nil {
+		return fmt.Errorf("login failed: %w", err)
+	}
+
+	fmt.Printf("Logged in as %s\n", username)
+	fmt.Printf("Role: %s\n", resp.Role)
+	fmt.Printf("Session token (store in MGMT_SESSION_TOKEN):\n%s\n", resp.Token)
+	return nil
+}
+
+func cmdAuthLogout(c *cli.Client, args []string) error {
+	fs := flag.NewFlagSet("logout", flag.ExitOnError)
+	_ = fs.Parse(args)
+
+	if !c.HasSessionToken() {
+		fmt.Println("No active session to log out")
+		return nil
+	}
+
+	if err := c.Logout(); err != nil {
+		return fmt.Errorf("logout failed: %w", err)
+	}
+
+	fmt.Println("Logged out. Unset MGMT_SESSION_TOKEN if set.")
+	return nil
 }
 
 func runMe(client *cli.Client, args []string) error {
@@ -388,19 +610,13 @@ func renderMeJSON(me cli.MeResponse) error {
 
 func renderStatusHuman(status statusResponse) {
 	fmt.Printf("daemon: %s\nwireguard: %s\ninterface: %s\n", status.Daemon, status.WireGuard, status.Interface)
-	if status.ListenPort != 0 {
-		fmt.Printf("listen_port: %d\n", status.ListenPort)
+	if status.ListenPort != "" {
+		fmt.Printf("listen_port: %s\n", string(status.ListenPort))
 	}
 	if status.WGError != "" {
 		fmt.Printf("wg_error: %s\n", status.WGError)
 	}
-	if status.PeerOnline != 0 || status.PeerTotal != 0 {
-		fmt.Printf("peers: %d online / %d total\n", status.PeerOnline, status.PeerTotal)
-		return
-	}
-	if status.PeerCount != 0 {
-		fmt.Printf("peers: %d\n", status.PeerCount)
-	}
+	fmt.Printf("peers: %d online / %d total\n", status.PeerOnline, status.PeerTotal)
 }
 
 func renderStatusJSON(status statusResponse) error {

@@ -31,6 +31,7 @@ pub struct App {
 
     pub status: ServerStatus,
     pub logs: Vec<String>,
+    pub audit_log_error: Option<String>,
 
     pub tick_count: u64,
     pub last_refresh: i64,
@@ -93,6 +94,7 @@ impl App {
                 peer_total: 0,
             },
             logs: Vec::new(),
+            audit_log_error: None,
 
             tick_count: 0,
             last_refresh: 0,
@@ -197,7 +199,16 @@ impl App {
     }
 
     pub fn refresh_data(&mut self) {
-        self.logs = read_audit_log(&self.audit_log_path);
+        match read_audit_log(&self.audit_log_path) {
+            Ok(lines) => {
+                self.logs = lines;
+                self.audit_log_error = None;
+            }
+            Err(e) => {
+                self.logs = Vec::new();
+                self.audit_log_error = Some(e);
+            }
+        }
         let api = self.api.clone();
         let tx = self.data_tx.clone();
         let rt = self.rt.clone();
@@ -555,6 +566,14 @@ fn render_logs(frame: &mut Frame, area: Rect, app: &App) {
     fill_area(frame, area, DARK_THEME.bg);
 
     use crate::widgets::card::Card;
+    if let Some(ref err) = app.audit_log_error {
+        let lines = vec![Line::from(Span::styled(
+            format!(" {}", err),
+            DARK_THEME.danger,
+        ))];
+        Card::new("Audit Log").render(frame, area, lines);
+        return;
+    }
     if app.logs.is_empty() {
         let lines = vec![Line::from(Span::styled(
             "No audit log entries. Events will appear here as peers connect or admin actions are taken.",
@@ -606,20 +625,24 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(line).style(Style::default().bg(DARK_THEME.bg)), area);
 }
 
-fn read_audit_log(path: &str) -> Vec<String> {
+fn read_audit_log(path: &str) -> Result<Vec<String>, String> {
     if path.is_empty() {
-        return Vec::new();
+        return Err("Log path not configured".to_string());
     }
-    if let Ok(content) = std::fs::read_to_string(path) {
-        let lines: Vec<&str> = content.lines().collect();
-        let start = if lines.len() > 50 { lines.len() - 50 } else { 0 };
-        lines[start..].iter().map(|l| l.to_string()).collect()
-    } else {
-        Vec::new()
+    match std::fs::read_to_string(path) {
+        Ok(content) => {
+            let lines: Vec<&str> = content.lines().collect();
+            let start = if lines.len() > 50 { lines.len() - 50 } else { 0 };
+            Ok(lines[start..].iter().map(|l| l.to_string()).collect())
+        }
+        Err(e) => Err(format!(
+            "Cannot read log: {}. Fix permissions: sudo chmod 755 /var/log/wg-mgmt && sudo chmod 644 /var/log/wg-mgmt/wg-mgmt.log",
+            e
+        )),
     }
 }
 
-pub fn read_audit_log_file(path: &str) -> Vec<String> {
+pub fn read_audit_log_file(path: &str) -> Result<Vec<String>, String> {
     read_audit_log(path)
 }
 
@@ -630,9 +653,8 @@ fn optional_string(s: &str) -> Option<String> {
 fn find_audit_log_path() -> String {
     let paths = [
         "/var/log/wg-mgmt/wg-mgmt.log".to_string(),
-        "/var/log/wg-mgmt/audit.log".to_string(),
         format!(
-            "{}/WG-manager/audit.log",
+            "{}/WG-manager/wg-mgmt.log",
             std::env::var("HOME").unwrap_or_else(|_| "/tmp".into())
         ),
     ];

@@ -445,7 +445,7 @@ DEFAULT_DNS=$DEFAULT_DNS
 PEER_KEEPALIVE=25
 PEERS_DB_PATH=$PROJECT_DIR/server/peers.json
 WG_CONF_PATH=/etc/wireguard/wg0.conf
-AUDIT_LOG_PATH=/var/log/wg-mgmt/audit.log
+AUDIT_LOG_PATH=/var/log/wg-mgmt/wg-mgmt.log
 CONFIGEOF
 
     chmod 600 "$CONFIG_FILE"
@@ -454,7 +454,7 @@ CONFIGEOF
     # ── Set up unified log ──
     local log_dir="/var/log/wg-mgmt"
     mkdir -p "$log_dir"
-    chmod 750 "$log_dir"
+    chmod 755 "$log_dir"
     cat > /etc/logrotate.d/wg-mgmt << LOGROTATE
 $log_dir/wg-mgmt.log {
     size 100M
@@ -463,7 +463,7 @@ $log_dir/wg-mgmt.log {
     notifempty
     compress
     delaycompress
-    create 0640 root root
+    create 0644 root root
     postrotate
         systemctl kill -s HUP wg-mgmt 2>/dev/null || true
     endscript
@@ -520,7 +520,19 @@ deploy_daemon() {
         log "Binary is up to date (commit $installed_hash)"
     fi
 
-    # ── 2b. Install TUI launcher wrapper ──
+    # ── 2b. Build and install operator CLI ──
+    local cli_dst="/usr/local/bin/wg-mgmt"
+    if [[ ! -f "$cli_dst" ]] || $needs_rebuild; then
+        cd "$PROJECT_DIR"
+        log "Building operator CLI..."
+        go build -ldflags="-s -w" -o "$cli_dst" ./cmd/wg-mgmt/
+        chmod +x "$cli_dst"
+        log "CLI installed: $cli_dst"
+    else
+        log "CLI binary is up to date"
+    fi
+
+    # ── 2c. Install TUI launcher wrapper ──
     local wrapper_dst="/usr/local/bin/wg-tui"
     local wrapper_src="$PROJECT_DIR/server/wg-tui.wrapper"
     if [[ -f "$wrapper_src" ]]; then
@@ -624,7 +636,7 @@ print_summary() {
     echo -e "    ${BOLD}cd wg-tui && bash install.sh${NC}            Install or update Rust dashboard"
     echo -e "    ${BOLD}bash scripts/health-check.sh${NC}            System health check"
     echo -e "    ${BOLD}bash scripts/list-peers.sh${NC}             View all peers"
-    echo -e "    ${BOLD}tail -f /var/log/wg-mgmt/audit.log${NC}     Live audit trail"
+    echo -e "    ${BOLD}tail -f /var/log/wg-mgmt/wg-mgmt.log${NC}     Live audit trail"
     echo ""
 
     echo -e "  ${BOLD}${YELLOW}Security${NC}"

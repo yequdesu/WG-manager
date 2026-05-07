@@ -44,7 +44,14 @@ fn main() -> io::Result<()> {
     let event_handler = EventHandler::new(50, data_rx);
 
     app.refresh_data();
-    app.logs = app::read_audit_log_file(&app.audit_log_path);
+    match app::read_audit_log_file(&app.audit_log_path) {
+        Ok(lines) => {
+            app.logs = lines;
+        }
+        Err(e) => {
+            app.audit_log_error = Some(e);
+        }
+    }
 
     let result = run(&mut terminal, &mut app, &event_handler);
 
