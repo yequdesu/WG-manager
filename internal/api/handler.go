@@ -27,6 +27,7 @@ type Config struct {
 	MgmtListen     string
 	APIKey         string
 	ServerPublicIP string
+	ServerHost     string
 	DefaultDNS     string
 	PeerKeepalive  int
 	PeersDBPath    string
@@ -35,6 +36,24 @@ type Config struct {
 
 func (c *Config) ServerEndpoint() string {
 	return fmt.Sprintf("%s:%d", c.ServerPublicIP, c.WGPort)
+}
+
+func (c *Config) PublicHost() string {
+	if c.ServerHost != "" {
+		return c.ServerHost
+	}
+	return c.ServerPublicIP
+}
+
+func (c *Config) PublicURL() string {
+	host := c.PublicHost()
+	if host == "" {
+		return ""
+	}
+	if c.ServerHost != "" {
+		return "https://" + host
+	}
+	return "http://" + host
 }
 
 type Handler struct {

@@ -29,6 +29,7 @@ type AppConfig struct {
 	MgmtListen             string
 	APIKey                 string
 	ServerPublicIP         string
+	ServerHost             string
 	DefaultDNS             string
 	PeerKeepalive          int
 	PeersDBPath            string
@@ -91,6 +92,8 @@ func loadConfig(path string) (*AppConfig, error) {
 			cfg.APIKey = val
 		case "SERVER_PUBLIC_IP":
 			cfg.ServerPublicIP = val
+		case "SERVER_HOST":
+			cfg.ServerHost = val
 		case "DEFAULT_DNS":
 			cfg.DefaultDNS = val
 		case "PEER_KEEPALIVE":
@@ -190,6 +193,7 @@ func reloadConfig(path string, appCfg *AppConfig, handler *api.Handler, state *s
 		MgmtListen:     appCfg.MgmtListen,
 		APIKey:         appCfg.APIKey,
 		ServerPublicIP: appCfg.ServerPublicIP,
+		ServerHost:     appCfg.ServerHost,
 		DefaultDNS:     appCfg.DefaultDNS,
 		PeerKeepalive:  appCfg.PeerKeepalive,
 		PeersDBPath:    appCfg.PeersDBPath,
@@ -391,6 +395,7 @@ func main() {
 		MgmtListen:     appCfg.MgmtListen,
 		APIKey:         appCfg.APIKey,
 		ServerPublicIP: appCfg.ServerPublicIP,
+		ServerHost:     appCfg.ServerHost,
 		DefaultDNS:     appCfg.DefaultDNS,
 		PeerKeepalive:  appCfg.PeerKeepalive,
 		PeersDBPath:    appCfg.PeersDBPath,

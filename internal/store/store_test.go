@@ -1,9 +1,13 @@
 package store
 
 import (
+	"bytes"
 	"encoding/json"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1145,4 +1149,102 @@ func TestInviteMaxUses(t *testing.T) {
 	if invDefault.MaxUses != 1 {
 		t.Errorf("default MaxUses = %d, want 1", invDefault.MaxUses)
 	}
+}
+
+// ── CLI status contract regressions ──────────────────────────────────────
+
+func TestStatusCommandDecodesStringListenPort(t *testing.T) {
+	stdout, stderr, err := runStatusCLI(t, `{"interface":"wg0","listen_port":"51820","daemon":"running","wireguard":"ok","peer_online":3,"peer_total":5}`, true)
+	if err != nil {
+		t.Fatalf("status should accept daemon listen_port payload as-is; got err=%v\nstderr:\n%s\nstdout:\n%s", err, stderr, stdout)
+	}
+	if !strings.Contains(stdout, "listen_port: 51820") {
+		t.Fatalf("status output missing listen_port line:\n%s", stdout)
+	}
+}
+
+func TestStatusCommandRendersZeroPeersDeterministically(t *testing.T) {
+	stdout, stderr, err := runStatusCLI(t, `{"interface":"wg0","listen_port":51820,"daemon":"running","wireguard":"ok","peer_online":0,"peer_total":0}`, true)
+	if err != nil {
+		t.Fatalf("status should render zero-peer state without error; got err=%v\nstderr:\n%s\nstdout:\n%s", err, stderr, stdout)
+	}
+	want := "peers: 0 online / 0 total"
+	if !strings.Contains(stdout, want) {
+		t.Fatalf("status output should include %q for zero peers; got:\n%s", want, stdout)
+	}
+}
+
+func TestStatusCommandWithoutCredentialsShowsActionableAuthError(t *testing.T) {
+	stdout, stderr, err := runStatusCLI(t, `{"interface":"wg0","listen_port":51820,"daemon":"running","wireguard":"ok","peer_online":0,"peer_total":0}`, false)
+	if err == nil {
+		t.Fatalf("expected status to fail without API key or session token; stdout=%q", stdout)
+	}
+	if stdout != "" {
+		t.Fatalf("expected no stdout on auth failure, got %q", stdout)
+	}
+	want := "status requires an API key in config.env or a session token via MGMT_SESSION_TOKEN or --session-token"
+	if !strings.Contains(stderr, want) {
+		t.Fatalf("status auth error should be actionable; want %q in stderr, got:\n%s", want, stderr)
+	}
+}
+
+func runStatusCLI(t *testing.T, responseBody string, withAPIKey bool) (stdout, stderr string, err error) {
+	t.Helper()
+
+	if withAPIKey {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/api/v1/status" {
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(responseBody))
+		}))
+		defer server.Close()
+
+		configPath := writeCLIConfig(t, strings.TrimPrefix(server.URL, "http://"), "test-api-key")
+		return invokeWGMgmtStatus(t, configPath)
+	}
+
+	configPath := writeCLIConfig(t, "127.0.0.1:58880", "")
+	return invokeWGMgmtStatus(t, configPath)
+}
+
+func writeCLIConfig(t *testing.T, mgmtListen, apiKey string) string {
+	t.Helper()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.env")
+	var content bytes.Buffer
+	content.WriteString("MGMT_LISTEN=")
+	content.WriteString(mgmtListen)
+	content.WriteString("\n")
+	if apiKey != "" {
+		content.WriteString("MGMT_API_KEY=")
+		content.WriteString(apiKey)
+		content.WriteString("\n")
+	}
+	if err := os.WriteFile(configPath, content.Bytes(), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	return configPath
+}
+
+func invokeWGMgmtStatus(t *testing.T, configPath string) (stdout, stderr string, err error) {
+	t.Helper()
+
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatalf("resolve repo root: %v", err)
+	}
+
+	cmd := exec.Command("go", "run", "./cmd/wg-mgmt", "--config", configPath, "status")
+	cmd.Dir = repoRoot
+	cmd.Env = append(os.Environ(), "MGMT_SESSION_TOKEN=")
+
+	var stdoutBuf bytes.Buffer
+	var stderrBuf bytes.Buffer
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = &stderrBuf
+	err = cmd.Run()
+	return stdoutBuf.String(), stderrBuf.String(), err
 }
