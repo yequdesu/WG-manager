@@ -16,26 +16,35 @@ const (
 	InviteRedeemed InviteStatus = "redeemed"
 	InviteRevoked  InviteStatus = "revoked"
 	InviteExpired  InviteStatus = "expired"
+	InviteDeleted  InviteStatus = "deleted"
 )
 
 // Invite is a first-class invitation model for zero-touch client onboarding.
 // The raw token is never stored — only its SHA‑256 hash (TokenHash).
 // No private keys or IP addresses are pre‑allocated until the invite is redeemed.
 type Invite struct {
-	ID              string       `json:"id"`
-	TokenHash       string       `json:"token_hash"`
-	IssuedBy        string       `json:"issued_by"`
-	Status          InviteStatus `json:"status"`
-	CreatedAt       string       `json:"created_at"`
-	ExpiresAt       string       `json:"expires_at,omitempty"`
-	RevokedAt       string       `json:"revoked_at,omitempty"`
-	RedeemedAt      string       `json:"redeemed_at,omitempty"`
-	RedeemedBy      string       `json:"redeemed_by,omitempty"`
-	DisplayNameHint string       `json:"display_name_hint,omitempty"`
-	DNSOverride     string       `json:"dns_override,omitempty"`
-	ArtifactKind    string       `json:"artifact_kind,omitempty"`
-	ClientCaps      string       `json:"client_capabilities,omitempty"`
-	DeviceID        string       `json:"device_id,omitempty"`
+	ID              string            `json:"id"`
+	TokenHash       string            `json:"token_hash"`
+	IssuedBy        string            `json:"issued_by"`
+	Status          InviteStatus      `json:"status"`
+	CreatedAt       string            `json:"created_at"`
+	ExpiresAt       string            `json:"expires_at,omitempty"`
+	RevokedAt       string            `json:"revoked_at,omitempty"`
+	RedeemedAt      string            `json:"redeemed_at,omitempty"`
+	RedeemedBy      string            `json:"redeemed_by,omitempty"`
+	DeletedAt       string            `json:"deleted_at,omitempty"`
+	DeletedBy       string            `json:"deleted_by,omitempty"`
+	DisplayNameHint string            `json:"display_name_hint,omitempty"`
+	DNSOverride     string            `json:"dns_override,omitempty"`
+	ArtifactKind    string            `json:"artifact_kind,omitempty"`
+	ClientCaps      string            `json:"client_capabilities,omitempty"`
+	DeviceID        string            `json:"device_id,omitempty"`
+	PoolName        string            `json:"pool_name,omitempty"`
+	TargetRole      string            `json:"target_role,omitempty"`
+	DeviceName      string            `json:"device_name,omitempty"`
+	MaxUses         int               `json:"max_uses,omitempty"`
+	UsedCount       int               `json:"used_count,omitempty"`
+	Labels          map[string]string `json:"labels,omitempty"`
 }
 
 // InviteOption is a functional option for CreateInvite.
@@ -73,6 +82,42 @@ func WithClientCapabilities(caps string) InviteOption {
 func WithDeviceID(id string) InviteOption {
 	return func(i *Invite) {
 		i.DeviceID = id
+	}
+}
+
+// WithPool sets the pool/group name on the invite.
+func WithPool(name string) InviteOption {
+	return func(i *Invite) {
+		i.PoolName = name
+	}
+}
+
+// WithTargetRole sets the target role assigned after redeem.
+func WithTargetRole(role string) InviteOption {
+	return func(i *Invite) {
+		i.TargetRole = role
+	}
+}
+
+// WithDeviceName sets a pre-bound device name on the invite.
+func WithDeviceName(name string) InviteOption {
+	return func(i *Invite) {
+		i.DeviceName = name
+	}
+}
+
+// WithMaxUses sets the maximum number of times this invite can be redeemed.
+// A value of 0 means unlimited. The default is 1 (single-use).
+func WithMaxUses(n int) InviteOption {
+	return func(i *Invite) {
+		i.MaxUses = n
+	}
+}
+
+// WithLabels sets metadata labels on the invite.
+func WithLabels(labels map[string]string) InviteOption {
+	return func(i *Invite) {
+		i.Labels = labels
 	}
 }
 
@@ -120,11 +165,13 @@ func (s *State) CreateInvite(issuedBy string, expiry time.Duration, opts ...Invi
 	now := time.Now().UTC()
 
 	inv := Invite{
-		ID:        id,
-		TokenHash: tokenHash,
-		IssuedBy:  issuedBy,
-		Status:    InviteCreated,
-		CreatedAt: now.Format(time.RFC3339),
+		ID:         id,
+		TokenHash:  tokenHash,
+		IssuedBy:   issuedBy,
+		Status:     InviteCreated,
+		CreatedAt:  now.Format(time.RFC3339),
+		MaxUses:    1,
+		TargetRole: "user",
 	}
 
 	if expiry > 0 {
@@ -167,13 +214,17 @@ func (s *State) GetInviteByTokenHash(tokenHash string) (Invite, bool) {
 	return Invite{}, false
 }
 
-// ListInvites returns all invites.
-func (s *State) ListInvites() []Invite {
+// ListInvites returns all invites, excluding soft-deleted ones by default.
+// Pass showDeleted=true to include deleted invites in the result.
+func (s *State) ListInvites(showDeleted bool) []Invite {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	invites := make([]Invite, 0, len(s.Invites))
 	for _, inv := range s.Invites {
+		if !showDeleted && inv.Status == InviteDeleted {
+			continue
+		}
 		invites = append(invites, inv)
 	}
 	return invites
@@ -200,6 +251,30 @@ func (s *State) RevokeInvite(id string) error {
 	return nil
 }
 
+// DeleteInvite soft-deletes the invite with the given ID. It sets the status
+// to deleted, records who deleted it, and leaves the invite in the map for
+// audit retention.
+func (s *State) DeleteInvite(id string, deletedBy string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	inv, ok := s.Invites[id]
+	if !ok {
+		return fmt.Errorf("invite %q not found", id)
+	}
+
+	if inv.Status == InviteDeleted {
+		return fmt.Errorf("invite %q is already deleted", id)
+	}
+
+	now := time.Now().UTC()
+	inv.Status = InviteDeleted
+	inv.DeletedAt = now.Format(time.RFC3339)
+	inv.DeletedBy = deletedBy
+	s.Invites[id] = inv
+	return nil
+}
+
 // RedeemInvite marks the invite with the given ID as redeemed by the given
 // peer/device name. Only invites in the "created" state can be redeemed.
 func (s *State) RedeemInvite(id string, redeemedBy string) (Invite, error) {
@@ -215,10 +290,15 @@ func (s *State) RedeemInvite(id string, redeemedBy string) (Invite, error) {
 		return Invite{}, fmt.Errorf("invite %q is already %s", id, inv.Status)
 	}
 
+	if inv.MaxUses > 0 && inv.UsedCount >= inv.MaxUses {
+		return Invite{}, fmt.Errorf("invite %q has reached max uses (%d)", id, inv.MaxUses)
+	}
+
 	now := time.Now().UTC()
 	inv.Status = InviteRedeemed
 	inv.RedeemedAt = now.Format(time.RFC3339)
 	inv.RedeemedBy = redeemedBy
+	inv.UsedCount++
 	s.Invites[id] = inv
 	return inv, nil
 }
@@ -241,10 +321,14 @@ func (s *State) RedeemInviteByTokenHash(tokenHash, redeemedBy string) (*Invite, 
 					return nil, fmt.Errorf("invite has expired")
 				}
 			}
+			if inv.MaxUses > 0 && inv.UsedCount >= inv.MaxUses {
+				return nil, fmt.Errorf("invite has reached max uses (%d)", inv.MaxUses)
+			}
 			now := time.Now().UTC()
 			inv.Status = InviteRedeemed
 			inv.RedeemedAt = now.Format(time.RFC3339)
 			inv.RedeemedBy = redeemedBy
+			inv.UsedCount++
 			s.Invites[id] = inv
 			return &inv, nil
 		}
