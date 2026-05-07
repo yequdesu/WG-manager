@@ -15,6 +15,7 @@ Supports **Linux / macOS / WSL / Windows / Mobile (QR)**.
   - [3. Create an Invite](#3-create-an-invite)
   - [4. User Onboarding](#4-user-onboarding)
   - [5. Admin Operations](#5-admin-operations)
+- [CLI Reference](#cli-reference)
 - [Enhanced TUI Dashboard](#enhanced-tui-dashboard)
 - [Logging & Diagnostics](#logging--diagnostics)
 - [API Reference](#api-reference)
@@ -36,13 +37,33 @@ The system uses one onboarding model: invite-based. An owner or admin creates an
 owner/admin creates invite  -->  user redeems invite  -->  peer created atomically
 ```
 
-### Role Model
+### Capability Matrix
 
-| Role | Permissions |
-|------|-------------|
-| **owner** | Full access. Create/delete admins, manage invites, manage peers, system config. Created on first run via bootstrap password. |
-| **admin** | Create/revoke invites, manage peers, view status. |
-| **user** | Redeem invites, view own peer status. Created when an invite is redeemed. |
+Three fixed roles: owner, admin, user. No custom roles.
+
+| Action | Owner | Admin | User | Enforcement |
+|--------|-------|-------|------|-------------|
+| View own status (`GET /api/v1/me`) | ✅ | ✅ | ✅ | Session-based, remote accessible |
+| Health, login, logout, redeem | ✅ | ✅ | ✅ | Public |
+| Bootstrap, connect | ✅ | ✅ | ✅ | Public |
+| List peers | ✅ | ✅ | ❌ | LocalOnly |
+| Delete peer (by name or pubkey) | ✅ | ✅ | ❌ | LocalOnly |
+| Set peer alias | ✅ | ✅ | ❌ | LocalOnly |
+| View daemon status | ✅ | ✅ | ❌ | LocalOnly |
+| List invites | ✅ | ✅ | ❌ | LocalOnly |
+| Create invite | ✅ | ✅* | ❌ | LocalOnly |
+| Invite QR code | ✅ | ✅ | ❌ | LocalOnly |
+| Revoke invite | ✅ | ✅ | ❌ | LocalOnly |
+| Delete invite (soft-delete) | ✅ | ✅ | ❌ | LocalOnly |
+| List users | ✅ | ❌ | ❌ | LocalOnly + Owner |
+| Create user | ✅ | ❌ | ❌ | LocalOnly + Owner |
+| Delete user | ✅ | ❌ | ❌ | LocalOnly + Owner |
+| Bootstrap owner (first run) | ✅ | ❌ | ❌ | No users exist yet |
+
+*Admin can create invites only with target_role="user". Cannot create owner-level invites or direct user accounts.
+
+- **LocalOnly** = accessible only from `127.0.0.1`. Use SSH or a local terminal.
+- **API key** (`MGMT_API_KEY`) bypasses role checks but is restricted by LocalOnly to prevent remote abuse.
 
 ### Architecture
 
@@ -105,6 +126,30 @@ cd ~/WG-manager && git pull
 sudo bash server/setup-server.sh
 # "Use existing configuration? [Y/n]" -> Y + Enter
 ```
+
+#### Address Pools
+
+You can divide the VPN subnet into named address ranges called pools. Peers assigned to a pool get IPs from that range. Add lines to `config.env` with the prefix `POOL_`:
+
+```
+POOL_CLIENTS=10.0.0.10-10.0.0.100
+POOL_SERVERS=10.0.0.101-10.0.0.200
+```
+
+The format is `POOL_<NAME>=<startIP>-<endIP>`. When creating an invite, pass `pool_name` to assign the peer to that pool:
+
+```bash
+curl -s -X POST http://127.0.0.1:58880/api/v1/invites \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"pool_name": "CLIENTS"}'
+```
+
+Rules:
+- Pools must not overlap with each other.
+- Pools must not include the server IP (subnet .1).
+- The entire range must lie within `WG_SUBNET`.
+- Invalid pool config is logged as a warning and pools are disabled.
 
 ---
 
@@ -258,6 +303,127 @@ TUI: Peers tab, select with arrow keys, press `d` to delete.
 bash ~/WG-manager/scripts/health-check.sh
 bash ~/WG-manager/scripts/list-peers.sh
 ```
+
+---
+
+## CLI Reference
+
+The `wg-mgmt` CLI runs on the server and talks to the daemon over localhost. It reads `MGMT_LISTEN` and `MGMT_API_KEY` from `config.env` by default.
+
+```bash
+# Build the CLI
+make build-cli
+
+./bin/wg-mgmt --help
+# Usage: ./bin/wg-mgmt [--config FILE] <command>
+```
+
+### Global Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--config FILE` | `config.env` | Path to config.env |
+
+### Commands
+
+| Command | Description | Status |
+|---------|-------------|--------|
+| `peer` | List, alias, delete peers | Implemented |
+| `invite` | Invite operations | Scaffolded |
+| `user` | User operations | Scaffolded |
+| `status` | Daemon and WireGuard status | Implemented |
+| `auth` | Session authentication | Scaffolded |
+| `me` | Current user info | Implemented |
+
+### peer list
+
+Lists all peers with their public key, alias, name, IP, online status, and endpoint.
+
+```bash
+# Table output (default)
+./bin/wg-mgmt peer list
+
+# JSON output
+./bin/wg-mgmt peer list --format json
+```
+
+Example table output:
+
+```
+  PUBLIC KEY       ALIAS   NAME     IP          ONLINE   ENDPOINT
+  RoJ7SRMQC7Zu     my-lap  my-lap   10.0.0.2    online   112.49.240.57:16262
+  aB3cDeFgHiJk     phone   phone1   10.0.0.3    offline
+```
+
+### peer alias
+
+Sets a friendly alias for a peer, identified by its immutable public key.
+
+```
+./bin/wg-mgmt peer alias --id <public_key> --alias <new_name>
+```
+
+Example:
+
+```bash
+./bin/wg-mgmt peer alias --id RoJ7SRMQC7Zu... --alias "John's Laptop"
+# Alias updated: "" -> "John's Laptop" (peer: my-lap)
+```
+
+### peer delete
+
+Deletes a peer by its public key. Ambiguous alias-only delete is rejected.
+
+```bash
+./bin/wg-mgmt peer delete --id RoJ7SRMQC7Zu...
+```
+
+### status
+
+Shows daemon and WireGuard interface status.
+
+```bash
+# Human-readable
+./bin/wg-mgmt status
+
+# JSON
+./bin/wg-mgmt status --format json
+```
+
+Human output example:
+
+```
+daemon: running
+wireguard: ok
+interface: wg0
+listen_port: 51820
+peers: 3 online / 5 total
+```
+
+### me
+
+Shows the currently authenticated user's name, role, and creation time. Requires a session token.
+
+```bash
+# Use MGMT_SESSION_TOKEN env var or --session-token flag
+export MGMT_SESSION_TOKEN=<session_token>
+./bin/wg-mgmt me
+
+# JSON
+./bin/wg-mgmt me --format json
+```
+
+Example:
+
+```
+name: admin
+role: owner
+created_at: 2026-05-03T15:00:00Z
+```
+
+### invite, user, auth
+
+These commands are scaffolded and will be implemented in a future release. Use the API or TUI for these operations.
 
 ---
 
@@ -416,6 +582,10 @@ The daemon enforces two access tiers via middleware. The reverse proxy must expo
 | `/api/v1/users` | List/manage users |
 | `/api/v1/status` | Server status |
 
+### Deployment Automation
+
+The `server/setup-server.sh` script automates daemon installation, WireGuard init, and systemd service setup. It does NOT configure the reverse proxy. After running it, set up nginx or Caddy manually (see examples below) with Let's Encrypt for TLS.
+
 ### TLS Requirement
 
 All production deployments MUST terminate TLS at the reverse proxy. The daemon speaks plain HTTP. Use Let's Encrypt (certbot or Caddy auto) for free certificates.
@@ -501,12 +671,14 @@ The bootstrap script contains no global API key. The invite token is the sole cr
 
 ## Building
 
-### Go Daemon
+### Go Daemon + CLI
 
 ```bash
-make build      # Daemon -> bin/wg-mgmt-daemon
-make build-all  # Daemon
-make vet        # go vet ./...
+make build       # Daemon -> bin/wg-mgmt-daemon
+make build-cli   # CLI -> bin/wg-mgmt
+make build-all   # Daemon + CLI
+make vet         # go vet ./...
+make clean       # Remove build artifacts
 ```
 
 ### Enhanced TUI (Rust)
@@ -532,7 +704,23 @@ sudo bash server/setup-server.sh
 cd ~/WG-manager/wg-tui && bash install.sh
 ```
 
-After upgrading from the old approval/direct model:
+### State Migration
+
+On startup, the daemon automatically reconciles its state with the live WireGuard interface:
+
+1. **Peer recovery** - Peers present in WireGuard but missing from `peers.json` are recovered with a generated name.
+2. **Missing peers** - Peers in `peers.json` but absent from WireGuard are re-added to the interface.
+3. **Alias and invite migration** - If the existing state lacks alias or invite fields, they are backfilled automatically.
+4. **Pool config** - If `POOL_*` entries exist in `config.env`, they are parsed and loaded at startup.
+
+After the upgrade, the daemon log shows migration results:
+
+```
+State migration complete: 5 peer alias(es), 3 invite(s) backfilled
+Loaded 2 address pool(s)
+```
+
+### Post-Upgrade Steps
 
 ```bash
 # 1. Confirm the daemon is listening only on localhost
@@ -544,9 +732,23 @@ grep BOOTSTRAP_OWNER_PASSWORD ~/WG-manager/config.env
 # 3. Restart and inspect service health
 sudo systemctl restart wg-mgmt
 sudo systemctl status wg-mgmt --no-pager
+
+# 4. (Optional) Add address pools if needed
+# Edit config.env and add: POOL_NAME=startIP-endIP
+# Then reload without restart:
+sudo systemctl kill -s HUP wg-mgmt
 ```
 
-Then configure HTTPS reverse proxying to `http://127.0.0.1:58880`, create new invites, and replace any old scripts that call `/api/v1/register`, `/api/v1/request`, or `/connect?mode=direct`.
+### Upgrading from Old Approval / Direct Model
+
+If you are upgrading from a version that used the old approval or direct registration flow:
+
+1. The old endpoints (`/api/v1/register`, `/api/v1/request`, etc.) now return `410 Gone`.
+2. Active peers on the server continue to work. No action needed for existing connections.
+3. Legacy pending approval requests are ignored. Recreate access through invites.
+4. Create invites for your existing users via `POST /api/v1/invites` or the TUI.
+5. Configure HTTPS reverse proxying to `http://127.0.0.1:58880`.
+6. Replace any old scripts that call old endpoints with the invite-based flow.
 
 ---
 

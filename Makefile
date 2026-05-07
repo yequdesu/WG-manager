@@ -1,4 +1,4 @@
-.PHONY: build build-all build-cli clean run dev help vet
+.PHONY: build build-all build-cli clean run dev help vet deploy-nginx
 
 BINARY_NAME := wg-mgmt-daemon
 BINARY_CLI := wg-mgmt
@@ -57,3 +57,6 @@ clean:
 
 vet:
 	@go vet ./...
+
+deploy-nginx:
+	@sudo bash server/deploy-nginx.sh

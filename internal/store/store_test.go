@@ -2,6 +2,9 @@ package store
 
 import (
 	"encoding/json"
+	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -651,5 +654,495 @@ func TestGenerateInviteToken(t *testing.T) {
 			t.Errorf("hash contains non-hex character: %c", c)
 			break
 		}
+	}
+}
+
+// ── Peer alias migration ────────────────────────────────────────────────
+
+func TestPeerAliasMigration(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "peers.json")
+
+	// Write old-format state: peer with no "alias" field.
+	oldJSON := `{
+  "peers": {
+    "old-peer": {
+      "name": "old-peer",
+      "public_key": "fake-pubkey",
+      "private_key": "fake-privkey",
+      "address": "10.0.0.2",
+      "dns": "1.1.1.1",
+      "keepalive": 25,
+      "created_at": "2024-01-01T00:00:00Z"
+    }
+  }
+}`
+	if err := os.WriteFile(path, []byte(oldJSON), 0644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+
+	s, mi, err := Load(path, nil)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	if mi.PeerAliases != 1 {
+		t.Errorf("PeerAliases = %d, want 1", mi.PeerAliases)
+	}
+
+	p, ok := s.GetPeer("old-peer")
+	if !ok {
+		t.Fatal("peer not found after load")
+	}
+	if p.Alias != p.Name {
+		t.Errorf("Alias = %q, want Name = %q", p.Alias, p.Name)
+	}
+	if p.Alias != "old-peer" {
+		t.Errorf("Alias = %q, want %q", p.Alias, "old-peer")
+	}
+
+	// Peer that already has an alias should not be double-counted.
+	oldJSON2 := `{
+  "peers": {
+    "alias-peer": {
+      "name": "alias-peer",
+      "alias": "my-alias",
+      "public_key": "abc",
+      "private_key": "def",
+      "address": "10.0.0.3",
+      "dns": "1.1.1.1",
+      "keepalive": 25,
+      "created_at": "2024-01-01T00:00:00Z"
+    }
+  }
+}`
+	path2 := filepath.Join(dir, "peers2.json")
+	if err := os.WriteFile(path2, []byte(oldJSON2), 0644); err != nil {
+		t.Fatalf("write temp file 2: %v", err)
+	}
+
+	s2, mi2, err := Load(path2, nil)
+	if err != nil {
+		t.Fatalf("Load 2 failed: %v", err)
+	}
+	if mi2.PeerAliases != 0 {
+		t.Errorf("PeerAliases = %d, want 0 (already had alias)", mi2.PeerAliases)
+	}
+	p2, _ := s2.GetPeer("alias-peer")
+	if p2.Alias != "my-alias" {
+		t.Errorf("Alias = %q, want %q", p2.Alias, "my-alias")
+	}
+}
+
+// ── Invite field backfill migration ──────────────────────────────────────
+
+func TestInviteMigration(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "peers.json")
+
+	// Old-format invites: no max_uses, no target_role, no used_count.
+	oldJSON := `{
+  "invites": {
+    "inv-created": {
+      "id": "inv-created",
+      "token_hash": "aaa",
+      "issued_by": "admin",
+      "status": "created",
+      "created_at": "2024-01-01T00:00:00Z"
+    },
+    "inv-redeemed": {
+      "id": "inv-redeemed",
+      "token_hash": "bbb",
+      "issued_by": "admin",
+      "status": "redeemed",
+      "created_at": "2024-01-01T00:00:00Z",
+      "redeemed_at": "2024-01-02T00:00:00Z",
+      "redeemed_by": "peer1"
+    },
+    "inv-revoked": {
+      "id": "inv-revoked",
+      "token_hash": "ccc",
+      "issued_by": "admin",
+      "status": "revoked",
+      "created_at": "2024-01-01T00:00:00Z",
+      "revoked_at": "2024-01-02T00:00:00Z"
+    }
+  }
+}`
+	if err := os.WriteFile(path, []byte(oldJSON), 0644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+
+	s, mi, err := Load(path, nil)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	// All 3 invites should need backfill.
+	if mi.Invites != 3 {
+		t.Errorf("Invites migrated = %d, want 3", mi.Invites)
+	}
+
+	// Created invite: MaxUses=1, TargetRole="user", UsedCount=0
+	inv1, ok := s.GetInviteByID("inv-created")
+	if !ok {
+		t.Fatal("inv-created not found")
+	}
+	if inv1.MaxUses != 1 {
+		t.Errorf("inv-created MaxUses = %d, want 1", inv1.MaxUses)
+	}
+	if inv1.TargetRole != "user" {
+		t.Errorf("inv-created TargetRole = %q, want %q", inv1.TargetRole, "user")
+	}
+	if inv1.UsedCount != 0 {
+		t.Errorf("inv-created UsedCount = %d, want 0", inv1.UsedCount)
+	}
+
+	// Redeemed invite: MaxUses=1, TargetRole="user", UsedCount=1
+	inv2, ok := s.GetInviteByID("inv-redeemed")
+	if !ok {
+		t.Fatal("inv-redeemed not found")
+	}
+	if inv2.MaxUses != 1 {
+		t.Errorf("inv-redeemed MaxUses = %d, want 1", inv2.MaxUses)
+	}
+	if inv2.TargetRole != "user" {
+		t.Errorf("inv-redeemed TargetRole = %q, want %q", inv2.TargetRole, "user")
+	}
+	if inv2.UsedCount != 1 {
+		t.Errorf("inv-redeemed UsedCount = %d, want 1", inv2.UsedCount)
+	}
+
+	// Revoked invite: MaxUses=1, TargetRole="user", UsedCount=1
+	inv3, ok := s.GetInviteByID("inv-revoked")
+	if !ok {
+		t.Fatal("inv-revoked not found")
+	}
+	if inv3.MaxUses != 1 {
+		t.Errorf("inv-revoked MaxUses = %d, want 1", inv3.MaxUses)
+	}
+	if inv3.TargetRole != "user" {
+		t.Errorf("inv-revoked TargetRole = %q, want %q", inv3.TargetRole, "user")
+	}
+	if inv3.UsedCount != 1 {
+		t.Errorf("inv-revoked UsedCount = %d, want 1", inv3.UsedCount)
+	}
+
+	// Invite that already has MaxUses and TargetRole should not be double-counted.
+	alreadyOK := `{
+  "invites": {
+    "inv-ok": {
+      "id": "inv-ok",
+      "token_hash": "ddd",
+      "issued_by": "admin",
+      "status": "created",
+      "created_at": "2024-01-01T00:00:00Z",
+      "max_uses": 5,
+      "target_role": "admin",
+      "used_count": 0
+    }
+  }
+}`
+	path2 := filepath.Join(dir, "peers2.json")
+	if err := os.WriteFile(path2, []byte(alreadyOK), 0644); err != nil {
+		t.Fatalf("write temp file 2: %v", err)
+	}
+
+	s2, mi2, err := Load(path2, nil)
+	if err != nil {
+		t.Fatalf("Load 2 failed: %v", err)
+	}
+	if mi2.Invites != 0 {
+		t.Errorf("Invites migrated = %d, want 0 (already has fields)", mi2.Invites)
+	}
+	invOK, _ := s2.GetInviteByID("inv-ok")
+	if invOK.MaxUses != 5 {
+		t.Errorf("MaxUses = %d, want 5", invOK.MaxUses)
+	}
+	if invOK.TargetRole != "admin" {
+		t.Errorf("TargetRole = %q, want %q", invOK.TargetRole, "admin")
+	}
+}
+
+// ── Pool IP allocation ───────────────────────────────────────────────────
+
+func TestPoolAllocation(t *testing.T) {
+	_, subnet, err := net.ParseCIDR("10.0.0.0/24")
+	if err != nil {
+		t.Fatalf("parse subnet: %v", err)
+	}
+
+	// Valid pool.
+	pool, err := NewPool("clients", net.ParseIP("10.0.0.10"), net.ParseIP("10.0.0.20"), subnet)
+	if err != nil {
+		t.Fatalf("NewPool valid: %v", err)
+	}
+	if pool.Name != "clients" {
+		t.Errorf("Name = %q, want %q", pool.Name, "clients")
+	}
+	if pool.StartIP.String() != "10.0.0.10" {
+		t.Errorf("StartIP = %s, want 10.0.0.10", pool.StartIP)
+	}
+	if pool.EndIP.String() != "10.0.0.20" {
+		t.Errorf("EndIP = %s, want 10.0.0.20", pool.EndIP)
+	}
+
+	// Pool must not include server IP (.1).
+	_, err = NewPool("bad", net.ParseIP("10.0.0.1"), net.ParseIP("10.0.0.10"), subnet)
+	if err == nil {
+		t.Error("NewPool should reject pool containing server IP (.1)")
+	}
+
+	// Pool must be within subnet.
+	_, err = NewPool("bad", net.ParseIP("10.0.1.1"), net.ParseIP("10.0.1.10"), subnet)
+	if err == nil {
+		t.Error("NewPool should reject pool outside subnet")
+	}
+
+	// Start must be <= end.
+	_, err = NewPool("bad", net.ParseIP("10.0.0.20"), net.ParseIP("10.0.0.10"), subnet)
+	if err == nil {
+		t.Error("NewPool should reject start > end")
+	}
+
+	// Empty name.
+	_, err = NewPool("", net.ParseIP("10.0.0.10"), net.ParseIP("10.0.0.20"), subnet)
+	if err == nil {
+		t.Error("NewPool should reject empty name")
+	}
+
+	// ── Allocation within bounds ────────────────────────────────────────
+
+	s := NewState("/tmp/test_pool_alloc.json", nil)
+	s.SetPools(map[string]*Pool{"clients": pool})
+
+	// Allocate first IP.
+	ip1, err := s.AllocateIPInPool(pool, "10.0.0.0/24", nil)
+	if err != nil {
+		t.Fatalf("first allocation: %v", err)
+	}
+	if ip1 != "10.0.0.10" {
+		t.Errorf("first IP = %s, want 10.0.0.10", ip1)
+	}
+
+	// Allocate second IP with first one marked as used.
+	used := map[string]bool{ip1: true}
+	ip2, err := s.AllocateIPInPool(pool, "10.0.0.0/24", used)
+	if err != nil {
+		t.Fatalf("second allocation: %v", err)
+	}
+	if ip2 != "10.0.0.11" {
+		t.Errorf("second IP = %s, want 10.0.0.11", ip2)
+	}
+
+	// Allocate third IP.
+	used[ip2] = true
+	ip3, err := s.AllocateIPInPool(pool, "10.0.0.0/24", used)
+	if err != nil {
+		t.Fatalf("third allocation: %v", err)
+	}
+	if ip3 != "10.0.0.12" {
+		t.Errorf("third IP = %s, want 10.0.0.12", ip3)
+	}
+
+	// ── Pool exhaustion ─────────────────────────────────────────────────
+
+	// Fill all remaining IPs in the pool range (10.0.0.13 through 10.0.0.20 = 8 IPs).
+	exhausted := map[string]bool{
+		"10.0.0.10": true,
+		"10.0.0.11": true,
+		"10.0.0.12": true,
+		"10.0.0.13": true,
+		"10.0.0.14": true,
+		"10.0.0.15": true,
+		"10.0.0.16": true,
+		"10.0.0.17": true,
+		"10.0.0.18": true,
+		"10.0.0.19": true,
+		"10.0.0.20": true,
+	}
+	_, err = s.AllocateIPInPool(pool, "10.0.0.0/24", exhausted)
+	if err == nil {
+		t.Error("allocation should fail when pool is exhausted")
+	}
+
+	// ── Pool contains ───────────────────────────────────────────────────
+
+	if !pool.ContainsStr("10.0.0.10") {
+		t.Error("pool should contain 10.0.0.10")
+	}
+	if !pool.ContainsStr("10.0.0.20") {
+		t.Error("pool should contain 10.0.0.20 (inclusive end)")
+	}
+	if pool.ContainsStr("10.0.0.9") {
+		t.Error("pool should not contain 10.0.0.9 (below range)")
+	}
+	if pool.ContainsStr("10.0.0.21") {
+		t.Error("pool should not contain 10.0.0.21 (above range)")
+	}
+
+	// ── Allocations stay within pool bounds ──────────────────────────────
+
+	// With some peers, allocation must stay within pool range.
+	s2 := NewState("/tmp/test_pool_bounds.json", nil)
+	s2.SetPools(map[string]*Pool{"clients": pool})
+
+	// Add a peer occupying an IP outside the pool but within the subnet.
+	if err := s2.AddPeer(Peer{Name: "peer1", Address: "10.0.0.30", PublicKey: "pk1", PrivateKey: "sk1"}); err != nil {
+		t.Fatalf("AddPeer: %v", err)
+	}
+
+	ip, err := s2.AllocateIPInPool(pool, "10.0.0.0/24", nil)
+	if err != nil {
+		t.Fatalf("allocation with existing peers: %v", err)
+	}
+	if ip != "10.0.0.10" {
+		t.Errorf("IP with existing peers = %s, want 10.0.0.10", ip)
+	}
+
+	// The allocation should not be affected by peer outside pool range.
+	if ip == "10.0.0.30" {
+		t.Error("should not allocate an IP outside the pool range")
+	}
+}
+
+// ── ParsePools ───────────────────────────────────────────────────────────
+
+func TestParsePools(t *testing.T) {
+	pools, err := ParsePools("10.0.0.0/24", map[string]string{
+		"clients": "10.0.0.10-10.0.0.100",
+	})
+	if err != nil {
+		t.Fatalf("ParsePools: %v", err)
+	}
+	if len(pools) != 1 {
+		t.Fatalf("len(pools) = %d, want 1", len(pools))
+	}
+	pool, ok := pools["clients"]
+	if !ok {
+		t.Fatal("clients pool not found")
+	}
+	if pool.StartIP.String() != "10.0.0.10" {
+		t.Errorf("StartIP = %s, want 10.0.0.10", pool.StartIP)
+	}
+	if pool.EndIP.String() != "10.0.0.100" {
+		t.Errorf("EndIP = %s, want 10.0.0.100", pool.EndIP)
+	}
+
+	// Invalid range format.
+	_, err = ParsePools("10.0.0.0/24", map[string]string{
+		"bad": "not-a-range",
+	})
+	if err == nil {
+		t.Error("ParsePools should reject invalid range format")
+	}
+
+	// Overlapping pools.
+	_, err = ParsePools("10.0.0.0/24", map[string]string{
+		"a": "10.0.0.10-10.0.0.50",
+		"b": "10.0.0.30-10.0.0.60",
+	})
+	if err == nil {
+		t.Error("ParsePools should reject overlapping pools")
+	}
+
+	// Pool outside subnet.
+	_, err = ParsePools("10.0.0.0/24", map[string]string{
+		"bad": "10.0.1.10-10.0.1.100",
+	})
+	if err == nil {
+		t.Error("ParsePools should reject pool outside subnet")
+	}
+}
+
+// ── Invite MaxUses enforcement ───────────────────────────────────────────
+
+func TestInviteMaxUses(t *testing.T) {
+	s := NewState("/tmp/test_max_uses.json", nil)
+
+	// Create invite with MaxUses=1.
+	_, inv, err := s.CreateInvite("admin", 1*time.Hour, WithMaxUses(1))
+	if err != nil {
+		t.Fatalf("CreateInvite: %v", err)
+	}
+	if inv.MaxUses != 1 {
+		t.Errorf("MaxUses = %d, want 1", inv.MaxUses)
+	}
+	if inv.UsedCount != 0 {
+		t.Errorf("UsedCount = %d, want 0", inv.UsedCount)
+	}
+
+	// First redeem succeeds.
+	_, err = s.RedeemInvite(inv.ID, "peer1")
+	if err != nil {
+		t.Fatalf("first RedeemInvite: %v", err)
+	}
+
+	// After first redeem, status is Redeemed → second redeem-by-ID fails.
+	_, err = s.RedeemInvite(inv.ID, "peer2")
+	if err == nil {
+		t.Error("second RedeemInvite should fail (already redeemed)")
+	}
+
+	// Use UnredeemByTokenHash to roll back status to "created"
+	// while keeping UsedCount at 1.
+	if err := s.UnredeemByTokenHash(inv.TokenHash); err != nil {
+		t.Fatalf("UnredeemByTokenHash: %v", err)
+	}
+
+	// Now status is back to "created" but UsedCount is still 1.
+	loopedBack, _ := s.GetInviteByID(inv.ID)
+	if loopedBack.UsedCount != 1 {
+		t.Errorf("UsedCount after unredeem = %d, want 1", loopedBack.UsedCount)
+	}
+	if loopedBack.Status != InviteCreated {
+		t.Errorf("Status after unredeem = %q, want %q", loopedBack.Status, InviteCreated)
+	}
+
+	// RedeemInvite should now fail because UsedCount(1) >= MaxUses(1).
+	_, err = s.RedeemInvite(inv.ID, "peer2")
+	if err == nil {
+		t.Error("RedeemInvite after unredeem+max uses reached: should fail")
+	}
+	if err.Error() != `invite "`+inv.ID+`" has reached max uses (1)` {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	// Same for RedeemInviteByTokenHash.
+	_, err = s.RedeemInviteByTokenHash(inv.TokenHash, "peer2")
+	if err == nil {
+		t.Error("RedeemInviteByTokenHash after unredeem+max uses reached: should fail")
+	}
+	if err.Error() != "invite has reached max uses (1)" {
+		t.Errorf("unexpected RedeemInviteByTokenHash error: %v", err)
+	}
+
+	// Create a multi-use invite with MaxUses=2.
+	_, inv2, err := s.CreateInvite("admin", 1*time.Hour, WithMaxUses(2))
+	if err != nil {
+		t.Fatalf("CreateInvite multi-use: %v", err)
+	}
+
+	// First redeem succeeds.
+	_, err = s.RedeemInvite(inv2.ID, "peer-a")
+	if err != nil {
+		t.Fatalf("first redeem of multi-use: %v", err)
+	}
+	// Verify UsedCount incremented.
+	inv2after, _ := s.GetInviteByID(inv2.ID)
+	if inv2after.UsedCount != 1 {
+		t.Errorf("UsedCount after first redeem = %d, want 1", inv2after.UsedCount)
+	}
+	if inv2after.MaxUses != 2 {
+		t.Errorf("MaxUses = %d, want 2", inv2after.MaxUses)
+	}
+
+	// Verify MaxUses defaults to 1 when not specified.
+	_, invDefault, err := s.CreateInvite("admin", 1*time.Hour)
+	if err != nil {
+		t.Fatalf("CreateInvite default: %v", err)
+	}
+	if invDefault.MaxUses != 1 {
+		t.Errorf("default MaxUses = %d, want 1", invDefault.MaxUses)
 	}
 }
