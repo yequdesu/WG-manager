@@ -361,6 +361,43 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	authUser, _ := r.Context().Value(ContextKeyUser).(string)
+	if authUser == "" || authUser == "apikey" {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to resolve session"})
+		return
+	}
+
+	tokenHash, ok := tokenHashFromBearer(r)
+	if !ok {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to resolve session"})
+		return
+	}
+
+	sess, ok := h.store.GetSessionByTokenHash(tokenHash)
+	if !ok || sess.UserName != authUser {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to resolve session"})
+		return
+	}
+
+	user, ok := h.store.GetUser(sess.UserName)
+	if !ok {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to resolve user"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"name":       user.Name,
+		"role":       string(user.Role),
+		"created_at": user.CreatedAt,
+	})
+}
+
 func (h *Handler) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -480,9 +517,14 @@ func (h *Handler) CreateInvite(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		NameHint string `json:"name_hint"`
-		DNS      string `json:"dns"`
-		TTLHours int    `json:"ttl_hours"`
+		NameHint   string            `json:"name_hint"`
+		DNS        string            `json:"dns"`
+		TTLHours   int               `json:"ttl_hours"`
+		PoolName   string            `json:"pool_name"`
+		TargetRole string            `json:"target_role"`
+		DeviceName string            `json:"device_name"`
+		MaxUses    int               `json:"max_uses"`
+		Labels     map[string]string `json:"labels"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -491,15 +533,17 @@ func (h *Handler) CreateInvite(w http.ResponseWriter, r *http.Request) {
 
 	req.NameHint = strings.TrimSpace(req.NameHint)
 	req.DNS = strings.TrimSpace(req.DNS)
+	req.PoolName = strings.TrimSpace(req.PoolName)
+	req.TargetRole = strings.TrimSpace(req.TargetRole)
+	req.DeviceName = strings.TrimSpace(req.DeviceName)
 
 	var ttl time.Duration
 	if req.TTLHours > 0 {
 		ttl = time.Duration(req.TTLHours) * time.Hour
 	} else {
-		ttl = 72 * time.Hour // default 3 days
+		ttl = 72 * time.Hour
 	}
 
-	// Determine the issuer from context (set by RequireRole middleware).
 	issuedBy := "apikey"
 	if user, ok := r.Context().Value(ContextKeyUser).(string); ok && user != "apikey" {
 		issuedBy = user
@@ -515,6 +559,21 @@ func (h *Handler) CreateInvite(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		opts = append(opts, store.WithDNSOverride(req.DNS))
+	}
+	if req.PoolName != "" {
+		opts = append(opts, store.WithPool(req.PoolName))
+	}
+	if req.TargetRole != "" {
+		opts = append(opts, store.WithTargetRole(req.TargetRole))
+	}
+	if req.DeviceName != "" {
+		opts = append(opts, store.WithDeviceName(req.DeviceName))
+	}
+	if req.MaxUses > 0 {
+		opts = append(opts, store.WithMaxUses(req.MaxUses))
+	}
+	if len(req.Labels) > 0 {
+		opts = append(opts, store.WithLabels(req.Labels))
 	}
 
 	rawToken, inv, err := h.store.CreateInvite(issuedBy, ttl, opts...)
@@ -544,22 +603,30 @@ func (h *Handler) ListInvites(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Clean up expired invites.
 	_ = h.store.ExpireInvites()
 
-	invites := h.store.ListInvites()
+	showDeleted := r.URL.Query().Get("show_deleted") == "true"
+	invites := h.store.ListInvites(showDeleted)
 
 	type inviteInfo struct {
-		ID              string `json:"id"`
-		Status          string `json:"status"`
-		CreatedAt       string `json:"created_at"`
-		ExpiresAt       string `json:"expires_at,omitempty"`
-		RedeemedAt      string `json:"redeemed_at,omitempty"`
-		RedeemedBy      string `json:"redeemed_by,omitempty"`
-		RevokedAt       string `json:"revoked_at,omitempty"`
-		IssuedBy        string `json:"issued_by"`
-		DisplayNameHint string `json:"display_name_hint,omitempty"`
-		DNSOverride     string `json:"dns_override,omitempty"`
+		ID              string            `json:"id"`
+		Status          string            `json:"status"`
+		CreatedAt       string            `json:"created_at"`
+		ExpiresAt       string            `json:"expires_at,omitempty"`
+		RedeemedAt      string            `json:"redeemed_at,omitempty"`
+		RedeemedBy      string            `json:"redeemed_by,omitempty"`
+		RevokedAt       string            `json:"revoked_at,omitempty"`
+		DeletedAt       string            `json:"deleted_at,omitempty"`
+		DeletedBy       string            `json:"deleted_by,omitempty"`
+		IssuedBy        string            `json:"issued_by"`
+		DisplayNameHint string            `json:"display_name_hint,omitempty"`
+		DNSOverride     string            `json:"dns_override,omitempty"`
+		PoolName        string            `json:"pool_name,omitempty"`
+		TargetRole      string            `json:"target_role,omitempty"`
+		DeviceName      string            `json:"device_name,omitempty"`
+		MaxUses         int               `json:"max_uses,omitempty"`
+		UsedCount       int               `json:"used_count,omitempty"`
+		Labels          map[string]string `json:"labels,omitempty"`
 	}
 
 	result := make([]inviteInfo, 0, len(invites))
@@ -572,9 +639,17 @@ func (h *Handler) ListInvites(w http.ResponseWriter, r *http.Request) {
 			RedeemedAt:      inv.RedeemedAt,
 			RedeemedBy:      inv.RedeemedBy,
 			RevokedAt:       inv.RevokedAt,
+			DeletedAt:       inv.DeletedAt,
+			DeletedBy:       inv.DeletedBy,
 			IssuedBy:        inv.IssuedBy,
 			DisplayNameHint: inv.DisplayNameHint,
 			DNSOverride:     inv.DNSOverride,
+			PoolName:        inv.PoolName,
+			TargetRole:      inv.TargetRole,
+			DeviceName:      inv.DeviceName,
+			MaxUses:         inv.MaxUses,
+			UsedCount:       inv.UsedCount,
+			Labels:          inv.Labels,
 		})
 	}
 
@@ -593,6 +668,31 @@ func (h *Handler) RevokeInvite(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/v1/invites/")
 	if id == "" || id == r.URL.Path {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invite_id is required"})
+		return
+	}
+
+	operator := "apikey"
+	if user, ok := r.Context().Value(ContextKeyUser).(string); ok && user != "apikey" {
+		operator = user
+	}
+
+	if r.URL.Query().Get("action") == "delete" {
+		if err := h.store.DeleteInvite(id, operator); err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+			return
+		}
+
+		if err := h.store.Save(); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist state"})
+			return
+		}
+
+		audit.Log("invite_deleted", auditFields("invite_id", id, "deleted_by", operator))
+
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"success": true,
+			"message": fmt.Sprintf("invite %q deleted", id),
+		})
 		return
 	}
 

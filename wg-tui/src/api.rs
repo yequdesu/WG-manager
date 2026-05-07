@@ -34,8 +34,20 @@ pub struct InviteInfo {
     pub status: String,
     pub created_at: Option<String>,
     pub expires_at: Option<String>,
+    pub redeemed_at: Option<String>,
+    pub redeemed_by: Option<String>,
+    pub revoked_at: Option<String>,
+    pub deleted_at: Option<String>,
+    pub deleted_by: Option<String>,
     pub issued_by: Option<String>,
     pub display_name_hint: Option<String>,
+    pub dns_override: Option<String>,
+    pub pool_name: Option<String>,
+    pub target_role: Option<String>,
+    pub device_name: Option<String>,
+    pub max_uses: Option<i64>,
+    pub used_count: Option<i64>,
+    pub labels: Option<std::collections::HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -44,10 +56,15 @@ pub struct InviteListResponse {
     pub invite_count: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct CreateInviteRequest {
     pub name_hint: String,
     pub ttl_hours: u32,
+    pub pool_name: Option<String>,
+    pub target_role: Option<String>,
+    pub device_name: Option<String>,
+    pub max_uses: Option<i64>,
+    pub labels: Option<std::collections::HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -120,6 +137,7 @@ impl ApiClient {
         let body = CreateInviteRequest {
             name_hint: name_hint.to_string(),
             ttl_hours,
+            ..Default::default()
         };
         let mut req = self.client.post(&url).json(&body);
         if !self.api_key.is_empty() {
@@ -160,13 +178,28 @@ mod tests {
 
     #[test]
     fn test_invite_info_serialization() {
+        let mut labels = std::collections::HashMap::new();
+        labels.insert("env".to_string(), "prod".to_string());
+
         let invite = InviteInfo {
             id: "inv_abc123".to_string(),
             status: "created".to_string(),
             created_at: Some("2026-01-01T00:00:00Z".to_string()),
             expires_at: Some("2026-01-02T00:00:00Z".to_string()),
+            redeemed_at: None,
+            redeemed_by: None,
+            revoked_at: None,
+            deleted_at: None,
+            deleted_by: None,
             issued_by: Some("admin".to_string()),
             display_name_hint: Some("test-peer".to_string()),
+            dns_override: Some("8.8.8.8".to_string()),
+            pool_name: Some("default".to_string()),
+            target_role: Some("user".to_string()),
+            device_name: Some("laptop-01".to_string()),
+            max_uses: Some(3),
+            used_count: Some(1),
+            labels: Some(labels),
         };
 
         let json = serde_json::to_string(&invite).expect("serialize failed");
@@ -178,6 +211,8 @@ mod tests {
         assert_eq!(parsed.expires_at, Some("2026-01-02T00:00:00Z".to_string()));
         assert_eq!(parsed.issued_by, Some("admin".to_string()));
         assert_eq!(parsed.display_name_hint, Some("test-peer".to_string()));
+        assert_eq!(parsed.pool_name, Some("default".to_string()));
+        assert_eq!(parsed.max_uses, Some(3));
     }
 
     #[test]
@@ -222,11 +257,16 @@ mod tests {
         let req = CreateInviteRequest {
             name_hint: "my-peer".to_string(),
             ttl_hours: 24,
+            pool_name: Some("default".to_string()),
+            target_role: Some("user".to_string()),
+            device_name: None,
+            max_uses: Some(5),
+            labels: None,
         };
 
         let json = serde_json::to_string(&req).expect("serialize failed");
-        // CreateInviteRequest is send-only (Serialize, not Deserialize)
         assert!(json.contains("my-peer"));
         assert!(json.contains("24"));
+        assert!(json.contains("default"));
     }
 }

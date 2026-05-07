@@ -36,6 +36,7 @@ type AppConfig struct {
 	AuditLogPath           string
 	CleanPeersOnExit       bool
 	BootstrapOwnerPassword string
+	RawPools               map[string]string
 }
 
 func loadConfig(path string) (*AppConfig, error) {
@@ -55,6 +56,7 @@ func loadConfig(path string) (*AppConfig, error) {
 		PeersDBPath:   "./server/peers.json",
 		WGConfPath:    "/etc/wireguard/wg0.conf",
 		AuditLogPath:  "/var/log/wg-mgmt/wg-mgmt.log",
+		RawPools:      make(map[string]string),
 	}
 
 	lines := strings.Split(string(data), "\n")
@@ -107,6 +109,13 @@ func loadConfig(path string) (*AppConfig, error) {
 			cfg.CleanPeersOnExit = strings.EqualFold(val, "true") || val == "1"
 		case "BOOTSTRAP_OWNER_PASSWORD":
 			cfg.BootstrapOwnerPassword = val
+		default:
+			if strings.HasPrefix(key, "POOL_") {
+				poolName := strings.TrimPrefix(key, "POOL_")
+				if poolName != "" {
+					cfg.RawPools[poolName] = val
+				}
+			}
 		}
 	}
 
@@ -210,9 +219,19 @@ func reloadConfig(path string, appCfg *AppConfig, handler *api.Handler, state *s
 		}
 	}
 
+	if len(appCfg.RawPools) > 0 {
+		pools, err := store.ParsePools(appCfg.WGSubnet, appCfg.RawPools)
+		if err != nil {
+			log.Printf("Warning: Pool config error on reload: %v — keeping current pools", err)
+		} else {
+			state.SetPools(pools)
+			log.Printf("Reloaded %d address pool(s)", len(pools))
+		}
+	}
+
 	peerMap := make(map[string]wg.PeerInfo)
 	for _, p := range state.AllPeers() {
-		peerMap[p.Name] = wg.PeerInfo{PubKey: p.PublicKey, Address: p.Address, Keepalive: p.Keepalive}
+		peerMap[p.Name] = wg.PeerInfo{Alias: p.Alias, PubKey: p.PublicKey, Address: p.Address, Keepalive: p.Keepalive}
 	}
 	if err := wg.WriteFullConfig(appCfg.WGConfPath, appCfg.WGInterface, appCfg.WGPort, appCfg.PeerKeepalive, appCfg.WGServerIP, state.Server().PrivateKey, peerMap); err != nil {
 		log.Printf("Warning: failed to write config on reload: %v", err)
@@ -273,6 +292,17 @@ func main() {
 	if err != nil {
 		log.Printf("WARNING: Failed to load peer state: %v — starting with empty state", err)
 		state = store.NewState(appCfg.PeersDBPath, crypto)
+	}
+
+	// Parse and store address pools from config.
+	if len(appCfg.RawPools) > 0 {
+		pools, err := store.ParsePools(appCfg.WGSubnet, appCfg.RawPools)
+		if err != nil {
+			log.Printf("WARNING: Pool config error: %v — pools disabled", err)
+		} else {
+			state.SetPools(pools)
+			log.Printf("Loaded %d address pool(s)", len(pools))
+		}
 	}
 
 	if err := audit.Init(appCfg.AuditLogPath); err != nil {
@@ -336,7 +366,7 @@ func main() {
 		if recovered > 0 || addedToWG > 0 {
 			peerMap := make(map[string]wg.PeerInfo)
 			for _, p := range state.AllPeers() {
-				peerMap[p.Name] = wg.PeerInfo{PubKey: p.PublicKey, Address: p.Address, Keepalive: p.Keepalive}
+				peerMap[p.Name] = wg.PeerInfo{Alias: p.Alias, PubKey: p.PublicKey, Address: p.Address, Keepalive: p.Keepalive}
 			}
 			if err := wg.WriteFullConfig(appCfg.WGConfPath, appCfg.WGInterface, appCfg.WGPort, appCfg.PeerKeepalive, appCfg.WGServerIP, state.Server().PrivateKey, peerMap); err != nil {
 				log.Printf("WARNING: Failed to write config after recovery: %v", err)

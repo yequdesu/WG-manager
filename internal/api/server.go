@@ -69,6 +69,10 @@ func NewServer(ctx context.Context, cfg *Config, s *store.State, m *wg.Manager) 
 	})))
 	mux.Handle("/api/v1/users/", methodGuard(http.MethodDelete, LocalOnly(ownerMW(h.DeleteUser))))
 
+	// ── Self-status route (session-based, remote-accessible) ──────────────
+	meMW := RequireRole(s, cfg.APIKey, store.RoleUser, store.RoleAdmin, store.RoleOwner)
+	mux.Handle("/api/v1/me", methodGuard(http.MethodGet, meMW(h.Me)))
+
 	loggedMux := requestLogger(mux)
 
 	return &http.Server{

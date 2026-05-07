@@ -1,5 +1,41 @@
 package api
 
+// ── Capability Matrix ─────────────────────────────────────────────────────
+//
+// Three fixed roles: owner, admin, user. No custom/configurable roles.
+//
+// Machine-readable matrix — can be extracted into documentation.
+// Format: ACTION | OWNER | ADMIN | USER | ENFORCEMENT
+//
+// ACTION                           | OWNER  | ADMIN  | USER   | ENFORCEMENT
+// ──────────────────────────────── | ────── | ────── | ────── | ───────────
+// Own status (GET /api/v1/me)      | ✅     | ✅     | ✅     | RequireRole(user+)
+// Health, login, logout, redeem    | ✅     | ✅     | ✅     | Public
+// Bootstrap, connect               | ✅     | ✅     | ✅     | Public
+// List peers (GET /api/v1/peers)   | ✅     | ✅     | ❌     | LocalOnly + RequireRole(admin,owner)
+// Delete peer (DELETE /api/v1/peers)| ✅    | ✅     | ❌     | LocalOnly + RequireRole(admin,owner)
+// View status (GET /api/v1/status)  | ✅    | ✅     | ❌     | LocalOnly + RequireRole(admin,owner)
+// List invites (GET /api/v1/invites)| ✅    | ✅     | ❌     | LocalOnly + RequireRole(admin,owner)
+// Create invite (POST /api/v1/invites)| ✅  | ✅†    | ❌     | LocalOnly + RequireRole(admin,owner) + target_role check
+// Invite QR (GET /api/v1/invites/qrcode)| ✅| ✅   | ❌     | LocalOnly + RequireRole(admin,owner)
+// Revoke invite (DELETE /api/v1/invites/)| ✅| ✅   | ❌     | LocalOnly + RequireRole(admin,owner)
+// List users (GET /api/v1/users)    | ✅    | ❌     | ❌     | LocalOnly + RequireRole(owner)
+// Create user (POST /api/v1/users)  | ✅‡   | ❌     | ❌     | LocalOnly + RequireRole(owner)
+// Delete user (DELETE /api/v1/users/)| ✅   | ❌     | ❌     | LocalOnly + RequireRole(owner)
+// Bootstrap owner                  | ✅     | ❌     | ❌     | No users exist yet (one-shot)
+//
+// † Admin can create invites only with target_role="user".
+//   Admin cannot create owner-level invites or direct user accounts.
+// ‡ Owner may create users of any role (owner, admin, user).
+//
+// API key (MGMT_API_KEY) bypasses role checks entirely — this is the
+// emergency/local fallback. All admin/owner routes are additionally
+// protected by LocalOnly, preventing remote API key abuse.
+//
+// User routes work on self-status only (/api/v1/me).
+// Admin routes work for admin+owner on peers, invites, status.
+// Owner routes work for owner only on user CRUD, system config.
+
 import (
 	"context"
 	"crypto/sha256"
