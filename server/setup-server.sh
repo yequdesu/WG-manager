@@ -628,6 +628,7 @@ print_summary() {
     echo -e "    ${BOLD}wg-tui${NC}                                 Interactive dashboard (enhanced or legacy)"
     echo -e "    ${BOLD}wg-tui --legacy${NC}                        Legacy TUI only"
     echo -e "    ${BOLD}bash scripts/health-check.sh${NC}            System health check"
+    echo -e "    ${BOLD}bash scripts/create-peer.sh${NC}            Generate client config, auto-register peer"
     echo -e "    ${BOLD}bash scripts/list-peers.sh${NC}             View all peers"
     echo -e "    ${BOLD}tail -f /var/log/wg-mgmt/audit.log${NC}     Live audit trail"
     echo ""

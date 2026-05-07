@@ -287,7 +287,24 @@ curl -s -X DELETE http://127.0.0.1:58880/api/v1/peers/<name> \
   -H "Authorization: Bearer $API_KEY"
 ```
 
-#### 4.4 Health Check
+#### 4.4 Offline Peer Provisioning (Pre-generate Config)
+
+Generate a client config locally on the server, auto-register the peer, then manually distribute the `.conf` file — no client HTTP request needed.
+
+```bash
+# Generate config for a new peer (saved to scripts/<name>.conf)
+sudo bash ~/WG-manager/scripts/create-peer.sh --name my-laptop
+
+# Custom DNS and output path
+sudo bash ~/WG-manager/scripts/create-peer.sh --name office-pc --dns 8.8.8.8 -o /tmp/office.conf
+
+# Distribute the .conf file to the client (email, USB, etc.)
+# Client imports it into WireGuard — no approval or network request needed
+```
+
+The peer is automatically registered in the management system and added to the WireGuard interface on the server. The client only needs to import the `.conf` file and activate.
+
+#### 4.5 Health Check
 
 ```bash
 bash ~/WG-manager/scripts/health-check.sh

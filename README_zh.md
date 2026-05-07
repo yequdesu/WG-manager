@@ -287,7 +287,24 @@ curl -s -X DELETE http://127.0.0.1:58880/api/v1/peers/<peer名称> \
   -H "Authorization: Bearer $API_KEY"
 ```
 
-#### 4.4 健康检查
+#### 4.4 离线预生成配置（管理员手动分发）
+
+在服务器本地生成客户端配置文件，自动注册 peer 并加入管理，然后将 `.conf` 文件手动分发给客户端——无需客户端发 HTTP 请求。
+
+```bash
+# 生成新 peer 的配置（保存至 scripts/<名称>.conf）
+sudo bash ~/WG-manager/scripts/create-peer.sh --name my-laptop
+
+# 自定义 DNS 和输出路径
+sudo bash ~/WG-manager/scripts/create-peer.sh --name office-pc --dns 8.8.8.8 -o /tmp/office.conf
+
+# 将 .conf 文件分发给客户端（邮件、U盘等）
+# 客户端导入 WireGuard 即可——无需审批，无需联网请求
+```
+
+Peer 会在服务器端自动注册并加入 WireGuard 接口。客户端只需导入 `.conf` 文件并激活即可连接。
+
+#### 4.5 健康检查
 
 ```bash
 bash ~/WG-manager/scripts/health-check.sh
