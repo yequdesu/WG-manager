@@ -23,11 +23,20 @@ jobs:
       - name: go build
         run: go build ./...
 
+      - name: go test
+        run: go test ./...
+
       - name: make build
         run: make build
 
       - name: make build-tui
         run: make build-tui
+
+      - name: cargo check
+        run: cargo check --manifest-path wg-tui/Cargo.toml
+
+      - name: cargo test
+        run: cargo test --manifest-path wg-tui/Cargo.toml
 
   integration-test:
     if: false

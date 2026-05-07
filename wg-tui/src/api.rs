@@ -153,3 +153,80 @@ impl ApiClient {
         Ok(body.get("success").and_then(|v| v.as_bool()).unwrap_or(false))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_invite_info_serialization() {
+        let invite = InviteInfo {
+            id: "inv_abc123".to_string(),
+            status: "created".to_string(),
+            created_at: Some("2026-01-01T00:00:00Z".to_string()),
+            expires_at: Some("2026-01-02T00:00:00Z".to_string()),
+            issued_by: Some("admin".to_string()),
+            display_name_hint: Some("test-peer".to_string()),
+        };
+
+        let json = serde_json::to_string(&invite).expect("serialize failed");
+        let parsed: InviteInfo = serde_json::from_str(&json).expect("deserialize failed");
+
+        assert_eq!(parsed.id, "inv_abc123");
+        assert_eq!(parsed.status, "created");
+        assert_eq!(parsed.created_at, Some("2026-01-01T00:00:00Z".to_string()));
+        assert_eq!(parsed.expires_at, Some("2026-01-02T00:00:00Z".to_string()));
+        assert_eq!(parsed.issued_by, Some("admin".to_string()));
+        assert_eq!(parsed.display_name_hint, Some("test-peer".to_string()));
+    }
+
+    #[test]
+    fn test_invite_info_missing_optionals() {
+        let json = r#"{"id":"inv_min","status":"redeemed"}"#;
+        let invite: InviteInfo = serde_json::from_str(json).expect("deserialize with missing optionals failed");
+
+        assert_eq!(invite.id, "inv_min");
+        assert_eq!(invite.status, "redeemed");
+        assert_eq!(invite.created_at, None);
+        assert_eq!(invite.expires_at, None);
+        assert_eq!(invite.issued_by, None);
+        assert_eq!(invite.display_name_hint, None);
+    }
+
+    #[test]
+    fn test_peer_info_serialization() {
+        let peer = PeerInfo {
+            name: "peer1".to_string(),
+            address: "10.0.0.2".to_string(),
+            dns: Some("1.1.1.1".to_string()),
+            public_key: "abc123".to_string(),
+            keepalive: Some(25),
+            created_at: Some("2026-01-01T00:00:00Z".to_string()),
+            endpoint: Some("1.2.3.4:51820".to_string()),
+            latest_handshake: Some("2026-01-01T12:00:00Z".to_string()),
+            transfer_rx: Some("1.2 GB".to_string()),
+            transfer_tx: Some("300 MB".to_string()),
+            online: Some(true),
+        };
+
+        let json = serde_json::to_string(&peer).expect("serialize failed");
+        let parsed: PeerInfo = serde_json::from_str(&json).expect("deserialize failed");
+
+        assert_eq!(parsed.name, "peer1");
+        assert_eq!(parsed.address, "10.0.0.2");
+        assert_eq!(parsed.online, Some(true));
+    }
+
+    #[test]
+    fn test_create_invite_request_serialization() {
+        let req = CreateInviteRequest {
+            name_hint: "my-peer".to_string(),
+            ttl_hours: 24,
+        };
+
+        let json = serde_json::to_string(&req).expect("serialize failed");
+        // CreateInviteRequest is send-only (Serialize, not Deserialize)
+        assert!(json.contains("my-peer"));
+        assert!(json.contains("24"));
+    }
+}
