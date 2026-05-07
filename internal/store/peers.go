@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"maps"
 	"sync"
 	"time"
 )
@@ -51,6 +52,7 @@ type State struct {
 	Requests map[string]Request `json:"requests,omitempty"`
 	Users    map[string]User    `json:"users,omitempty"`
 	Sessions map[string]Session `json:"sessions,omitempty"`
+	Invites  map[string]Invite  `json:"invites,omitempty"`
 
 	mu     sync.RWMutex `json:"-"`
 	path   string       `json:"-"`
@@ -63,6 +65,7 @@ func NewState(path string, crypto *Crypto) *State {
 		Requests: make(map[string]Request),
 		Users:    make(map[string]User),
 		Sessions: make(map[string]Session),
+		Invites:  make(map[string]Invite),
 		path:     path,
 		crypto:   crypto,
 	}
@@ -75,6 +78,7 @@ func (s *State) MarshalJSON() ([]byte, error) {
 		Requests map[string]Request `json:"requests,omitempty"`
 		Users    map[string]User    `json:"users,omitempty"`
 		Sessions map[string]Session `json:"sessions,omitempty"`
+		Invites  map[string]Invite  `json:"invites,omitempty"`
 	}
 	return json.Marshal(&Alias{
 		Server:   s.server,
@@ -82,6 +86,7 @@ func (s *State) MarshalJSON() ([]byte, error) {
 		Requests: s.Requests,
 		Users:    s.Users,
 		Sessions: s.Sessions,
+		Invites:  s.Invites,
 	})
 }
 
@@ -92,6 +97,7 @@ func (s *State) UnmarshalJSON(data []byte) error {
 		Requests map[string]Request `json:"requests,omitempty"`
 		Users    map[string]User    `json:"users,omitempty"`
 		Sessions map[string]Session `json:"sessions,omitempty"`
+		Invites  map[string]Invite  `json:"invites,omitempty"`
 	}
 	var alias Alias
 	if err := json.Unmarshal(data, &alias); err != nil {
@@ -102,6 +108,7 @@ func (s *State) UnmarshalJSON(data []byte) error {
 	s.Requests = alias.Requests
 	s.Users = alias.Users
 	s.Sessions = alias.Sessions
+	s.Invites = alias.Invites
 	if s.Peers == nil {
 		s.Peers = make(map[string]Peer)
 	}
@@ -113,6 +120,9 @@ func (s *State) UnmarshalJSON(data []byte) error {
 	}
 	if s.Sessions == nil {
 		s.Sessions = make(map[string]Session)
+	}
+	if s.Invites == nil {
+		s.Invites = make(map[string]Invite)
 	}
 	return nil
 }
@@ -382,6 +392,7 @@ func Load(path string, crypto *Crypto) (*State, error) {
 		Requests: make(map[string]Request),
 		Users:    make(map[string]User),
 		Sessions: make(map[string]Session),
+		Invites:  make(map[string]Invite),
 		path:     path,
 		crypto:   crypto,
 	}
@@ -457,6 +468,9 @@ unmarshal:
 	}
 	if s.Sessions == nil {
 		s.Sessions = make(map[string]Session)
+	}
+	if s.Invites == nil {
+		s.Invites = make(map[string]Invite)
 	}
 
 	return s, nil
@@ -547,21 +561,15 @@ func (s *State) Replace(other *State) {
 	s.server = other.server
 	s.crypto = other.crypto
 	s.Peers = make(map[string]Peer)
-	for k, v := range other.Peers {
-		s.Peers[k] = v
-	}
+	maps.Copy(s.Peers, other.Peers)
 	s.Requests = make(map[string]Request)
-	for k, v := range other.Requests {
-		s.Requests[k] = v
-	}
+	maps.Copy(s.Requests, other.Requests)
 	s.Users = make(map[string]User)
-	for k, v := range other.Users {
-		s.Users[k] = v
-	}
+	maps.Copy(s.Users, other.Users)
 	s.Sessions = make(map[string]Session)
-	for k, v := range other.Sessions {
-		s.Sessions[k] = v
-	}
+	maps.Copy(s.Sessions, other.Sessions)
+	s.Invites = make(map[string]Invite)
+	maps.Copy(s.Invites, other.Invites)
 }
 
 func (s *State) ExpireRequests() []Request {
