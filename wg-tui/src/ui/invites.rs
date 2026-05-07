@@ -19,6 +19,13 @@ pub enum FlashKind {
 pub struct InviteResult {
     pub token: String,
     pub url: String,
+    pub command: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct InviteLinkResult {
+    pub bootstrap_url: String,
+    pub command: String,
 }
 
 pub fn render_invite_list(
@@ -92,11 +99,7 @@ pub fn render_invite_detail(frame: &mut Frame, area: Rect, inv: &InviteInfo) {
         .as_ref()
         .map(|e| format_time_until(e))
         .unwrap_or_else(|| "—".to_string());
-    let issued = inv
-        .issued_by
-        .as_ref()
-        .map(|s| s.as_str())
-        .unwrap_or("—");
+    let issued = inv.issued_by.as_ref().map(|s| s.as_str()).unwrap_or("—");
     let name_hint = inv
         .display_name_hint
         .as_ref()
@@ -114,18 +117,12 @@ pub fn render_invite_detail(frame: &mut Frame, area: Rect, inv: &InviteInfo) {
             Line::from(vec![
                 Span::styled("  Status:     ", DARK_THEME.muted),
                 Span::styled(inv.status.clone(), DARK_THEME.text),
-                Span::styled(
-                    format!("  Name hint: {}", name_hint),
-                    DARK_THEME.muted,
-                ),
+                Span::styled(format!("  Name hint: {}", name_hint), DARK_THEME.muted),
             ]),
             Line::from(vec![
                 Span::styled("  Expires:    ", DARK_THEME.muted),
                 Span::styled(expires, DARK_THEME.text),
-                Span::styled(
-                    format!("  Issued by: {}", issued),
-                    DARK_THEME.muted,
-                ),
+                Span::styled(format!("  Issued by: {}", issued), DARK_THEME.muted),
             ]),
             Line::from(vec![
                 Span::styled("             ", DARK_THEME.muted),
@@ -186,12 +183,12 @@ fn truncate(s: &str, max: usize) -> String {
 }
 
 static FORM_FIELDS: &[(&str, &str)] = &[
-    ("name_hint",   "Label for this invite"),
-    ("ttl_hours",   "Hours until expiry"),
-    ("dns",         "DNS override (leave blank for default)"),
-    ("pool",        "Peer pool name"),
+    ("name_hint", "Label for this invite"),
+    ("ttl_hours", "Hours until expiry"),
+    ("dns", "DNS override (leave blank for default)"),
+    ("pool", "Peer pool name"),
     ("target_role", "Role for peer (user/admin)"),
-    ("device",      "Device name hint"),
+    ("device", "Device name hint"),
 ];
 static FORM_FIELD_COUNT: usize = FORM_FIELDS.len();
 
@@ -270,17 +267,38 @@ pub fn render_create_invite_form(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_invite_confirmation(frame: &mut Frame, area: Rect, app: &App) {
-    let dns_val = if app.invite_form_dns.is_empty() { "(server default)" } else { app.invite_form_dns.as_str() };
-    let pool_val = if app.invite_form_pool.is_empty() { "(none)" } else { app.invite_form_pool.as_str() };
-    let role_val = if app.invite_form_role.is_empty() { "user" } else { app.invite_form_role.as_str() };
-    let device_val = if app.invite_form_device.is_empty() { "(none)" } else { app.invite_form_device.as_str() };
-    let name_val = if app.invite_form_name.is_empty() { "(none)" } else { app.invite_form_name.as_str() };
+    let dns_val = if app.invite_form_dns.is_empty() {
+        "(server default)"
+    } else {
+        app.invite_form_dns.as_str()
+    };
+    let pool_val = if app.invite_form_pool.is_empty() {
+        "(none)"
+    } else {
+        app.invite_form_pool.as_str()
+    };
+    let role_val = if app.invite_form_role.is_empty() {
+        "user"
+    } else {
+        app.invite_form_role.as_str()
+    };
+    let device_val = if app.invite_form_device.is_empty() {
+        "(none)"
+    } else {
+        app.invite_form_device.as_str()
+    };
+    let name_val = if app.invite_form_name.is_empty() {
+        "(none)"
+    } else {
+        app.invite_form_name.as_str()
+    };
 
     let lines = vec![
         Line::from(""),
-        Line::from(vec![
-            Span::styled("  Confirm invite creation:", DARK_THEME.accent),
-        ]),
+        Line::from(vec![Span::styled(
+            "  Confirm invite creation:",
+            DARK_THEME.accent,
+        )]),
         Line::from(""),
         Line::from(vec![
             Span::styled("  Name hint:   ", DARK_THEME.muted),
@@ -317,26 +335,35 @@ fn render_invite_confirmation(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_invite_result(frame: &mut Frame, area: Rect, result: &InviteResult) {
+    let bootstrap_url = &result.url;
+    let command = &result.command;
+
     let lines = vec![
         Line::from(""),
-        Line::from(vec![
-            Span::styled("  Invite created successfully!", DARK_THEME.accent),
-        ]),
+        Line::from(vec![Span::styled(
+            "  Invite created successfully!",
+            DARK_THEME.accent,
+        )]),
         Line::from(""),
         Line::from(vec![
             Span::styled("  Token: ", DARK_THEME.muted),
             Span::styled(result.token.as_str(), DARK_THEME.text),
         ]),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("  Bootstrap URL:", DARK_THEME.muted),
-        ]),
-        Line::from(vec![
-            Span::styled(
-                format!("  {}", result.url),
-                DARK_THEME.text,
-            ),
-        ]),
+        Line::from(vec![Span::styled("  Bootstrap URL:", DARK_THEME.muted)]),
+        Line::from(vec![Span::styled(
+            format!("  {}", bootstrap_url),
+            DARK_THEME.text,
+        )]),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "  Onboarding command:",
+            DARK_THEME.muted,
+        )]),
+        Line::from(vec![Span::styled(
+            format!("  {}", command),
+            DARK_THEME.text,
+        )]),
         Line::from(""),
         Line::from(Span::styled(
             " [Enter] or any key to return to list",
@@ -345,4 +372,92 @@ fn render_invite_result(frame: &mut Frame, area: Rect, result: &InviteResult) {
     ];
 
     Card::new("Result").render(frame, area, lines);
+}
+
+pub fn render_invite_link_view(frame: &mut Frame, area: Rect, app: &App) {
+    if let Some(ref result) = app.invite_link_result {
+        let lines = vec![
+            Line::from(""),
+            Line::from(vec![Span::styled("  Bootstrap URL:", DARK_THEME.muted)]),
+            Line::from(vec![Span::styled(
+                format!("  {}", result.bootstrap_url),
+                DARK_THEME.text,
+            )]),
+            Line::from(""),
+            Line::from(vec![Span::styled(
+                "  Onboarding command:",
+                DARK_THEME.muted,
+            )]),
+            Line::from(vec![Span::styled(
+                format!("  {}", result.command),
+                DARK_THEME.text,
+            )]),
+            Line::from(""),
+            Line::from(Span::styled(
+                " Copy the command above and share it with the user.",
+                DARK_THEME.muted,
+            )),
+            Line::from(Span::styled(
+                " [v] or [Enter] return to list",
+                DARK_THEME.muted,
+            )),
+        ];
+        Card::new("Invite Link").render(frame, area, lines);
+    } else {
+        let lines = vec![
+            Line::from(""),
+            Line::from(vec![Span::styled(
+                "  Fetching invite link...",
+                DARK_THEME.muted,
+            )]),
+        ];
+        Card::new("Invite Link").render(frame, area, lines);
+    }
+}
+
+pub fn render_force_delete_confirm(frame: &mut Frame, area: Rect, app: &App) {
+    let invite_name = app
+        .invites
+        .get(app.invite_selected)
+        .and_then(|i| i.display_name_hint.as_deref())
+        .unwrap_or(
+            app.invites
+                .get(app.invite_selected)
+                .map(|i| i.id.as_str())
+                .unwrap_or("?"),
+        );
+    let invite_status = app
+        .invites
+        .get(app.invite_selected)
+        .map(|i| i.status.as_str())
+        .unwrap_or("?");
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "  ⚠ Force-delete permanently removes this invite.",
+            DARK_THEME.danger,
+        )]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Invite:    ", DARK_THEME.muted),
+            Span::styled(invite_name, DARK_THEME.text),
+        ]),
+        Line::from(vec![
+            Span::styled("  Status:    ", DARK_THEME.muted),
+            Span::styled(invite_status, DARK_THEME.text),
+        ]),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "  This action cannot be undone.",
+            DARK_THEME.danger,
+        )]),
+        Line::from(""),
+        Line::from(Span::styled(
+            " [F] confirm force-delete  [Esc] cancel",
+            DARK_THEME.muted,
+        )),
+    ];
+
+    Card::new("Force Delete").render(frame, area, lines);
 }

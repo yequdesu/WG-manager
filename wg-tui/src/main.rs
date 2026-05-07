@@ -8,11 +8,11 @@ mod widgets;
 mod window;
 
 use crossterm::cursor;
+use crossterm::event::DisableMouseCapture;
+use crossterm::event::EnableMouseCapture;
 use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::ExecutableCommand;
-use crossterm::event::EnableMouseCapture;
-use crossterm::event::DisableMouseCapture;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::io;
@@ -106,9 +106,16 @@ fn run(
 
                 if app.search_active {
                     match key.code {
-                        KeyCode::Esc => { app.search_active = false; app.search_query.clear(); }
-                        KeyCode::Backspace => { app.search_query.pop(); }
-                        KeyCode::Char(c) => { app.search_query.push(c); }
+                        KeyCode::Esc => {
+                            app.search_active = false;
+                            app.search_query.clear();
+                        }
+                        KeyCode::Backspace => {
+                            app.search_query.pop();
+                        }
+                        KeyCode::Char(c) => {
+                            app.search_query.push(c);
+                        }
                         _ => {}
                     }
                     continue;
@@ -172,6 +179,40 @@ fn run(
                     continue;
                 }
 
+                // ── Invite link view modal ──────────────────────────
+                if app.invite_link_active {
+                    match key.code {
+                        KeyCode::Esc | KeyCode::Enter | KeyCode::Char('v') | KeyCode::Char('V') => {
+                            app.invite_link_active = false;
+                            app.invite_link_result = None;
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+
+                // ── Force-delete confirmation ───────────────────────
+                if app.confirm_force_delete {
+                    match key.code {
+                        KeyCode::Char('F') => {
+                            if let Some(invite) = app.invites.get(app.invite_selected) {
+                                let id = invite.id.clone();
+                                app.force_delete_invite(&id);
+                            } else {
+                                app.confirm_force_delete = false;
+                                app.confirm_force_delete_timer = 0;
+                                app.error_msg =
+                                    Some("selected invite no longer exists".to_string());
+                            }
+                        }
+                        _ => {
+                            app.confirm_force_delete = false;
+                            app.confirm_force_delete_timer = 0;
+                        }
+                    }
+                    continue;
+                }
+
                 match key.code {
                     KeyCode::Char('q') => app.should_quit = true,
                     KeyCode::Esc => {
@@ -199,22 +240,32 @@ fn run(
                     KeyCode::Char('/') => {
                         if app.tab == Tab::Peers {
                             app.search_active = !app.search_active;
-                            if !app.search_active { app.search_query.clear(); }
+                            if !app.search_active {
+                                app.search_query.clear();
+                            }
                         }
                     }
                     KeyCode::Down | KeyCode::Char('j') => app.select_down(),
                     KeyCode::Up | KeyCode::Char('k') => app.select_up(),
                     KeyCode::PageDown => {
-                        if app.tab == Tab::Logs { app.log_scroll = app.log_scroll.saturating_add(20); }
+                        if app.tab == Tab::Logs {
+                            app.log_scroll = app.log_scroll.saturating_add(20);
+                        }
                     }
                     KeyCode::PageUp => {
-                        if app.tab == Tab::Logs { app.log_scroll = app.log_scroll.saturating_sub(20); }
+                        if app.tab == Tab::Logs {
+                            app.log_scroll = app.log_scroll.saturating_sub(20);
+                        }
                     }
                     KeyCode::Home => {
-                        if app.tab == Tab::Logs { app.log_scroll = 0; }
+                        if app.tab == Tab::Logs {
+                            app.log_scroll = 0;
+                        }
                     }
                     KeyCode::End => {
-                        if app.tab == Tab::Logs { app.log_scroll = app.logs.len().saturating_sub(10); }
+                        if app.tab == Tab::Logs {
+                            app.log_scroll = app.logs.len().saturating_sub(10);
+                        }
                     }
                     KeyCode::Char('d') | KeyCode::Char('D') => {
                         if app.tab == Tab::Peers && !app.peers.is_empty() {
@@ -252,30 +303,50 @@ fn run(
                             app.open_invite_form();
                         }
                     }
+                    KeyCode::Char('v') | KeyCode::Char('V') => {
+                        if app.tab == Tab::Invites && !app.invites.is_empty() {
+                            let device_name = app.invites[app.invite_selected].device_name.clone();
+                            let id = app.invites[app.invite_selected].id.clone();
+                            let name = device_name.as_deref().unwrap_or("DEVICE_NAME");
+                            app.fetch_invite_link(&id, name);
+                        }
+                    }
+                    KeyCode::Char('F') => {
+                        if app.tab == Tab::Invites && !app.invites.is_empty() {
+                            if app.confirm_force_delete {
+                                let id = app.invites[app.invite_selected].id.clone();
+                                app.force_delete_invite(&id);
+                            } else {
+                                app.confirm_force_delete = true;
+                                app.confirm_force_delete_timer = 0;
+                            }
+                        }
+                    }
                     KeyCode::Char('1') => app.tab = Tab::Dashboard,
                     KeyCode::Char('2') => app.tab = Tab::Peers,
                     KeyCode::Char('3') => app.tab = Tab::Invites,
                     KeyCode::Char('4') => app.tab = Tab::Logs,
                     _ => {
-                        if app.confirm_delete { app.confirm_delete = false; app.confirm_timer = 0; }
+                        if app.confirm_delete {
+                            app.confirm_delete = false;
+                            app.confirm_timer = 0;
+                        }
                     }
                 }
             }
-            Ok(Event::Mouse(mouse)) => {
-                match mouse.kind {
-                    MouseEventKind::ScrollDown => {
-                        if app.tab == Tab::Logs {
-                            app.log_scroll = app.log_scroll.saturating_add(3);
-                        }
+            Ok(Event::Mouse(mouse)) => match mouse.kind {
+                MouseEventKind::ScrollDown => {
+                    if app.tab == Tab::Logs {
+                        app.log_scroll = app.log_scroll.saturating_add(3);
                     }
-                    MouseEventKind::ScrollUp => {
-                        if app.tab == Tab::Logs {
-                            app.log_scroll = app.log_scroll.saturating_sub(3);
-                        }
-                    }
-                    _ => {}
                 }
-            }
+                MouseEventKind::ScrollUp => {
+                    if app.tab == Tab::Logs {
+                        app.log_scroll = app.log_scroll.saturating_sub(3);
+                    }
+                }
+                _ => {}
+            },
             Ok(Event::Tick) => app.on_tick(),
             Ok(_) => {}
             Err(e) => app.error_msg = Some(e.to_string()),
@@ -302,12 +373,24 @@ fn push_form_field(app: &mut App, field: usize, c: char) {
 
 fn pop_form_field(app: &mut App, field: usize) {
     match field {
-        0 => { app.invite_form_name.pop(); }
-        1 => { app.invite_form_ttl.pop(); }
-        2 => { app.invite_form_dns.pop(); }
-        3 => { app.invite_form_pool.pop(); }
-        4 => { app.invite_form_role.pop(); }
-        5 => { app.invite_form_device.pop(); }
+        0 => {
+            app.invite_form_name.pop();
+        }
+        1 => {
+            app.invite_form_ttl.pop();
+        }
+        2 => {
+            app.invite_form_dns.pop();
+        }
+        3 => {
+            app.invite_form_pool.pop();
+        }
+        4 => {
+            app.invite_form_role.pop();
+        }
+        5 => {
+            app.invite_form_device.pop();
+        }
         _ => {}
     }
 }

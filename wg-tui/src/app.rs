@@ -10,7 +10,7 @@ use crate::api::{ApiClient, InviteInfo, PeerInfo, ServerStatus};
 use crate::config::Config;
 use crate::event::DataEvent;
 use crate::theme::DARK_THEME;
-use crate::ui;
+use crate::ui::{self, invites::InviteLinkResult};
 use crate::widgets::particles::ParticleSystem;
 use crate::widgets::tab_bar::Tab;
 use crate::window::WindowState;
@@ -58,6 +58,14 @@ pub struct App {
     pub invite_form_confirm: bool,
     pub invite_form_result: Option<ui::invites::InviteResult>,
 
+    // Invite link view state
+    pub invite_link_active: bool,
+    pub invite_link_result: Option<InviteLinkResult>,
+
+    // Force-delete confirmation (invites)
+    pub confirm_force_delete: bool,
+    pub confirm_force_delete_timer: u16,
+
     pub api: ApiClient,
     #[allow(dead_code)]
     pub config: Config,
@@ -67,7 +75,11 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(config: Config, rt: tokio::runtime::Handle, data_tx: mpsc::Sender<DataEvent>) -> Self {
+    pub fn new(
+        config: Config,
+        rt: tokio::runtime::Handle,
+        data_tx: mpsc::Sender<DataEvent>,
+    ) -> Self {
         let api = ApiClient::new(config.api_url.clone(), config.api_key.clone());
         let audit_log = find_audit_log_path();
 
@@ -121,6 +133,12 @@ impl App {
             invite_form_confirm: false,
             invite_form_result: None,
 
+            invite_link_active: false,
+            invite_link_result: None,
+
+            confirm_force_delete: false,
+            confirm_force_delete_timer: 0,
+
             api,
             config,
             audit_log_path: audit_log,
@@ -150,6 +168,14 @@ impl App {
             if self.confirm_timer > 60 {
                 self.confirm_delete = false;
                 self.confirm_timer = 0;
+            }
+        }
+
+        if self.confirm_force_delete {
+            self.confirm_force_delete_timer += 1;
+            if self.confirm_force_delete_timer > 60 {
+                self.confirm_force_delete = false;
+                self.confirm_force_delete_timer = 0;
             }
         }
     }
@@ -186,11 +212,17 @@ impl App {
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string())
                         .unwrap_or_else(|| {
-                            format!("{}/bootstrap?token={}", self.config.public_url, token)
+                            // Server did not provide a bootstrap_url; warn and show token only.
+                            format!("(no bootstrap_url from server — token: {})", token)
                         });
                     self.invite_form_result = Some(ui::invites::InviteResult {
                         token: token.to_string(),
                         url,
+                        command: val
+                            .get("command")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| "(no onboarding command from server)".to_string()),
                     });
                 }
                 self.refresh_data();
@@ -200,6 +232,7 @@ impl App {
                     self.invite_form_result = Some(ui::invites::InviteResult {
                         token: String::new(),
                         url: format!("Error: {}", e),
+                        command: String::new(),
                     });
                 } else {
                     self.error_msg = Some(e);
@@ -207,6 +240,62 @@ impl App {
             }
             DataEvent::InviteRevoked(_) | DataEvent::PeerDeleted(_) => {
                 self.refresh_data();
+            }
+            DataEvent::InviteLinkFetched(Ok(val)) => {
+                if self.invite_link_active {
+                    if let Some(note) = val.get("note").and_then(|v| v.as_str()) {
+                        self.invite_link_result = Some(InviteLinkResult {
+                            bootstrap_url: note.to_string(),
+                            command: String::new(),
+                        });
+                        return;
+                    }
+                    let bootstrap_url = val
+                        .get("bootstrap_url")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| {
+                            format!(
+                                "(no bootstrap_url from server — invite: {})",
+                                self.invites
+                                    .get(self.invite_selected)
+                                    .map(|i| i.id.as_str())
+                                    .unwrap_or("?")
+                            )
+                        });
+                    let command = val
+                        .get("command")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| "(no command from server)".to_string());
+                    self.invite_link_result = Some(InviteLinkResult {
+                        bootstrap_url,
+                        command,
+                    });
+                }
+            }
+            DataEvent::InviteLinkFetched(Err(e)) => {
+                if self.invite_link_active {
+                    self.invite_link_result = Some(InviteLinkResult {
+                        bootstrap_url: format!("Error: {}", e),
+                        command: String::new(),
+                    });
+                }
+            }
+            DataEvent::InviteForceDeleted(Ok(true)) => {
+                self.confirm_force_delete = false;
+                self.confirm_force_delete_timer = 0;
+                self.refresh_data();
+            }
+            DataEvent::InviteForceDeleted(Ok(false)) => {
+                self.error_msg = Some("force-delete invite failed".to_string());
+                self.confirm_force_delete = false;
+                self.confirm_force_delete_timer = 0;
+            }
+            DataEvent::InviteForceDeleted(Err(e)) => {
+                self.error_msg = Some(e);
+                self.confirm_force_delete = false;
+                self.confirm_force_delete_timer = 0;
             }
         }
     }
@@ -288,6 +377,31 @@ impl App {
         self.flash = Some((selected, ui::invites::FlashKind::Revoke, 0));
     }
 
+    pub fn force_delete_invite(&mut self, id: &str) {
+        let api = self.api.clone();
+        let invite_id = id.to_string();
+        let rt = self.rt.clone();
+        let tx = self.data_tx.clone();
+        rt.spawn(async move {
+            let result = api.force_delete_invite(&invite_id).await;
+            let _ = tx.send(DataEvent::InviteForceDeleted(result));
+        });
+    }
+
+    pub fn fetch_invite_link(&mut self, id: &str, device_name: &str) {
+        self.invite_link_active = true;
+        self.invite_link_result = None;
+        let api = self.api.clone();
+        let invite_id = id.to_string();
+        let name = device_name.to_string();
+        let rt = self.rt.clone();
+        let tx = self.data_tx.clone();
+        rt.spawn(async move {
+            let result = api.get_invite_link(&invite_id, &name).await;
+            let _ = tx.send(DataEvent::InviteLinkFetched(result));
+        });
+    }
+
     pub fn delete_peer(&mut self, name: &str) {
         let api = self.api.clone();
         let peer_name = name.to_string();
@@ -352,12 +466,9 @@ fn fill_area(frame: &mut Frame, area: Rect, bg: Color) {
     }
     let line = " ".repeat(area.width as usize);
     for y in 0..area.height {
-        frame.buffer_mut().set_string(
-            area.x,
-            area.y + y,
-            &line,
-            Style::default().bg(bg),
-        );
+        frame
+            .buffer_mut()
+            .set_string(area.x, area.y + y, &line, Style::default().bg(bg));
     }
 }
 
@@ -391,7 +502,10 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
     let inner = win.inner(Margin::new(1, 0));
     let title = format!(" WG-TUI · {} ", app.tab.label());
-    let title_span = Span::styled(title.clone(), Style::default().fg(DARK_THEME.primary).bold());
+    let title_span = Span::styled(
+        title.clone(),
+        Style::default().fg(DARK_THEME.primary).bold(),
+    );
     let decor = format!(
         "{}",
         "─".repeat(inner.width.saturating_sub(title.len() as u16) as usize)
@@ -458,14 +572,12 @@ fn render_dashboard(frame: &mut Frame, area: Rect, app: &App) {
     ])
     .split(area);
 
-    let top = Layout::horizontal([
-        Constraint::Ratio(1, 2),
-        Constraint::Ratio(1, 2),
-    ])
-    .split(chunks[0]);
+    let top =
+        Layout::horizontal([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)]).split(chunks[0]);
 
     ui::dashboard::card_server(
-        frame, top[0],
+        frame,
+        top[0],
         app.status.daemon == "running",
         app.status.wireguard == "ok",
         &app.status.interface,
@@ -481,10 +593,15 @@ fn render_peers(frame: &mut Frame, area: Rect, app: &mut App) {
     fill_area(frame, area, DARK_THEME.bg);
 
     let filtered: Vec<&PeerInfo> = if app.search_active && !app.search_query.is_empty() {
-        app.peers.iter().filter(|p| {
-            p.name.to_lowercase().contains(&app.search_query.to_lowercase())
-                || p.address.contains(&app.search_query)
-        }).collect()
+        app.peers
+            .iter()
+            .filter(|p| {
+                p.name
+                    .to_lowercase()
+                    .contains(&app.search_query.to_lowercase())
+                    || p.address.contains(&app.search_query)
+            })
+            .collect()
     } else {
         app.peers.iter().collect()
     };
@@ -528,11 +645,17 @@ fn render_peers(frame: &mut Frame, area: Rect, app: &mut App) {
         layout[0]
     };
 
-    let detail_area = layout[if app.search_active || !app.search_query.is_empty() { 2 } else { 1 }];
+    let detail_area = layout[if app.search_active || !app.search_query.is_empty() {
+        2
+    } else {
+        1
+    }];
 
     let sel = app.peer_selected.min(filtered.len().saturating_sub(1));
     ui::peers::render_peer_list(
-        frame, list_area, &filtered,
+        frame,
+        list_area,
+        &filtered,
         &mut app.peer_state,
         sel,
         app.tick_count,
@@ -551,6 +674,16 @@ fn render_invites(frame: &mut Frame, area: Rect, app: &mut App) {
         return;
     }
 
+    if app.invite_link_active {
+        ui::invites::render_invite_link_view(frame, area, app);
+        return;
+    }
+
+    if app.confirm_force_delete {
+        ui::invites::render_force_delete_confirm(frame, area, app);
+        return;
+    }
+
     use crate::widgets::card::Card;
     if app.invites.is_empty() {
         let lines = vec![Line::from(Span::styled(
@@ -564,7 +697,9 @@ fn render_invites(frame: &mut Frame, area: Rect, app: &mut App) {
     let chunks = Layout::vertical([Constraint::Min(4), Constraint::Length(6)]).split(area);
 
     ui::invites::render_invite_list(
-        frame, chunks[0], &app.invites,
+        frame,
+        chunks[0],
+        &app.invites,
         &mut app.invite_state,
         app.invite_selected,
         app.flash,
@@ -602,18 +737,51 @@ fn render_logs(frame: &mut Frame, area: Rect, app: &App) {
 fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
     fill_area(frame, area, DARK_THEME.bg);
 
-    if app.confirm_delete {
+    if app.confirm_force_delete {
+        let invite_name = app
+            .invites
+            .get(app.invite_selected)
+            .and_then(|i| i.display_name_hint.as_deref())
+            .unwrap_or(
+                app.invites
+                    .get(app.invite_selected)
+                    .map(|i| i.id.as_str())
+                    .unwrap_or("?"),
+            );
+        let seconds_left = ((60 - app.confirm_force_delete_timer) / 20) + 1;
         let msg = Line::from(Span::styled(
-            format!(" Delete '{}'? [d] confirm  [any other key] cancel  (auto-cancel in {}s)",
-                app.peers.get(app.peer_selected).map(|p| p.name.as_str()).unwrap_or("?"),
-                (60 - app.confirm_timer) / 20 + 1),
+            format!(
+                " Force-delete '{}'? [F] confirm force-delete  [any other key] cancel  (auto-cancel in {}s)",
+                invite_name,
+                seconds_left,
+            ),
             Style::default().fg(DARK_THEME.danger).bg(DARK_THEME.bg),
         ));
         frame.render_widget(Paragraph::new(msg), area);
         return;
     }
 
-    let peer_count = format!("{} peers  {} online", app.peers.len(), app.status.peer_online);
+    if app.confirm_delete {
+        let msg = Line::from(Span::styled(
+            format!(
+                " Delete '{}'? [d] confirm  [any other key] cancel  (auto-cancel in {}s)",
+                app.peers
+                    .get(app.peer_selected)
+                    .map(|p| p.name.as_str())
+                    .unwrap_or("?"),
+                (60 - app.confirm_timer) / 20 + 1
+            ),
+            Style::default().fg(DARK_THEME.danger).bg(DARK_THEME.bg),
+        ));
+        frame.render_widget(Paragraph::new(msg), area);
+        return;
+    }
+
+    let peer_count = format!(
+        "{} peers  {} online",
+        app.peers.len(),
+        app.status.peer_online
+    );
     let invite_count = format!("{} invites", app.invites.len());
 
     let search_hint = if app.search_active {
@@ -624,8 +792,12 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
 
     let tab_hint = match app.tab {
         Tab::Peers => format!("{search_hint}[/] Search  [d] Delete  "),
-        Tab::Invites => format!("[a] Create invite  [d] Revoke invitation  "),
-        Tab::Logs => format!("[PgUp/PgDn] Scroll  {}/{}  ", app.log_scroll, app.logs.len()),
+        Tab::Invites => format!("[a] Create invite  [d] Revoke  [v] View link  [F] Force-delete  "),
+        Tab::Logs => format!(
+            "[PgUp/PgDn] Scroll  {}/{}  ",
+            app.log_scroll,
+            app.logs.len()
+        ),
         _ => search_hint,
     };
 
@@ -635,7 +807,10 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
     );
 
     let line = Line::from(Span::styled(full, Style::default().fg(DARK_THEME.muted)));
-    frame.render_widget(Paragraph::new(line).style(Style::default().bg(DARK_THEME.bg)), area);
+    frame.render_widget(
+        Paragraph::new(line).style(Style::default().bg(DARK_THEME.bg)),
+        area,
+    );
 }
 
 fn read_audit_log(path: &str) -> Result<Vec<String>, String> {
@@ -660,7 +835,11 @@ pub fn read_audit_log_file(path: &str) -> Result<Vec<String>, String> {
 }
 
 fn optional_string(s: &str) -> Option<String> {
-    if s.is_empty() { None } else { Some(s.to_string()) }
+    if s.is_empty() {
+        None
+    } else {
+        Some(s.to_string())
+    }
 }
 
 fn find_audit_log_path() -> String {
