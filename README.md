@@ -33,20 +33,24 @@ Two connection modes for different trust levels:
 | **Direct** | High / internal | Admin distributes to trusted devices, instant join | Yes (embedded server-side) |
 
 ```
-┌─ Server ──────────────────────────────────┐
-│  wg-mgmt-daemon :58880                     │
-│  GET /connect   ← single entry for all     │
-│  POST /register ← direct registration      │
-│  POST /request  ← approval submission      │
-│         │ wg set                            │
-│  WireGuard wg0  10.0.0.1/24                │
-└────┬──────────────┬────────────────────────┘
-     │ WG tunnel     │ HTTP
-  ┌──┴────┐    ┌────┴──────┐
-  │ Linux │    │  Windows   │
-  │ macOS │    │  PS / CMD  │
-  │ WSL   │    │  Mobile QR │
-  └───────┘    └────────────┘
+┌─ Server ───────────────────────────────────────┐
+│  nginx/caddy :443 (TLS termination)            │
+│       │ proxy_pass localhost:58880              │
+│  ┌────┴─────────────────────────────────────┐  │
+│  │ wg-mgmt-daemon 127.0.0.1:58880           │  │
+│  │ GET /connect   ← single entry for all     │  │
+│  │ POST /register ← direct registration      │  │
+│  │ POST /request  ← approval submission      │  │
+│  │        │ wg set                            │  │
+│  │ WireGuard wg0  10.0.0.1/24                │  │
+│  └───────────────────────────────────────────┘  │
+└────────┬──────────────┬─────────────────────────┘
+         │ WG tunnel     │ HTTPS
+      ┌──┴────┐    ┌────┴──────┐
+      │ Linux │    │  Windows   │
+      │ macOS │    │  PS / CMD  │
+      │ WSL   │    │  Mobile QR │
+      └───────┘    └────────────┘
 ```
 
 ---
@@ -96,12 +100,14 @@ Add **inbound** rules in your cloud provider's security group:
 | Protocol | Port | Purpose |
 |----------|------|---------|
 | UDP | 51820 | WireGuard tunnel |
-| TCP | 58880 | Management API |
+| TCP | 443 | Management API (HTTPS via reverse proxy) |
+
+> **Note:** The daemon binds to `127.0.0.1:58880` by default. For production, place a reverse proxy (nginx/caddy) on port 443 and forward to localhost. See [Production Deployment](#production-deployment-reverse-proxy--tls) for details. For quick dev/test setups, change `MGMT_LISTEN=0.0.0.0:58880` in `config.env` and open port 58880 instead.
 
 If using UFW:
 ```bash
 sudo ufw allow 51820/udp
-sudo ufw allow 58880/tcp
+sudo ufw allow 443/tcp
 ```
 
 ---
@@ -388,7 +394,7 @@ tail -f /var/log/wg-mgmt/wg-mgmt.log
 
 ## API Reference
 
-Base URL: `http://IP:58880`
+Base URL: `https://vpn.example.com` (reverse proxy) or `http://IP:58880` (direct)
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
@@ -408,6 +414,138 @@ Base URL: `http://IP:58880`
 Auth explained:
 - `LocalOnly` = accessible only from `127.0.0.1` (server local)
 - `KeyOrLocal` = localhost bypass, or remote with `Authorization: Bearer <KEY>`
+
+---
+
+## Production Deployment (Reverse Proxy + TLS)
+
+### Architecture
+
+The daemon binds to `127.0.0.1:58880` by default. For production, place a reverse proxy (nginx or Caddy) in front that terminates TLS and forwards to the daemon on localhost. This isolates the daemon from direct internet exposure and centralises TLS certificate management.
+
+```
+                   ┌─────────────────────────────┐
+  Internet ── TLS ─→  nginx / caddy :443         │
+                   │  ┌───────────────────────┐  │
+                   │  │ Terminates TLS        │  │
+                   │  │ Splits public/admin   │  │
+                   │  └───────┬───────────────┘  │
+                   │          │ localhost:58880   │
+                   │  ┌───────┴───────────────┐  │
+                   │  │ wg-mgmt-daemon        │  │
+                   │  │ 127.0.0.1:58880       │  │
+                   │  └───────────────────────┘  │
+                   └─────────────────────────────┘
+```
+
+### Route Isolation
+
+The daemon enforces two access tiers. The reverse proxy must expose only public routes to the internet:
+
+**Public routes** (safe for HTTPS exposure, no API key required):
+| Route | Description |
+|-------|-------------|
+| `/api/v1/health` | Health check |
+| `/api/v1/login` | User login (session-based auth) |
+| `/api/v1/logout` | User logout |
+| `/api/v1/redeem` | Redeem an invite token |
+| `/api/v1/request` | Submit approval request (rate-limited) |
+| `/api/v1/request/{id}` | Poll request status |
+| `/connect` | Client join scripts (bash/ps1/conf/HTML/QR) |
+| `/bootstrap` | Invite bootstrap script (token-based) |
+
+**Admin routes** (daemon-enforced localhost-only — do NOT expose via proxy):
+| Route | Description |
+|-------|-------------|
+| `/api/v1/requests` | List pending requests |
+| `/api/v1/requests/{id}/approve` | Approve request |
+| `/api/v1/requests/{id}` (DELETE) | Reject request |
+| `/api/v1/peers` | List peers |
+| `/api/v1/peers/{name}` (DELETE) | Remove peer |
+| `/api/v1/status` | Server status |
+
+The daemon's `LocalOnly` middleware (see `internal/api/middleware.go`) rejects any request to admin routes from non-localhost sources, regardless of the reverse proxy configuration.
+
+### TLS Requirement
+
+All production deployments MUST terminate TLS at the reverse proxy. The daemon itself speaks plain HTTP — encryption is the proxy's responsibility. Use Let's Encrypt (certbot / Caddy auto) for free certificates.
+
+### Example: nginx
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name vpn.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/vpn.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/vpn.example.com/privkey.pem;
+
+    # ── Public routes (forward to daemon) ──
+    location /api/v1/health      { proxy_pass http://127.0.0.1:58880; }
+    location /api/v1/login       { proxy_pass http://127.0.0.1:58880; }
+    location /api/v1/logout      { proxy_pass http://127.0.0.1:58880; }
+    location /api/v1/redeem      { proxy_pass http://127.0.0.1:58880; }
+    location /api/v1/request     { proxy_pass http://127.0.0.1:58880; }
+    location /connect            { proxy_pass http://127.0.0.1:58880; }
+    location /bootstrap          { proxy_pass http://127.0.0.1:58880; }
+
+    # ── Block admin routes at the proxy level ──
+    location /api/v1/requests    { return 403; }
+    location /api/v1/peers       { return 403; }
+    location /api/v1/status      { return 403; }
+
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+
+# Redirect HTTP → HTTPS
+server {
+    listen 80;
+    server_name vpn.example.com;
+    return 301 https://$host$request_uri;
+}
+```
+
+### Example: Caddy
+
+```
+vpn.example.com {
+    reverse_proxy /api/v1/health  127.0.0.1:58880
+    reverse_proxy /api/v1/login   127.0.0.1:58880
+    reverse_proxy /api/v1/logout  127.0.0.1:58880
+    reverse_proxy /api/v1/redeem  127.0.0.1:58880
+    reverse_proxy /api/v1/request 127.0.0.1:58880
+    reverse_proxy /connect        127.0.0.1:58880
+    reverse_proxy /bootstrap      127.0.0.1:58880
+
+    # Block admin routes
+    respond /api/v1/requests  403
+    respond /api/v1/peers     403
+    respond /api/v1/status    403
+}
+```
+
+### Bootstrap URL
+
+With the reverse proxy in place, the canonical bootstrap URL is:
+
+```
+https://vpn.example.com/bootstrap?token=INVITE_TOKEN&name=MYDEVICE
+```
+
+Users pipe this directly into bash. The script is served as plain text — users can (and should) inspect it before running:
+
+```bash
+# Inspect
+curl -sSf https://vpn.example.com/bootstrap?token=TOKEN&name=my-device
+
+# Run
+curl -sSf "https://vpn.example.com/bootstrap?token=TOKEN&name=my-device" | sudo bash
+```
+
+The bootstrap script contains **no global API key** — the invite token is the sole credential, and it is consumed on first use (one-time redeem).
 
 ---
 
@@ -451,7 +589,7 @@ bash build-linux.sh      # Cross-compile for Linux (musl static binary)
 | Symptom | Solution |
 |---------|----------|
 | Windows can't ping | `New-NetFirewallRule -DisplayName "WG ICMP" -Direction Inbound -Protocol ICMPv4 -IcmpType 8 -Action Allow` |
-| API unreachable | Check cloud security group allows TCP 58880 |
+| API unreachable | Check reverse proxy is running and cloud security group allows TCP 443 |
 | No handshake | Check cloud security group allows UDP 51820 |
 | Duplicate name (409) | Delete the old peer first, then rejoin |
 | "Binary is up to date" but changes missing | `sudo rm -f /usr/local/bin/wg-mgmt-daemon` then re-run setup-server.sh |

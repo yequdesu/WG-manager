@@ -17,26 +17,56 @@ func NewServer(ctx context.Context, cfg *Config, s *store.State, m *wg.Manager) 
 
 	mux := http.NewServeMux()
 
+	// ── Public routes (no auth) ──────────────────────────────────────────
+
 	mux.HandleFunc("/api/v1/health", h.Health)
 	mux.HandleFunc("/connect", h.Connect)
 
-	registerHandler := KeyOrLocal(cfg.APIKey)(h.Register)
-	mux.HandleFunc("/api/v1/register", registerHandler)
-
 	rateLimit := RateLimitMiddleware(ctx, 3)
-	mux.HandleFunc("/api/v1/request", rateLimit(h.SubmitRequest))
-	mux.HandleFunc("/api/v1/request/", h.RequestStatus)
+	mux.HandleFunc("/api/v1/redeem", rateLimit(h.RedeemInvite))
+	mux.HandleFunc("/api/v1/login", rateLimit(h.Login))
+	mux.HandleFunc("/api/v1/logout", h.Logout)
+	mux.HandleFunc("/bootstrap", h.Bootstrap)
 
-	mux.Handle("/api/v1/requests", methodGuard(http.MethodGet, LocalOnly(h.ListRequests)))
-	mux.Handle("/api/v1/requests/", LocalOnly(h.ManageRequest))
+	// ── Deprecated routes (return 410 Gone) ──────────────────────────────
+
+	mux.HandleFunc("/api/v1/register", h.Register)
+	mux.HandleFunc("/api/v1/request", h.SubmitRequest)
+	mux.HandleFunc("/api/v1/request/", h.RequestStatus)
+	mux.HandleFunc("/api/v1/requests", h.ListRequests)
+	mux.HandleFunc("/api/v1/requests/", h.ManageRequest)
+
+	// ── Admin routes (local-only, role-based auth) ───────────────────────
+
 	mux.Handle("/api/v1/peers", methodGuard(http.MethodGet, LocalOnly(h.ListPeers)))
 	mux.Handle("/api/v1/peers/", methodGuard(http.MethodDelete, LocalOnly(h.DeletePeer)))
 	mux.Handle("/api/v1/status", methodGuard(http.MethodGet, LocalOnly(h.Status)))
 
-	mux.HandleFunc("/api/v1/login", rateLimit(h.Login))
-	mux.HandleFunc("/api/v1/logout", h.Logout)
+	inviteAdminMW := RequireRole(s, cfg.APIKey, store.RoleAdmin, store.RoleOwner)
+	mux.HandleFunc("/api/v1/invites", LocalOnly(inviteAdminMW(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			h.ListInvites(w, r)
+		case http.MethodPost:
+			h.CreateInvite(w, r)
+		default:
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		}
+	})))
+	mux.Handle("/api/v1/invites/", methodGuard(http.MethodDelete, LocalOnly(inviteAdminMW(h.RevokeInvite))))
 
-	mux.HandleFunc("/api/v1/redeem", rateLimit(h.RedeemInvite))
+	ownerMW := RequireRole(s, cfg.APIKey, store.RoleOwner)
+	mux.HandleFunc("/api/v1/users", LocalOnly(ownerMW(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			h.ListUsers(w, r)
+		case http.MethodPost:
+			h.CreateUser(w, r)
+		default:
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		}
+	})))
+	mux.Handle("/api/v1/users/", methodGuard(http.MethodDelete, LocalOnly(ownerMW(h.DeleteUser))))
 
 	loggedMux := requestLogger(mux)
 
@@ -60,6 +90,13 @@ func requestLogger(next http.Handler) http.Handler {
 			return
 		}
 		if r.URL.Path == "/connect" {
+			return
+		}
+		// Token-bearing endpoints: skip logging to avoid potential leaks.
+		if r.URL.Path == "/api/v1/redeem" {
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/api/v1/invites" {
 			return
 		}
 

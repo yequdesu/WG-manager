@@ -81,133 +81,20 @@ func NewHandler(s *store.State, m *wg.Manager, cfg *Config) *Handler {
 }
 
 func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-
-	var req struct {
-		Hostname string `json:"hostname"`
-		DNS      string `json:"dns"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
-		return
-	}
-
-	req.Hostname = strings.TrimSpace(req.Hostname)
-	if req.Hostname == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "hostname is required"})
-		return
-	}
-	if err := validatePeerName(req.Hostname); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-
-	if h.store.HasPeer(req.Hostname) {
-		writeJSON(w, http.StatusConflict, map[string]string{
-			"error": fmt.Sprintf("peer %q already exists", req.Hostname),
-			"hint":  "contact admin to remove the existing peer first",
-		})
-		return
-	}
-
-	dns := req.DNS
-	if dns == "" {
-		dns = h.cfg().DefaultDNS
-	}
-	if err := validateDNS(dns); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-
-	privateKey, publicKey, err := h.wgMgr.GenKeyPair()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate keys"})
-		return
-	}
-
-	peer := store.Peer{
-		Name:       req.Hostname,
-		PublicKey:  publicKey,
-		PrivateKey: privateKey,
-		DNS:        dns,
-		Keepalive:  h.cfg().PeerKeepalive,
-		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
-	}
-
-	_, err = h.store.AllocateIPAndAddPeer(&peer, h.cfg().WGSubnet, h.getWGPeerIPs(publicKey))
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "no available IP addresses"})
-		return
-	}
-
-	if err := h.commitPeerToWG(peer.Name); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-
-	audit.Log("peer_registered", auditFields("name", peer.Name, "ip", peer.Address, "source", remoteIP(r)))
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"success": true,
-		"peer": map[string]interface{}{
-			"name":              peer.Name,
-			"address":           fmt.Sprintf("%s/24", peer.Address),
-			"private_key":       peer.PrivateKey,
-			"public_key":        peer.PublicKey,
-			"server_public_key": h.store.Server().PublicKey,
-			"server_endpoint":   h.cfg().ServerEndpoint(),
-			"dns":               peer.DNS,
-			"keepalive":         peer.Keepalive,
-		},
-	})
+	writeDeprecated(w, "use invite redemption via POST /api/v1/redeem")
 }
 
 func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 	ua := r.Header.Get("User-Agent")
-	mode := r.URL.Query().Get("mode")
-	name := r.URL.Query().Get("name")
-	platform := r.URL.Query().Get("platform")
-
-	// QR code endpoint
-	if _, ok := r.URL.Query()["qrcode"]; ok {
-		h.serveQR(w, r, mode, name)
+	isBrowser := strings.Contains(ua, "Mozilla") || strings.Contains(ua, "Chrome") || strings.Contains(ua, "Safari") || strings.Contains(ua, "Firefox") || strings.Contains(ua, "Edge")
+	if isBrowser && !strings.Contains(ua, "curl") && !strings.Contains(ua, "PowerShell") && !strings.Contains(ua, "Wget") {
+		h.serveBootstrapHTML(w, r)
 		return
 	}
-
-	isPS := platform == "windows" || strings.Contains(ua, "PowerShell") || strings.Contains(ua, "WindowsPowerShell")
-	isShell := platform == "linux" || platform == "wsl" || platform == "macos" ||
-		strings.Contains(ua, "curl") || strings.Contains(ua, "Wget") || strings.Contains(ua, "bash") || strings.Contains(ua, "libcurl")
-	isBrowser := (strings.Contains(ua, "Mozilla") || strings.Contains(ua, "Chrome")) &&
-		!strings.Contains(ua, "curl") && !strings.Contains(ua, "PowerShell") && !strings.Contains(ua, "Wget")
-
-	if !isPS && !isShell && !isBrowser {
-		isShell = true
-	}
-
-	isDirect := mode == "direct"
-
-	if isBrowser {
-		h.serveHTML(w, r)
-		return
-	}
-
-	if isPS {
-		if isDirect {
-			h.serveDirectWin(w, r, name)
-		} else {
-			h.serveApprovalPS1(w, r)
-		}
-		return
-	}
-
-	if isDirect {
-		h.serveDirectBash(w, r, name)
-	} else {
-		h.serveApprovalBash(w, r, name)
-	}
+	writeJSON(w, http.StatusGone, map[string]string{
+		"error":   "endpoint deprecated",
+		"message": "Use POST /api/v1/redeem to join with an invite token from your administrator.",
+	})
 }
 
 func (h *Handler) serveDirectBash(w http.ResponseWriter, r *http.Request, name string) {
@@ -446,6 +333,74 @@ DELETE /api/v1/requests/{id}           Reject request (server-local)</pre>
 	w.Write([]byte(html))
 }
 
+func (h *Handler) serveBootstrapHTML(w http.ResponseWriter, r *http.Request) {
+	ip := h.cfg().ServerPublicIP
+	p := portStr(h.cfg().MgmtListen)
+	wgSubnet := h.cfg().WGSubnet
+	html := `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WG-Manager - Join</title>
+<style>*{margin:0;padding:0;box-sizing:border-box}
+body{font:14px/1.6 system-ui,-apple-system,monospace;background:#0d1117;color:#c9d1d9;max-width:780px;margin:0 auto;padding:24px 16px}
+h1{color:#58a6ff;font-size:20px;margin-bottom:4px}
+.sub{color:#8b949e;font-size:12px;margin-bottom:20px}
+.box{background:#161b22;border:1px solid #30363d;border-radius:6px;padding:14px;margin-bottom:12px}
+.box h3{font-size:13px;color:#8b949e;margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px}
+pre{background:#0d1117;padding:10px 14px;border-radius:4px;overflow-x:auto;font-size:13px;color:#7ee787;border:1px solid #21262d;white-space:pre-wrap;word-break:break-all}
+.hint{color:#8b949e;font-size:12px;margin-top:6px}
+a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
+ol{font-size:13px;color:#c9d1d9;line-height:2;padding-left:16px}
+.footer{margin-top:24px;border-top:1px solid #30363d;padding-top:12px;font-size:12px;color:#484f58}
+</style></head><body>
+<h1>WG-Manager</h1>
+<p class="sub">Server: ` + ip + `  |  Port: ` + p + `  |  Subnet: ` + wgSubnet + `</p>
+<div class="box">
+  <h3>Join This Network</h3>
+  <p>WG-Manager now uses invite-based onboarding. Ask your administrator for an invite token.</p>
+</div>
+<div class="box">
+  <h3>Redeem an Invite (Linux / macOS / WSL)</h3>
+  <pre>curl -sSf -X POST http://` + ip + `:` + p + `/api/v1/redeem \
+  -H "Content-Type: application/json" \
+  -d '{"token":"YOUR_INVITE_TOKEN","name":"my-device"}'</pre>
+</div>
+<div class="box">
+  <h3>Redeem an Invite (Windows PowerShell)</h3>
+  <pre>$body = @{token="YOUR_INVITE_TOKEN";name="MYPC"} | ConvertTo-Json
+Invoke-RestMethod -Uri http://` + ip + `:` + p + `/api/v1/redeem -Method Post -Body $body -ContentType "application/json"</pre>
+</div>
+<div class="box">
+  <h3>After Redemption</h3>
+  <ol>
+    <li>Save the returned WireGuard config to a <code>.conf</code> file</li>
+    <li>Import into <a href="https://www.wireguard.com/install/" target="_blank">WireGuard client</a></li>
+    <li>Activate the tunnel</li>
+    <li>Ping <code>` + h.cfg().WGServerIP + `</code> to verify</li>
+  </ol>
+</div>
+<div class="box">
+  <h3>API Reference</h3>
+  <pre>GET  /api/v1/health          Health check (no auth)
+POST /api/v1/redeem          Redeem invite token (rate-limited)
+POST /api/v1/login           Login with credentials (rate-limited)
+POST /api/v1/logout          End session
+GET  /api/v1/peers           List peers (server-local)
+DELETE /api/v1/peers/{name}  Remove peer (server-local)
+GET  /api/v1/status          Daemon + WG status (server-local)
+POST /api/v1/invites         Create invite (server-local, admin)
+GET  /api/v1/invites         List invites (server-local, admin)
+DELETE /api/v1/invites/{id}  Revoke invite (server-local, admin)
+GET  /api/v1/users           List users (server-local, owner)
+POST /api/v1/users           Create user (server-local, owner)
+DELETE /api/v1/users/{name}  Delete user (server-local, owner)</pre>
+</div>
+<div class="footer">
+  WG-Manager  |  <a href="/api/v1/health">health</a>  |  <a href="/api/v1/status">status</a>
+</div>
+</body></html>`
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(html))
+}
+
 func (h *Handler) serveQR(w http.ResponseWriter, r *http.Request, mode, name string) {
 	isDirect := mode == "direct"
 
@@ -519,276 +474,27 @@ PersistentKeepalive = %d
 }
 
 func (h *Handler) SubmitRequest(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-
-	var req struct {
-		Hostname string `json:"hostname"`
-		DNS      string `json:"dns"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
-		return
-	}
-
-	req.Hostname = strings.TrimSpace(req.Hostname)
-	if req.Hostname == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "hostname is required"})
-		return
-	}
-	if err := validatePeerName(req.Hostname); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-
-	if h.store.HasPeer(req.Hostname) {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "peer already exists"})
-		return
-	}
-
-	if h.hasPendingRequest(req.Hostname) {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "a pending request for this hostname already exists"})
-		return
-	}
-
-	// Clean up expired requests
-	expired := h.store.ExpireRequests()
-	for _, e := range expired {
-		audit.Log("request_expired", auditFields("name", e.Hostname, "ip", e.Address, "request_id", e.ID))
-	}
-
-	dns := req.DNS
-	if dns == "" {
-		dns = h.cfg().DefaultDNS
-	}
-	if err := validateDNS(dns); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-
-	privateKey, publicKey, err := h.wgMgr.GenKeyPair()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate keys"})
-		return
-	}
-
-	requestID := store.GenerateRequestID()
-	sourceIP := remoteIP(r)
-
-	pendingReq := store.Request{
-		ID:         requestID,
-		Hostname:   req.Hostname,
-		DNS:        dns,
-		PrivateKey: privateKey,
-		PublicKey:  publicKey,
-		Keepalive:  h.cfg().PeerKeepalive,
-		SourceIP:   sourceIP,
-	}
-
-	ip, err := h.store.ReserveIPAndAddRequest(pendingReq, h.cfg().WGSubnet)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save request"})
-		return
-	}
-
-	if err := h.store.Save(); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist state"})
-		return
-	}
-
-	audit.Log("request_submitted", auditFields("name", req.Hostname, "ip", ip, "source", sourceIP, "request_id", requestID))
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status":     "pending",
-		"request_id": requestID,
-		"message":    "Request submitted. Waiting for admin approval.",
-	})
+	writeDeprecated(w, "use invite redemption via POST /api/v1/redeem")
 }
 
 func (h *Handler) RequestStatus(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/api/v1/request/")
-	if id == "" || id == r.URL.Path {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "request_id is required"})
-		return
-	}
-
-	// Check if request exists
-	req, ok := h.store.GetRequest(id)
-	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"status": "not_found", "error": "request not found"})
-		return
-	}
-
-	switch req.Status {
-	case "approved":
-		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"status":     "approved",
-			"request_id": id,
-			"hostname":   req.Hostname,
-			"peer": map[string]interface{}{
-				"name":              req.Hostname,
-				"address":           fmt.Sprintf("%s/24", req.Address),
-				"private_key":       req.PrivateKey,
-				"server_public_key": h.store.Server().PublicKey,
-				"server_endpoint":   h.cfg().ServerEndpoint(),
-				"dns":               req.DNS,
-				"keepalive":         req.Keepalive,
-			},
-		})
-		return
-	case "rejected":
-		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"status":     "rejected",
-			"request_id": id,
-			"hostname":   req.Hostname,
-			"message":    "Your request was rejected by the admin.",
-		})
-		return
-	}
-
-	// Check if expired
-	expAt, err := time.Parse(time.RFC3339, req.ExpiresAt)
-	if err == nil && time.Now().UTC().After(expAt) {
-		writeJSON(w, http.StatusGone, map[string]string{"status": "expired", "error": "request has expired"})
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status":     "pending",
-		"request_id": id,
-		"hostname":   req.Hostname,
-		"message":    "Waiting for admin approval.",
-	})
+	writeDeprecated(w, "use invite redemption via POST /api/v1/redeem")
 }
 
 func (h *Handler) ListRequests(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-
-	expired := h.store.ExpireRequests()
-	for _, e := range expired {
-		audit.Log("request_expired", auditFields("name", e.Hostname, "ip", e.Address, "request_id", e.ID))
-	}
-
-	reqs := h.store.PendingRequests()
-
-	type reqInfo struct {
-		ID        string `json:"id"`
-		Hostname  string `json:"hostname"`
-		Address   string `json:"address"`
-		DNS       string `json:"dns"`
-		SourceIP  string `json:"source_ip"`
-		CreatedAt string `json:"created_at"`
-		ExpiresAt string `json:"expires_at"`
-	}
-
-	result := make([]reqInfo, 0, len(reqs))
-	for _, rq := range reqs {
-		result = append(result, reqInfo{
-			ID:        rq.ID,
-			Hostname:  rq.Hostname,
-			Address:   rq.Address,
-			DNS:       rq.DNS,
-			SourceIP:  rq.SourceIP,
-			CreatedAt: rq.CreatedAt,
-			ExpiresAt: rq.ExpiresAt,
-		})
-	}
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"pending_count": len(result),
-		"requests":      result,
-	})
+	writeDeprecated(w, "approval flow deprecated; use invite-based onboarding: GET /api/v1/invites")
 }
 
 func (h *Handler) ApproveRequest(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-
-	id := strings.TrimPrefix(r.URL.Path, "/api/v1/requests/")
-	id = strings.TrimSuffix(id, "/approve")
-	if id == "" || id == r.URL.Path {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "request_id is required"})
-		return
-	}
-
-	peer, err := h.store.ApproveRequest(id)
-	if err != nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
-		return
-	}
-
-	if err := h.commitPeerToWG(peer.Name); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-
-	adminIP := remoteIP(r)
-	audit.Log("request_approved", auditFields("name", peer.Name, "ip", peer.Address, "admin", adminIP, "request_id", id))
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"success": true,
-		"peer": map[string]interface{}{
-			"name":            peer.Name,
-			"address":         fmt.Sprintf("%s/24", peer.Address),
-			"private_key":     peer.PrivateKey,
-			"public_key":      peer.PublicKey,
-			"server_public_key": h.store.Server().PublicKey,
-			"server_endpoint": h.cfg().ServerEndpoint(),
-			"dns":             peer.DNS,
-			"keepalive":       peer.Keepalive,
-		},
-	})
+	writeDeprecated(w, "approval flow deprecated; use invite-based onboarding: POST /api/v1/invites")
 }
 
 func (h *Handler) RejectRequest(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodDelete {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-
-	id := strings.TrimPrefix(r.URL.Path, "/api/v1/requests/")
-	if id == "" || id == r.URL.Path {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "request_id is required"})
-		return
-	}
-
-	rejected, err := h.store.RejectRequest(id)
-	if err != nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
-		return
-	}
-
-	if err := h.store.Save(); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist state"})
-		return
-	}
-
-	adminIP := remoteIP(r)
-	audit.Log("request_rejected", auditFields("name", rejected.Hostname, "ip", rejected.Address, "admin", adminIP, "request_id", id))
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"success": true,
-		"message": fmt.Sprintf("request %q rejected", rejected.Hostname),
-	})
+	writeDeprecated(w, "approval flow deprecated; use invite-based onboarding")
 }
 
 func (h *Handler) ManageRequest(w http.ResponseWriter, r *http.Request) {
-	if strings.HasSuffix(r.URL.Path, "/approve") {
-		h.ApproveRequest(w, r)
-		return
-	}
-	if r.Method == http.MethodDelete {
-		h.RejectRequest(w, r)
-		return
-	}
-	writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "use POST .../approve or DELETE"})
+	writeDeprecated(w, "approval flow deprecated; use invite-based onboarding")
 }
 
 func remoteIP(r *http.Request) string {
@@ -1020,6 +726,275 @@ func (h *Handler) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// ── Invite Management Handlers ─────────────────────────────────────────
+
+func (h *Handler) CreateInvite(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	var req struct {
+		NameHint string `json:"name_hint"`
+		DNS      string `json:"dns"`
+		TTLHours int    `json:"ttl_hours"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	req.NameHint = strings.TrimSpace(req.NameHint)
+	req.DNS = strings.TrimSpace(req.DNS)
+
+	var ttl time.Duration
+	if req.TTLHours > 0 {
+		ttl = time.Duration(req.TTLHours) * time.Hour
+	} else {
+		ttl = 72 * time.Hour // default 3 days
+	}
+
+	// Determine the issuer from context (set by RequireRole middleware).
+	issuedBy := "apikey"
+	if user, ok := r.Context().Value(ContextKeyUser).(string); ok && user != "apikey" {
+		issuedBy = user
+	}
+
+	var opts []store.InviteOption
+	if req.NameHint != "" {
+		opts = append(opts, store.WithDisplayNameHint(req.NameHint))
+	}
+	if req.DNS != "" {
+		if err := validateDNS(req.DNS); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		opts = append(opts, store.WithDNSOverride(req.DNS))
+	}
+
+	rawToken, inv, err := h.store.CreateInvite(issuedBy, ttl, opts...)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create invite"})
+		return
+	}
+
+	if err := h.store.Save(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist state"})
+		return
+	}
+
+	audit.Log("invite_created", auditFields("invite_id", inv.ID, "issued_by", issuedBy))
+
+	writeJSON(w, http.StatusCreated, map[string]interface{}{
+		"invite_id":  inv.ID,
+		"token":      rawToken,
+		"expires_at": inv.ExpiresAt,
+		"message":    "Share this token with the client. It will only be shown once.",
+	})
+}
+
+func (h *Handler) ListInvites(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	// Clean up expired invites.
+	_ = h.store.ExpireInvites()
+
+	invites := h.store.ListInvites()
+
+	type inviteInfo struct {
+		ID              string `json:"id"`
+		Status          string `json:"status"`
+		CreatedAt       string `json:"created_at"`
+		ExpiresAt       string `json:"expires_at,omitempty"`
+		RedeemedAt      string `json:"redeemed_at,omitempty"`
+		RedeemedBy      string `json:"redeemed_by,omitempty"`
+		RevokedAt       string `json:"revoked_at,omitempty"`
+		IssuedBy        string `json:"issued_by"`
+		DisplayNameHint string `json:"display_name_hint,omitempty"`
+		DNSOverride     string `json:"dns_override,omitempty"`
+	}
+
+	result := make([]inviteInfo, 0, len(invites))
+	for _, inv := range invites {
+		result = append(result, inviteInfo{
+			ID:              inv.ID,
+			Status:          string(inv.Status),
+			CreatedAt:       inv.CreatedAt,
+			ExpiresAt:       inv.ExpiresAt,
+			RedeemedAt:      inv.RedeemedAt,
+			RedeemedBy:      inv.RedeemedBy,
+			RevokedAt:       inv.RevokedAt,
+			IssuedBy:        inv.IssuedBy,
+			DisplayNameHint: inv.DisplayNameHint,
+			DNSOverride:     inv.DNSOverride,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"invite_count": len(result),
+		"invites":      result,
+	})
+}
+
+func (h *Handler) RevokeInvite(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	id := strings.TrimPrefix(r.URL.Path, "/api/v1/invites/")
+	if id == "" || id == r.URL.Path {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invite_id is required"})
+		return
+	}
+
+	if err := h.store.RevokeInvite(id); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+
+	if err := h.store.Save(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist state"})
+		return
+	}
+
+	audit.Log("invite_revoked", auditFields("invite_id", id))
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"message": fmt.Sprintf("invite %q revoked", id),
+	})
+}
+
+// ── User Management Handlers ───────────────────────────────────────────
+
+func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	users := h.store.ListUsers()
+
+	type userInfo struct {
+		Name      string `json:"name"`
+		Role      string `json:"role"`
+		CreatedAt string `json:"created_at"`
+	}
+
+	result := make([]userInfo, 0, len(users))
+	for _, u := range users {
+		result = append(result, userInfo{
+			Name:      u.Name,
+			Role:      string(u.Role),
+			CreatedAt: u.CreatedAt,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"user_count": len(result),
+		"users":      result,
+	})
+}
+
+func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	var req struct {
+		Name     string `json:"name"`
+		Password string `json:"password"`
+		Role     string `json:"role"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name == "" || req.Password == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name and password are required"})
+		return
+	}
+
+	role := store.RoleUser
+	switch req.Role {
+	case string(store.RoleOwner):
+		role = store.RoleOwner
+	case string(store.RoleAdmin):
+		role = store.RoleAdmin
+	case string(store.RoleUser), "":
+		role = store.RoleUser
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error":       "invalid role",
+			"valid_roles": "owner, admin, user",
+		})
+		return
+	}
+
+	passwordHash, err := store.HashPassword(req.Password)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to hash password"})
+		return
+	}
+
+	if err := h.store.AddUser(req.Name, passwordHash, role); err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+
+	if err := h.store.Save(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist state"})
+		return
+	}
+
+	audit.Log("user_created", auditFields("name", req.Name, "role", string(role)))
+
+	writeJSON(w, http.StatusCreated, map[string]interface{}{
+		"success": true,
+		"user": map[string]interface{}{
+			"name": req.Name,
+			"role": string(role),
+		},
+	})
+}
+
+func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	name := strings.TrimPrefix(r.URL.Path, "/api/v1/users/")
+	if name == "" || name == r.URL.Path {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "user name is required"})
+		return
+	}
+
+	if err := h.store.DeleteUser(name); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+
+	if err := h.store.Save(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist state"})
+		return
+	}
+
+	audit.Log("user_deleted", auditFields("name", name))
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"message": fmt.Sprintf("user %q deleted", name),
+	})
+}
+
 func (h *Handler) ListPeers(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -1191,6 +1166,199 @@ func (h *Handler) Status(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// Bootstrap serves a self-contained bash script that onboards a peer using an invite token.
+// The script is inspectable before execution, installs WireGuard if needed, redeems the
+// invite via POST /api/v1/redeem, saves the returned config, and starts WireGuard.
+// It contains NO global API key — the invite token is the sole credential.
+func (h *Handler) Bootstrap(w http.ResponseWriter, r *http.Request) {
+	token := r.URL.Query().Get("token")
+	name := r.URL.Query().Get("name")
+
+	serverHost := h.cfg().ServerPublicIP
+	mgmtPort := portStr(h.cfg().MgmtListen)
+
+	script := fmt.Sprintf(`#!/bin/bash
+set -euo pipefail
+# WG-Manager — Invite Bootstrap Script
+# Served by /bootstrap — inspect before running: curl -sSf https://%s:%s/bootstrap
+# Usage: curl -sSf "https://%s:%s/bootstrap?token=INVITE_TOKEN&name=MYDEVICE" | sudo bash
+
+SERVER_HOST="%s"
+MGMT_PORT="%s"
+INVITE_TOKEN="%s"
+PEER_NAME="%s"
+DEFAULT_DNS="%s"
+
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; CYAN='\033[0;36m'; NC='\033[0m'
+log()  { echo -e "${GREEN}[+]${NC} $*"; }
+warn() { echo -e "${YELLOW}[!]${NC} $*"; }
+err()  { echo -e "${RED}[x]${NC} $*"; }
+
+if [ "${INVITE_TOKEN}" = "" ]; then
+    err "Missing invite token. Usage: curl -sSf \"https://$SERVER_HOST:$MGMT_PORT/bootstrap?token=INVITE_TOKEN&name=MYDEVICE\" | sudo bash"
+    exit 1
+fi
+
+# ── OS detection ──
+detect_os() {
+    case "$(uname -s)" in
+        Linux*)  echo "linux" ;;
+        Darwin*) echo "macos" ;;
+        *)       echo "unknown" ;;
+    esac
+}
+OS=$(detect_os)
+
+# ── Install WireGuard ──
+install_wg() {
+    if command -v wg &>/dev/null; then
+        log "WireGuard is already installed"
+        return 0
+    fi
+    log "Installing WireGuard..."
+    case "$OS" in
+        linux)
+            if command -v apt-get &>/dev/null; then
+                apt-get update -qq && apt-get install -y -qq wireguard-tools
+            elif command -v yum &>/dev/null; then
+                yum install -y wireguard-tools
+            elif command -v dnf &>/dev/null; then
+                dnf install -y wireguard-tools
+            elif command -v apk &>/dev/null; then
+                apk add wireguard-tools
+            else
+                err "Cannot install WireGuard — unknown package manager"
+                exit 1
+            fi
+            ;;
+        macos)
+            if command -v brew &>/dev/null; then
+                brew install wireguard-tools
+            else
+                warn "Install Homebrew first: https://brew.sh"
+                exit 1
+            fi
+            ;;
+        *)
+            err "Unsupported OS: $OS"
+            exit 1
+            ;;
+    esac
+    log "WireGuard installed successfully"
+}
+
+# ── JSON parsing without jq ──
+json_get() {
+    local json="$1" key="$2" default="${3:-}"
+    if command -v jq &>/dev/null; then
+        echo "$json" | jq -r ".$key" 2>/dev/null || echo "$default"
+    elif command -v python3 &>/dev/null; then
+        echo "$json" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('$key','$default'))" 2>/dev/null || echo "$default"
+    else
+        echo "$default"
+    fi
+}
+
+json_get_nested() {
+    local json="$1" key1="$2" key2="$3" default="${4:-}"
+    if command -v jq &>/dev/null; then
+        echo "$json" | jq -r ".${key1}.${key2}" 2>/dev/null || echo "$default"
+    elif command -v python3 &>/dev/null; then
+        echo "$json" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('$key1',{}).get('$key2','$default'))" 2>/dev/null || echo "$default"
+    else
+        echo "$default"
+    fi
+}
+
+# ── Auto-sudo ──
+auto_sudo() {
+    if [ "$(id -u)" -eq 0 ]; then
+        "$@"
+    elif command -v sudo &>/dev/null; then
+        sudo "$@"
+    else
+        err "This script needs root privileges. Please run with sudo."
+        exit 1
+    fi
+}
+
+# ── Main ──
+log "WG-Manager Invite Bootstrap"
+log "OS: $OS"
+
+if [ "${PEER_NAME}" = "" ]; then
+    PEER_NAME=$(hostname 2>/dev/null || echo "wg-peer")
+    log "No peer name provided, using hostname: $PEER_NAME"
+fi
+
+install_wg
+
+log "Redeeming invite token..."
+RESP=$(curl -sSf -X POST "http://$SERVER_HOST:$MGMT_PORT/api/v1/redeem" \
+    -H "Content-Type: application/json" \
+    -d "{\"token\":\"$INVITE_TOKEN\",\"name\":\"$PEER_NAME\",\"dns\":\"$DEFAULT_DNS\"}")
+
+SUCCESS=$(json_get "$RESP" "success" "")
+if [ "$SUCCESS" != "true" ]; then
+    ERR_MSG=$(json_get "$RESP" "error" "unknown error")
+    err "Failed to redeem invite: $ERR_MSG"
+    exit 1
+fi
+
+log "Invite redeemed successfully!"
+
+PRIVATE_KEY=$(json_get_nested "$RESP" "peer" "private_key")
+ADDRESS=$(json_get_nested "$RESP" "peer" "address")
+SERVER_PUBKEY=$(json_get_nested "$RESP" "peer" "server_public_key")
+SERVER_ENDPOINT=$(json_get_nested "$RESP" "peer" "server_endpoint")
+DNS=$(json_get_nested "$RESP" "peer" "dns" "$DEFAULT_DNS")
+KEEPALIVE=$(json_get_nested "$RESP" "peer" "keepalive" "25")
+
+# ── Write WireGuard config ──
+WG_CONF="/etc/wireguard/wg0.conf"
+log "Writing WireGuard config to $WG_CONF..."
+auto_sudo mkdir -p /etc/wireguard
+auto_sudo bash -c "cat > $WG_CONF" << WGCONF
+[Interface]
+Address = $ADDRESS
+PrivateKey = $PRIVATE_KEY
+DNS = $DNS
+
+[Peer]
+PublicKey = $SERVER_PUBKEY
+Endpoint = $SERVER_ENDPOINT
+AllowedIPs = 0.0.0.0/0
+PersistentKeepalive = $KEEPALIVE
+WGCONF
+auto_sudo chmod 600 "$WG_CONF"
+
+# ── Start WireGuard ──
+log "Starting WireGuard..."
+if command -v systemctl &>/dev/null && auto_sudo systemctl is-active --quiet wg-quick@wg0 2>/dev/null; then
+    auto_sudo wg-quick down wg0 2>/dev/null || true
+fi
+auto_sudo wg-quick up wg0
+
+# ── Verify ──
+sleep 2
+if auto_sudo wg show wg0 &>/dev/null; then
+    PEER_IP=$(echo "$ADDRESS" | cut -d/ -f1)
+    log "WireGuard is active — your VPN IP: $PEER_IP"
+    log "Try: ping %s"
+else
+    warn "WireGuard may not have started correctly. Check: sudo wg show"
+fi
+
+log "Done!"
+`, serverHost, mgmtPort, serverHost, mgmtPort,
+		serverHost, mgmtPort, token, name,
+		h.cfg().DefaultDNS, h.cfg().WGServerIP)
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(script))
+}
+
 func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -1255,6 +1423,13 @@ func portStr(addr string) string {
 	if err != nil { return "58880" }
 	if n, _ := strconv.Atoi(p); n > 0 { return p }
 	return "58880"
+}
+
+func writeDeprecated(w http.ResponseWriter, msg string) {
+	writeJSON(w, http.StatusGone, map[string]string{
+		"error":   "endpoint deprecated",
+		"message": msg,
+	})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {

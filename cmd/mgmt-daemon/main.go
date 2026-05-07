@@ -49,7 +49,7 @@ func loadConfig(path string) (*AppConfig, error) {
 		WGPort:               51820,
 		WGSubnet:             "10.0.0.0/24",
 		WGServerIP:           "10.0.0.1/24",
-		MgmtListen:           "0.0.0.0:58880",
+		MgmtListen:           "127.0.0.1:58880",
 		DefaultDNS:           "1.1.1.1,8.8.8.8",
 		PeerKeepalive:        25,
 		PeersDBPath:          "./server/peers.json",
