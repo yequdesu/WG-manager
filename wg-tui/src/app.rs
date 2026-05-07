@@ -6,7 +6,7 @@ use ratatui::Frame;
 use std::path::PathBuf;
 use std::sync::mpsc;
 
-use crate::api::{ApiClient, PeerInfo, RequestInfo, ServerStatus};
+use crate::api::{ApiClient, InviteInfo, PeerInfo, ServerStatus};
 use crate::config::Config;
 use crate::event::DataEvent;
 use crate::theme::DARK_THEME;
@@ -25,9 +25,9 @@ pub struct App {
     pub peer_state: TableState,
     pub peer_selected: usize,
 
-    pub requests: Vec<RequestInfo>,
-    pub request_state: TableState,
-    pub request_selected: usize,
+    pub invites: Vec<InviteInfo>,
+    pub invite_state: TableState,
+    pub invite_selected: usize,
 
     pub status: ServerStatus,
     pub logs: Vec<String>,
@@ -35,7 +35,7 @@ pub struct App {
     pub tick_count: u64,
     pub last_refresh: i64,
 
-    pub flash: Option<(usize, ui::requests::FlashKind, u64)>,
+    pub flash: Option<(usize, ui::invites::FlashKind, u64)>,
     pub particles: ParticleSystem,
     pub search_active: bool,
     pub search_query: String,
@@ -68,9 +68,9 @@ impl App {
             peer_state: TableState::default().with_selected(0),
             peer_selected: 0,
 
-            requests: Vec::new(),
-            request_state: TableState::default().with_selected(0),
-            request_selected: 0,
+            invites: Vec::new(),
+            invite_state: TableState::default().with_selected(0),
+            invite_selected: 0,
 
             status: ServerStatus {
                 daemon: String::new(),
@@ -139,17 +139,17 @@ impl App {
                 }
             }
             DataEvent::PeersFetched(Err(e)) => self.error_msg = Some(e),
-            DataEvent::RequestsFetched(Ok(resp)) => {
-                self.requests = resp.requests;
-                if self.request_selected >= self.requests.len() && !self.requests.is_empty() {
-                    self.request_selected = self.requests.len() - 1;
-                    self.request_state.select(Some(self.request_selected));
+            DataEvent::InvitesFetched(Ok(resp)) => {
+                self.invites = resp.invites;
+                if self.invite_selected >= self.invites.len() && !self.invites.is_empty() {
+                    self.invite_selected = self.invites.len() - 1;
+                    self.invite_state.select(Some(self.invite_selected));
                 }
             }
-            DataEvent::RequestsFetched(Err(e)) => self.error_msg = Some(e),
+            DataEvent::InvitesFetched(Err(e)) => self.error_msg = Some(e),
             DataEvent::StatusFetched(Ok(status)) => self.status = status,
             DataEvent::StatusFetched(Err(e)) => self.error_msg = Some(e),
-            DataEvent::RequestApproved(_) | DataEvent::RequestDenied(_) | DataEvent::PeerDeleted(_) => {
+            DataEvent::InviteCreated(_) | DataEvent::InviteRevoked(_) | DataEvent::PeerDeleted(_) => {
                 self.refresh_data();
             }
         }
@@ -164,37 +164,36 @@ impl App {
         rt.spawn(async move {
             let peers = api.get_peers().await;
             let _ = tx.send(DataEvent::PeersFetched(peers));
-            let reqs = api.get_requests().await;
-            let _ = tx.send(DataEvent::RequestsFetched(reqs));
+            let invs = api.get_invites().await;
+            let _ = tx.send(DataEvent::InvitesFetched(invs));
             let status = api.get_status().await;
             let _ = tx.send(DataEvent::StatusFetched(status));
         });
     }
 
-    pub fn approve_request(&mut self, id: &str) {
-        let selected = self.request_selected;
+    pub fn create_invite(&mut self) {
+        let selected = self.invite_selected;
         let api = self.api.clone();
-        let request_id = id.to_string();
         let rt = self.rt.clone();
         let tx = self.data_tx.clone();
         rt.spawn(async move {
-            let result = api.approve_request(&request_id).await;
-            let _ = tx.send(DataEvent::RequestApproved(result));
+            let result = api.create_invite("tui-invite", 24).await;
+            let _ = tx.send(DataEvent::InviteCreated(result));
         });
-        self.flash = Some((selected, ui::requests::FlashKind::Approve, 0));
+        self.flash = Some((selected, ui::invites::FlashKind::Create, 0));
     }
 
-    pub fn deny_request(&mut self, id: &str) {
-        let selected = self.request_selected;
+    pub fn revoke_invite(&mut self, id: &str) {
+        let selected = self.invite_selected;
         let api = self.api.clone();
-        let request_id = id.to_string();
+        let invite_id = id.to_string();
         let rt = self.rt.clone();
         let tx = self.data_tx.clone();
         rt.spawn(async move {
-            let result = api.deny_request(&request_id).await;
-            let _ = tx.send(DataEvent::RequestDenied(result));
+            let result = api.revoke_invite(&invite_id).await;
+            let _ = tx.send(DataEvent::InviteRevoked(result));
         });
-        self.flash = Some((selected, ui::requests::FlashKind::Deny, 0));
+        self.flash = Some((selected, ui::invites::FlashKind::Revoke, 0));
     }
 
     pub fn delete_peer(&mut self, name: &str) {
@@ -226,10 +225,10 @@ impl App {
                     self.peer_state.select(Some(self.peer_selected));
                 }
             }
-            Tab::Requests => {
-                if !self.requests.is_empty() {
-                    self.request_selected = (self.request_selected + 1).min(self.requests.len() - 1);
-                    self.request_state.select(Some(self.request_selected));
+            Tab::Invites => {
+                if !self.invites.is_empty() {
+                    self.invite_selected = (self.invite_selected + 1).min(self.invites.len() - 1);
+                    self.invite_state.select(Some(self.invite_selected));
                 }
             }
             _ => {}
@@ -242,9 +241,9 @@ impl App {
                 self.peer_selected = self.peer_selected.saturating_sub(1);
                 self.peer_state.select(Some(self.peer_selected));
             }
-            Tab::Requests => {
-                self.request_selected = self.request_selected.saturating_sub(1);
-                self.request_state.select(Some(self.request_selected));
+            Tab::Invites => {
+                self.invite_selected = self.invite_selected.saturating_sub(1);
+                self.invite_state.select(Some(self.invite_selected));
             }
             _ => {}
         }
@@ -347,7 +346,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         match app.tab {
             Tab::Dashboard => render_dashboard(frame, content_area, app),
             Tab::Peers => render_peers(frame, content_area, app),
-            Tab::Requests => render_requests(frame, content_area, app),
+            Tab::Invites => render_invites(frame, content_area, app),
             Tab::Logs => render_logs(frame, content_area, app),
             Tab::Help => ui::help::render_help(frame, content_area),
         }
@@ -401,7 +400,7 @@ fn render_peers(frame: &mut Frame, area: Rect, app: &mut App) {
     use crate::widgets::card::Card;
     if filtered.is_empty() {
         let hint = if app.peers.is_empty() {
-            "No peers connected. Navigate to Requests tab to approve join requests."
+            "No peers connected. Navigate to Invites tab to create an invite."
         } else {
             "No peers match the filter."
         };
@@ -452,30 +451,30 @@ fn render_peers(frame: &mut Frame, area: Rect, app: &mut App) {
     }
 }
 
-fn render_requests(frame: &mut Frame, area: Rect, app: &mut App) {
+fn render_invites(frame: &mut Frame, area: Rect, app: &mut App) {
     fill_area(frame, area, DARK_THEME.bg);
 
     use crate::widgets::card::Card;
-    if app.requests.is_empty() {
+    if app.invites.is_empty() {
         let lines = vec![Line::from(Span::styled(
-            "No pending requests.",
+            "No invites. Press [c] to create a new invite.",
             DARK_THEME.muted,
         ))];
-        Card::new("Pending Requests").render(frame, area, lines);
+        Card::new("Invites").render(frame, area, lines);
         return;
     }
 
     let chunks = Layout::vertical([Constraint::Min(4), Constraint::Length(6)]).split(area);
 
-    ui::requests::render_request_list(
-        frame, chunks[0], &app.requests,
-        &mut app.request_state,
-        app.request_selected,
+    ui::invites::render_invite_list(
+        frame, chunks[0], &app.invites,
+        &mut app.invite_state,
+        app.invite_selected,
         app.flash,
     );
 
-    if let Some(req) = app.requests.get(app.request_selected) {
-        ui::requests::render_request_detail(frame, chunks[1], req);
+    if let Some(inv) = app.invites.get(app.invite_selected) {
+        ui::invites::render_invite_detail(frame, chunks[1], inv);
     }
 }
 
@@ -510,7 +509,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
     }
 
     let peer_count = format!("{} peers  {} online", app.peers.len(), app.status.peer_online);
-    let req_count = format!("{} pending", app.requests.len());
+    let invite_count = format!("{} invites", app.invites.len());
 
     let search_hint = if app.search_active {
         "[Esc] exit search  ".to_string()
@@ -520,14 +519,14 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
 
     let tab_hint = match app.tab {
         Tab::Peers => format!("{search_hint}[/] Search  [d] Delete  "),
-        Tab::Requests => format!("[a] Approve  [d] Deny  "),
+        Tab::Invites => format!("[a] Create invite  [d] Revoke invitation  "),
         Tab::Logs => format!("[PgUp/PgDn] Scroll  {}/{}  ", app.log_scroll, app.logs.len()),
         _ => search_hint,
     };
 
     let full = format!(
         " {} │ {} │ {}[q] Quit  [tab] Switch  [r] Refresh  [?] Help",
-        peer_count, req_count, tab_hint,
+        peer_count, invite_count, tab_hint,
     );
 
     let line = Line::from(Span::styled(full, Style::default().fg(DARK_THEME.muted)));

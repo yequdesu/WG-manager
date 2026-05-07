@@ -586,49 +586,63 @@ print_summary() {
     local mgmt_port="${MGMT_PORT:-58880}"
     local api_key
     api_key=$(grep MGMT_API_KEY "$CONFIG_FILE" 2>/dev/null | cut -d= -f2 || echo "unknown")
+    local owner_pw
+    owner_pw=$(grep BOOTSTRAP_OWNER_PASSWORD "$CONFIG_FILE" 2>/dev/null | cut -d= -f2 || echo "not set")
 
     echo -e "${BOLD}${GREEN}WG-Manager is ready!${NC}"
     echo ""
 
     echo -e "  ${BOLD}Server Info${NC}"
-    echo -e "    Server IP:    ${BOLD}${SERVER_PUBLIC_IP}${NC}"
-    echo -e "    WG Port:      ${BOLD}${WG_PORT}${NC} (UDP)"
-    echo -e "    MGMT Port:    ${BOLD}${mgmt_port}${NC} (TCP)"
-    echo -e "    API Key:      ${BOLD}${api_key}${NC}"
-    echo -e "    Default DNS:  ${BOLD}${DEFAULT_DNS}${NC}"
+    echo -e "    Server IP:        ${BOLD}${SERVER_PUBLIC_IP}${NC}"
+    echo -e "    WG Port:          ${BOLD}${WG_PORT}${NC} (UDP)"
+    echo -e "    MGMT Port:        ${BOLD}${mgmt_port}${NC} (TCP)"
+    echo -e "    Default DNS:      ${BOLD}${DEFAULT_DNS}${NC}"
     echo ""
 
-    echo -e "  ${BOLD}${CYAN}Client Connect${NC} ${YELLOW}-- copy a command to share${NC}"
+    echo -e "  ${BOLD}${YELLOW}Owner Password (save this!)${NC}"
+    echo -e "    ${BOLD}${owner_pw}${NC}"
+    echo -e "    Log in at http://${SERVER_PUBLIC_IP}:${mgmt_port}/connect (browser)"
+    echo -e "    or use the API to create invites for your users."
+    echo ""
+
+    echo -e "  ${BOLD}${CYAN}Next Steps: Create an Invite${NC}"
+    echo -e "    After logging in as owner, create an invite via the TUI or API:"
+    echo ""
+    echo -e "    ${BOLD}API:${NC}"
+    echo -e "      curl -s -X POST http://127.0.0.1:${mgmt_port}/api/v1/invites \\"
+    echo -e "        -H \"Authorization: Bearer ${api_key}\" \\"
+    echo -e "        -H \"Content-Type: application/json\" \\"
+    echo -e "        -d '{}'"
+    echo ""
+
+    echo -e "  ${BOLD}${CYAN}User Onboarding${NC} ${YELLOW}-- share the invite bootstrap URL${NC}"
+    echo ""
+    echo -e "    Replace https://vpn.example.com with your actual domain (or server IP)."
+    echo -e "    Replace TOKEN with the invite token from the create step above."
     echo ""
 
     echo -e "    ${BOLD}Linux / macOS / WSL${NC}"
-    echo -e "      Approval (no key):  curl -sSf http://${SERVER_PUBLIC_IP}:${mgmt_port}/connect | sudo bash"
-    echo -e "      Direct (trusted):   curl -sSf \"http://${SERVER_PUBLIC_IP}:${mgmt_port}/connect?mode=direct&name=DEVICE\" | sudo bash"
+    echo -e "      curl -sSf \"https://vpn.example.com/bootstrap?token=TOKEN&name=DEVICE\" | sudo bash"
     echo ""
 
     echo -e "    ${BOLD}Windows PowerShell${NC}"
-    echo -e "      Approval:  Invoke-WebRequest http://${SERVER_PUBLIC_IP}:${mgmt_port}/connect -OutFile join.ps1; .\\join.ps1"
-    echo -e "      Direct:    Invoke-WebRequest \"http://${SERVER_PUBLIC_IP}:${mgmt_port}/connect?mode=direct&name=MYPC\" -OutFile wg0.conf"
+    echo -e "      Invoke-WebRequest \"https://vpn.example.com/bootstrap?token=TOKEN&name=MYPC\" -OutFile join.ps1"
+    echo -e "      .\\join.ps1"
     echo ""
 
     echo -e "    ${BOLD}Windows CMD${NC}"
-    echo -e "      Approval:  curl -X POST http://${SERVER_PUBLIC_IP}:${mgmt_port}/api/v1/request -H \"Content-Type: application/json\" -d \"{\\\"hostname\\\":\\\"MYPC\\\",\\\"dns\\\":\\\"1.1.1.1\\\"}\""
-    echo -e "      Direct:    curl -o wg0.conf \"http://${SERVER_PUBLIC_IP}:${mgmt_port}/connect?mode=direct&name=MYPC\""
+    echo -e "      curl -o wg0.conf \"https://vpn.example.com/bootstrap?token=TOKEN&name=MYPC\""
     echo ""
 
     echo -e "    ${BOLD}Mobile QR${NC} (generate on server)"
-    echo -e "      curl -s \"http://localhost:${mgmt_port}/connect?qrcode&mode=direct&name=phone1\" -o phone1.svg"
+    echo -e "      curl -s \"http://localhost:${mgmt_port}/connect?qrcode&token=TOKEN&name=phone1\" -o phone1.svg"
     echo -e "      Send phone1.svg to device -> WireGuard App -> Scan from QR code"
-    echo ""
-
-    echo -e "    ${BOLD}Browser${NC}:  http://${SERVER_PUBLIC_IP}:${mgmt_port}/connect"
     echo ""
 
     echo -e "  ${BOLD}${CYAN}Server Management${NC}"
     echo -e "    ${BOLD}wg-tui${NC}                                 Interactive dashboard (enhanced or legacy)"
     echo -e "    ${BOLD}wg-tui --legacy${NC}                        Legacy TUI only"
     echo -e "    ${BOLD}bash scripts/health-check.sh${NC}            System health check"
-    echo -e "    ${BOLD}bash scripts/create-peer.sh${NC}            Generate client config, auto-register peer"
     echo -e "    ${BOLD}bash scripts/list-peers.sh${NC}             View all peers"
     echo -e "    ${BOLD}tail -f /var/log/wg-mgmt/audit.log${NC}     Live audit trail"
     echo ""

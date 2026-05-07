@@ -52,7 +52,7 @@ pub fn card_bindings(frame: &mut Frame, area: Rect) {
             ]),
             Line::from(vec![
                 Span::styled("  a / d        ", DARK_THEME.primary),
-                Span::styled("Approve / Deny", DARK_THEME.text),
+                Span::styled("Create invite / Revoke", DARK_THEME.text),
             ]),
             Line::from(vec![
                 Span::styled("  Ctrl+Arrows  ", DARK_THEME.primary),
@@ -88,7 +88,7 @@ pub fn card_welcome(frame: &mut Frame, area: Rect) {
                 DARK_THEME.muted,
             )),
             Line::from(Span::styled(
-                "  ▼ Requests tab to approve or deny pending join requests",
+                "  ▼ Invites tab to create and manage join invitations",
                 DARK_THEME.muted,
             )),
         ],

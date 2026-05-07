@@ -11,21 +11,21 @@ use crate::theme::DARK_THEME;
 pub enum Tab {
     Dashboard,
     Peers,
-    Requests,
+    Invites,
     Logs,
     Help,
 }
 
 impl Tab {
     pub fn all() -> &'static [Tab] {
-        &[Tab::Dashboard, Tab::Peers, Tab::Requests, Tab::Logs]
+        &[Tab::Dashboard, Tab::Peers, Tab::Invites, Tab::Logs]
     }
 
     pub fn label(&self) -> &'static str {
         match self {
             Tab::Dashboard => "Dashboard",
             Tab::Peers => "Peers",
-            Tab::Requests => "Requests",
+            Tab::Invites => "Invites",
             Tab::Logs => "Logs",
             Tab::Help => "Help",
         }

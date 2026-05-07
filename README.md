@@ -1,6 +1,6 @@
 # WG-Manager
 
-WireGuard management layer — star-topology VPN with zero-touch client provisioning. A single Go daemon handles all peer lifecycle, with clients joining via one command. Includes an optional enhanced TUI dashboard built with Ratatui (Rust).
+WireGuard management layer for star-topology VPNs with invite-based onboarding. A single Go daemon handles peer lifecycle, identity, and HTTPS distribution. Users join by redeeming an invite token, no API key required. Includes an optional enhanced TUI dashboard (Rust + Ratatui).
 
 Supports **Linux / macOS / WSL / Windows / Mobile (QR)**.
 
@@ -11,26 +11,40 @@ Supports **Linux / macOS / WSL / Windows / Mobile (QR)**.
 - [Design](#design)
 - [Quick Start](#quick-start)
   - [1. Server Setup](#1-server-setup)
-  - [2. Open Ports](#2-open-ports)
-  - [3. Clients Join](#3-clients-join)
-  - [4. Admin Operations](#4-admin-operations)
+  - [2. First-Run: Create Owner](#2-first-run-create-owner)
+  - [3. Create an Invite](#3-create-an-invite)
+  - [4. User Onboarding](#4-user-onboarding)
+  - [5. Admin Operations](#5-admin-operations)
 - [Enhanced TUI Dashboard](#enhanced-tui-dashboard)
 - [Logging & Diagnostics](#logging--diagnostics)
 - [API Reference](#api-reference)
-- [Updating](#updating)
+- [Production Deployment](#production-deployment)
 - [Building](#building)
+- [Updating](#updating)
+- [Deprecation Notice](#deprecation-notice)
 - [Troubleshooting](#troubleshooting)
 
 ---
 
 ## Design
 
-Two connection modes for different trust levels:
+### Onboarding Model (Single)
 
-| Mode | Trust | Use Case | Needs API Key |
-|------|-------|----------|:--:|
-| **Approval** (default) | Low / public | Public distribution, guest access, no key exposure | No |
-| **Direct** | High / internal | Admin distributes to trusted devices, instant join | Yes (embedded server-side) |
+The system uses one onboarding model: invite-based. An owner or admin creates an invite token. The user redeems it, which atomically creates a peer and provisions WireGuard config. There is no approval queue, no direct registration, and no public registration endpoint.
+
+```
+owner/admin creates invite  -->  user redeems invite  -->  peer created atomically
+```
+
+### Role Model
+
+| Role | Permissions |
+|------|-------------|
+| **owner** | Full access. Create/delete admins, manage invites, manage peers, system config. Created on first run via bootstrap password. |
+| **admin** | Create/revoke invites, manage peers, view status. |
+| **user** | Redeem invites, view own peer status. Created when an invite is redeemed. |
+
+### Architecture
 
 ```
 ┌─ Server ───────────────────────────────────────┐
@@ -38,12 +52,13 @@ Two connection modes for different trust levels:
 │       │ proxy_pass localhost:58880              │
 │  ┌────┴─────────────────────────────────────┐  │
 │  │ wg-mgmt-daemon 127.0.0.1:58880           │  │
-│  │ GET /connect   ← single entry for all     │  │
-│  │ POST /register ← direct registration      │  │
-│  │ POST /request  ← approval submission      │  │
-│  │        │ wg set                            │  │
-│  │ WireGuard wg0  10.0.0.1/24                │  │
-│  └───────────────────────────────────────────┘  │
+│  │ POST /api/v1/login     ← session auth    │  │
+│  │ POST /api/v1/redeem    ← invite redeem   │  │
+│  │ GET  /bootstrap        ← join script     │  │
+│  │ GET  /connect          ← browser portal  │  │
+│  │        │ wg set                           │  │
+│  │ WireGuard wg0  10.0.0.1/24               │  │
+│  └──────────────────────────────────────────┘  │
 └────────┬──────────────┬─────────────────────────┘
          │ WG tunnel     │ HTTPS
       ┌──┴────┐    ┌────┴──────┐
@@ -59,7 +74,7 @@ Two connection modes for different trust levels:
 
 ### 1. Server Setup
 
-**Prerequisites:** Ubuntu/Debian Linux server with Git installed.
+**Prerequisites:** Ubuntu/Debian Linux server with Git installed, a domain name pointing to the server (for HTTPS).
 
 ```bash
 git clone git@github.com:yequdesu/WG-manager.git ~/WG-manager
@@ -82,235 +97,161 @@ The script prompts for:
 | `Management API Port` | Daemon HTTP port | `58880` (Enter for default) |
 | `Default Client DNS` | Client DNS | `1.1.1.1,8.8.8.8` (Enter for default) |
 
-After completion, the summary shows connection commands and the API Key.
+After completion, the summary shows the bootstrap owner password and instructions for next steps.
 
 **To upgrade the server later:**
 ```bash
 cd ~/WG-manager && git pull
 sudo bash server/setup-server.sh
-# "Use existing configuration? [Y/n]" → Y + Enter
+# "Use existing configuration? [Y/n]" -> Y + Enter
 ```
 
 ---
 
-### 2. Open Ports
+### 2. First-Run: Create Owner
 
-Add **inbound** rules in your cloud provider's security group:
+On first run, the daemon checks if any users exist. If none are found and `BOOTSTRAP_OWNER_PASSWORD` is set in `config.env`, it creates an owner account named `admin` with that password.
 
-| Protocol | Port | Purpose |
-|----------|------|---------|
-| UDP | 51820 | WireGuard tunnel |
-| TCP | 443 | Management API (HTTPS via reverse proxy) |
-
-> **Note:** The daemon binds to `127.0.0.1:58880` by default. For production, place a reverse proxy (nginx/caddy) on port 443 and forward to localhost. See [Production Deployment](#production-deployment-reverse-proxy--tls) for details. For quick dev/test setups, change `MGMT_LISTEN=0.0.0.0:58880` in `config.env` and open port 58880 instead.
-
-If using UFW:
 ```bash
-sudo ufw allow 51820/udp
-sudo ufw allow 443/tcp
+# Check the generated bootstrap password
+grep BOOTSTRAP_OWNER_PASSWORD ~/WG-manager/config.env
 ```
 
----
-
-### 3. Clients Join
-
-Replace `118.178.171.166` with your server IP in all commands below.
+Save this password. You will use it to log in and create invites.
 
 ---
 
-#### 3.1 Approval Mode (default, no API Key)
+### 3. Create an Invite
 
-> Client submits request → Admin approves on server → Client auto-configures.
+Once logged in as owner or admin, create an invite for each user:
 
-##### Linux / macOS / WSL
+**Via API:**
+```bash
+curl -s -X POST http://127.0.0.1:58880/api/v1/invites \
+  -H "Authorization: Bearer $(grep MGMT_API_KEY ~/WG-manager/config.env | cut -d= -f2)" \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```
 
-Open a terminal and run:
+Response includes the invite token and a bootstrap URL:
+
+```json
+{
+  "token": "inv_abc123...",
+  "url": "https://vpn.example.com/bootstrap?token=inv_abc123..."
+}
+```
+
+**Via TUI:**
+Open the TUI dashboard, navigate to the Invites tab, and create a new invite.
+
+---
+
+### 4. User Onboarding
+
+Share the bootstrap URL with the user. The token is one-time use and consumed on first redeem.
+
+#### Linux / macOS / WSL
 
 ```bash
-curl -sSf http://118.178.171.166:58880/connect | sudo bash
+curl -sSf "https://vpn.example.com/bootstrap?token=inv_abc123&name=my-device" | sudo bash
 ```
 
 The script automatically:
 1. Detects your OS
 2. Installs WireGuard if needed (asks Y/n before installing)
-3. Submits an access request (peer name defaults to hostname)
-4. Polls every 3 seconds for the admin's decision
-5. On approval: writes config, starts WireGuard, verifies connection
+3. Redeems the invite token
+4. Writes WireGuard config
+5. Starts the tunnel
+6. Verifies connectivity
 
 **Custom peer name:**
 ```bash
-curl -sSf "http://118.178.171.166:58880/connect?name=my-device" | sudo bash
+curl -sSf "https://vpn.example.com/bootstrap?token=inv_abc123&name=my-laptop" | sudo bash
 ```
 
-##### Windows PowerShell
+#### Windows PowerShell
 
 ```powershell
-# Step 1: Download the script
-Invoke-WebRequest http://118.178.171.166:58880/connect -OutFile join.ps1
+# Download the bootstrap script
+Invoke-WebRequest "https://vpn.example.com/bootstrap?token=inv_abc123&name=MYPC" -OutFile join.ps1
 
-# Step 2: Run (enter peer name when prompted)
+# Run it
 .\join.ps1
 ```
 
-The script submits a request, polls for approval, saves the `.conf` file on approval, and prints import instructions.
-
-**After approval:**
-1. Download [WireGuard for Windows](https://download.wireguard.com/windows-client/)
-2. Open WireGuard → **Import Tunnel(s) from file**
-3. Select the `.conf` file (e.g. `C:\Users\...\AppData\Local\Temp\wg0.conf`)
-4. Click **Activate**
-
-##### Windows CMD
+#### Windows CMD
 
 ```cmd
-:: Step 1: Submit request
-curl -X POST http://118.178.171.166:58880/api/v1/request ^
-  -H "Content-Type: application/json" ^
-  -d "{\"hostname\":\"MYPC\",\"dns\":\"1.1.1.1\"}"
-:: Response: {"request_id":"abc123...","status":"pending"}
-:: Note the request_id
-
-:: Step 2: Poll status (repeat every few seconds)
-curl -s http://118.178.171.166:58880/api/v1/request/abc123
-
-:: Step 3: After admin approves, download .conf
-curl -o wg0.conf "http://118.178.171.166:58880/connect?mode=direct&name=MYPC"
-
-:: Step 4: Import into WireGuard client (same as PowerShell steps)
-```
-
-##### Mobile (QR Code)
-
-WireGuard's official app has a built-in "Scan from QR code" feature. QR codes work in **direct mode** only:
-
-**Admin generates QR on server:**
-```bash
-# Auto-registers peer "phone1" and outputs QR (phone scans directly)
-curl -s "http://localhost:58880/connect?qrcode&mode=direct&name=phone1" -o phone1.svg
-```
-
-Share `phone1.svg` with the user → WireGuard App → Scan QR → connected.
-
----
-
-#### 3.2 Direct Mode (admin-distributed, with API Key)
-
-> Admin gives a URL to trusted users. They join instantly with no approval step.
-
-The API Key is on the server only:
-```bash
-grep MGMT_API_KEY ~/WG-manager/config.env
-```
-
-##### Linux / macOS / WSL
-
-```bash
-curl -sSf "http://118.178.171.166:58880/connect?mode=direct&name=my-laptop" | sudo bash
-```
-
-The script auto-installs WG, registers with the embedded API Key, writes config, and connects.
-
-##### Windows PowerShell
-
-```powershell
-Invoke-WebRequest "http://118.178.171.166:58880/connect?mode=direct&name=MYPC" -OutFile wg0.conf
+curl -o wg0.conf "https://vpn.example.com/bootstrap?token=inv_abc123&name=MYPC"
 ```
 
 Then import `wg0.conf` into the WireGuard client.
 
-##### Windows CMD
+#### Mobile (QR Code)
 
-```cmd
-curl -o wg0.conf "http://118.178.171.166:58880/connect?mode=direct&name=MYPC"
-```
-
----
-
-#### 3.3 Verify Connection
-
-On the client device:
+Admins can generate QR codes from the server:
 
 ```bash
-sudo wg show              # Check WireGuard status
-ping 10.0.0.1             # Ping the gateway (server)
-ping 10.0.0.2             # Ping another peer
+# Generate QR for an invite token
+curl -s "http://localhost:58880/connect?qrcode&token=inv_abc123&name=phone1" -o phone1.svg
 ```
 
-**Windows note:** If ping fails, allow ICMP:
-```powershell
-New-NetFirewallRule -DisplayName "WG ICMP" -Direction Inbound -Protocol ICMPv4 -IcmpType 8 -Action Allow
-```
+Share `phone1.svg` with the user. They scan it with the WireGuard mobile app and connect.
 
 ---
 
-### 4. Admin Operations
+### 5. Admin Operations
 
-All management is done on the server.
+All management is done on the server or via the management API.
 
-#### 4.1 TUI Dashboard (recommended)
+#### 5.1 TUI Dashboard (recommended)
 
 ```bash
 wg-tui                 # Enhanced (if installed) or Legacy
 wg-tui --legacy        # Force Legacy TUI
 ```
 
-**Legacy TUI** (always available):
+The TUI shows tabs for Peers, Invites, Users, Status, and Log.
 
-| Tab | Content | Actions |
-|-----|---------|---------|
-| **Peers** | All peers + detail panel (Name/IP/Key/Endpoint/HS) | `↑↓` select, `d` delete |
-| **Requests** | Pending approval requests | `↑↓` select, `a` approve, `d` deny |
-| **Status** | Server status + per-peer transfer stats | Read-only |
-| **Log** | Last 50 audit log entries | `j/k` scroll |
-
-Global: `Tab` switch tab, `r` refresh, `q` quit.
-
-#### 4.2 Approve / Reject Requests (CLI)
+#### 5.2 Create an Invite (CLI)
 
 ```bash
 API_KEY=$(grep MGMT_API_KEY ~/WG-manager/config.env | cut -d= -f2)
 
-# View pending requests
-curl -s http://127.0.0.1:58880/api/v1/requests \
-  -H "Authorization: Bearer $API_KEY" | python3 -m json.tool
+curl -s -X POST http://127.0.0.1:58880/api/v1/invites \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"max_uses": 1}'
+```
 
-# Approve (replace <id> with the actual request_id)
-curl -s -X POST http://127.0.0.1:58880/api/v1/requests/<id>/approve \
+#### 5.3 List / Revoke Invites
+
+```bash
+# List all invites
+curl -s http://127.0.0.1:58880/api/v1/invites \
   -H "Authorization: Bearer $API_KEY"
 
-# Reject
-curl -s -X DELETE http://127.0.0.1:58880/api/v1/requests/<id> \
+# Revoke an invite
+curl -s -X DELETE http://127.0.0.1:58880/api/v1/invites/inv_abc123 \
   -H "Authorization: Bearer $API_KEY"
 ```
 
-#### 4.3 Delete a Peer
+#### 5.4 Manage Peers
 
 ```bash
-# TUI: Peers tab → ↑↓ select → d (confirm with d/y)
+# List peers
+curl -s http://127.0.0.1:58880/api/v1/peers \
+  -H "Authorization: Bearer $API_KEY"
 
-# CLI:
+# Delete a peer
 curl -s -X DELETE http://127.0.0.1:58880/api/v1/peers/<name> \
   -H "Authorization: Bearer $API_KEY"
 ```
 
-#### 4.4 Offline Peer Provisioning (Pre-generate Config)
+TUI: Peers tab, select with arrow keys, press `d` to delete.
 
-Generate a client config locally on the server, auto-register the peer, then manually distribute the `.conf` file — no client HTTP request needed.
-
-```bash
-# Generate config for a new peer (saved to scripts/<name>.conf)
-sudo bash ~/WG-manager/scripts/create-peer.sh --name my-laptop
-
-# Custom DNS and output path
-sudo bash ~/WG-manager/scripts/create-peer.sh --name office-pc --dns 8.8.8.8 -o /tmp/office.conf
-
-# Distribute the .conf file to the client (email, USB, etc.)
-# Client imports it into WireGuard — no approval or network request needed
-```
-
-The peer is automatically registered in the management system and added to the WireGuard interface on the server. The client only needs to import the `.conf` file and activate.
-
-#### 4.5 Health Check
+#### 5.5 Health Check
 
 ```bash
 bash ~/WG-manager/scripts/health-check.sh
@@ -321,7 +262,7 @@ bash ~/WG-manager/scripts/list-peers.sh
 
 ## Enhanced TUI Dashboard
 
-An optional enhanced TUI built with **Rust + Ratatui**, featuring a beautiful particle-physics background and smooth animations.
+An optional enhanced TUI built with **Rust + Ratatui**, featuring a particle-physics background and smooth animations.
 
 ### Install
 
@@ -338,15 +279,14 @@ bash install.sh                  # Default
 | `Tab` / `←→` | Switch tabs |
 | `↑↓` / `j` `k` | Navigate lists |
 | `/` | Search peers |
-| `a` | Approve request |
-| `d` / `y` | Delete peer / Deny request |
+| `d` / `y` | Delete peer / Revoke invite |
 | `r` | Refresh data |
 | `=` / `-` / `0` | Zoom in / out / reset |
 | `Ctrl+Arrows` | Move window |
 | `?` | Help overlay |
 | `q` | Quit |
 
-### Cross-Compilation (Windows → Linux)
+### Cross-Compilation (Windows to Linux)
 
 ```bash
 # One-time setup
@@ -371,7 +311,7 @@ All events are written to `/var/log/wg-mgmt/wg-mgmt.log` with three modules:
 
 | Module | Events |
 |--------|--------|
-| `[DAEMON]` | daemon started/stopped, peer registered/deleted, request lifecycle, config reloaded |
+| `[DAEMON]` | daemon started/stopped, peer registered/deleted, invite lifecycle, config reloaded |
 | `[WG]` | peer connected/disconnected, handshake complete, endpoint changed, keypair rotation, transfer milestones |
 | `[HTTP]` | API write operations: POST/PUT/DELETE requests, non-localhost requests |
 
@@ -379,7 +319,7 @@ All events are written to `/var/log/wg-mgmt/wg-mgmt.log` with three modules:
 ```
 2026-05-03T15:00:00.123456Z [DAEMON] daemon_started version=1.0.0
 2026-05-03T15:00:10.000000Z [WG] peer_connected peer=RoJ7SRMQC7Zu endpoint=112.49.240.57:16262
-2026-05-03T15:00:15.456789Z [DAEMON] request_approved name=phone1 ip=10.0.0.7
+2026-05-03T15:00:15.456789Z [DAEMON] invite_redeemed token=inv_abc name=phone1 ip=10.0.0.7
 ```
 
 The log rotates at 100 MB (keeps 10 archives). Routine TUI polling (GET requests from localhost) is filtered out.
@@ -394,34 +334,49 @@ tail -f /var/log/wg-mgmt/wg-mgmt.log
 
 ## API Reference
 
-Base URL: `https://vpn.example.com` (reverse proxy) or `http://IP:58880` (direct)
+Base URL: `https://vpn.example.com` (reverse proxy) or `http://IP:58880` (direct, local network only).
+
+### Public Routes
+
+Accessible over HTTPS with no authentication (except login/redeem which handle auth internally).
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/connect` | None | Dispatch: bash/ps1/conf/HTML/QR by User-Agent |
-| `GET` | `/connect?qrcode` | None | SVG QR code (direct mode only) |
-| `POST` | `/register` | KeyOrLocal | Register peer, return config |
-| `POST` | `/request` | Rate-limited | Submit approval request |
-| `GET` | `/request/{id}` | None | Poll status: pending / approved / rejected |
-| `GET` | `/requests` | LocalOnly | List pending requests |
-| `POST` | `/requests/{id}/approve` | LocalOnly | Approve request |
-| `DELETE` | `/requests/{id}` | LocalOnly | Reject request |
-| `GET` | `/peers` | LocalOnly | List peers with online status |
-| `DELETE` | `/peers/{name}` | LocalOnly | Remove a peer |
-| `GET` | `/status` | LocalOnly | Server + daemon status |
-| `GET` | `/health` | None | Health check |
+| `GET` | `/api/v1/health` | None | Health check |
+| `POST` | `/api/v1/login` | None | Log in with username + password, receive session cookie |
+| `POST` | `/api/v1/logout` | Session | Log out |
+| `POST` | `/api/v1/redeem` | None | Redeem an invite token, receive WireGuard config |
+| `GET` | `/bootstrap` | None | Bootstrap script (pipe to bash) |
+| `GET` | `/connect` | None | Browser portal or script dispatch by User-Agent |
+| `GET` | `/connect?qrcode` | None | SVG QR code for invite token |
+
+### Admin Routes
+
+Localhost-only (enforced by daemon middleware). Do not expose via reverse proxy.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/v1/peers` | LocalOnly | List all peers |
+| `DELETE` | `/api/v1/peers/{name}` | LocalOnly | Remove a peer |
+| `GET` | `/api/v1/invites` | LocalOnly | List all invites |
+| `POST` | `/api/v1/invites` | LocalOnly | Create a new invite |
+| `DELETE` | `/api/v1/invites/{token}` | LocalOnly | Revoke an invite |
+| `GET` | `/api/v1/users` | LocalOnly | List users |
+| `DELETE` | `/api/v1/users/{name}` | LocalOnly | Remove a user |
+| `GET` | `/api/v1/status` | LocalOnly | Server + daemon status |
 
 Auth explained:
-- `LocalOnly` = accessible only from `127.0.0.1` (server local)
-- `KeyOrLocal` = localhost bypass, or remote with `Authorization: Bearer <KEY>`
+- `LocalOnly` = accessible only from `127.0.0.1` (server local). Use SSH or a local terminal.
+- `None` = no auth required (public endpoint).
+- `Session` = valid session cookie required.
 
 ---
 
-## Production Deployment (Reverse Proxy + TLS)
+## Production Deployment
 
 ### Architecture
 
-The daemon binds to `127.0.0.1:58880` by default. For production, place a reverse proxy (nginx or Caddy) in front that terminates TLS and forwards to the daemon on localhost. This isolates the daemon from direct internet exposure and centralises TLS certificate management.
+The daemon binds to `127.0.0.1:58880` by default. For production, place a reverse proxy (nginx or Caddy) in front that terminates TLS and forwards to the daemon on localhost.
 
 ```
                    ┌─────────────────────────────┐
@@ -440,35 +395,29 @@ The daemon binds to `127.0.0.1:58880` by default. For production, place a revers
 
 ### Route Isolation
 
-The daemon enforces two access tiers. The reverse proxy must expose only public routes to the internet:
+The daemon enforces two access tiers via middleware. The reverse proxy must expose only public routes to the internet.
 
-**Public routes** (safe for HTTPS exposure, no API key required):
+**Public routes** (safe for HTTPS exposure):
 | Route | Description |
 |-------|-------------|
 | `/api/v1/health` | Health check |
-| `/api/v1/login` | User login (session-based auth) |
+| `/api/v1/login` | User login |
 | `/api/v1/logout` | User logout |
-| `/api/v1/redeem` | Redeem an invite token |
-| `/api/v1/request` | Submit approval request (rate-limited) |
-| `/api/v1/request/{id}` | Poll request status |
-| `/connect` | Client join scripts (bash/ps1/conf/HTML/QR) |
-| `/bootstrap` | Invite bootstrap script (token-based) |
+| `/api/v1/redeem` | Redeem invite token |
+| `/bootstrap` | Invite bootstrap script |
+| `/connect` | Client join scripts / browser portal |
 
-**Admin routes** (daemon-enforced localhost-only — do NOT expose via proxy):
+**Admin routes** (localhost-only, do not expose via proxy):
 | Route | Description |
 |-------|-------------|
-| `/api/v1/requests` | List pending requests |
-| `/api/v1/requests/{id}/approve` | Approve request |
-| `/api/v1/requests/{id}` (DELETE) | Reject request |
-| `/api/v1/peers` | List peers |
-| `/api/v1/peers/{name}` (DELETE) | Remove peer |
+| `/api/v1/peers` | List/manage peers |
+| `/api/v1/invites` | List/create/revoke invites |
+| `/api/v1/users` | List/manage users |
 | `/api/v1/status` | Server status |
-
-The daemon's `LocalOnly` middleware (see `internal/api/middleware.go`) rejects any request to admin routes from non-localhost sources, regardless of the reverse proxy configuration.
 
 ### TLS Requirement
 
-All production deployments MUST terminate TLS at the reverse proxy. The daemon itself speaks plain HTTP — encryption is the proxy's responsibility. Use Let's Encrypt (certbot / Caddy auto) for free certificates.
+All production deployments MUST terminate TLS at the reverse proxy. The daemon speaks plain HTTP. Use Let's Encrypt (certbot or Caddy auto) for free certificates.
 
 ### Example: nginx
 
@@ -480,18 +429,18 @@ server {
     ssl_certificate     /etc/letsencrypt/live/vpn.example.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/vpn.example.com/privkey.pem;
 
-    # ── Public routes (forward to daemon) ──
+    # Public routes (forward to daemon)
     location /api/v1/health      { proxy_pass http://127.0.0.1:58880; }
     location /api/v1/login       { proxy_pass http://127.0.0.1:58880; }
     location /api/v1/logout      { proxy_pass http://127.0.0.1:58880; }
     location /api/v1/redeem      { proxy_pass http://127.0.0.1:58880; }
-    location /api/v1/request     { proxy_pass http://127.0.0.1:58880; }
-    location /connect            { proxy_pass http://127.0.0.1:58880; }
     location /bootstrap          { proxy_pass http://127.0.0.1:58880; }
+    location /connect            { proxy_pass http://127.0.0.1:58880; }
 
-    # ── Block admin routes at the proxy level ──
-    location /api/v1/requests    { return 403; }
+    # Block admin routes at the proxy level
     location /api/v1/peers       { return 403; }
+    location /api/v1/invites     { return 403; }
+    location /api/v1/users       { return 403; }
     location /api/v1/status      { return 403; }
 
     proxy_set_header Host $host;
@@ -500,7 +449,7 @@ server {
     proxy_set_header X-Forwarded-Proto $scheme;
 }
 
-# Redirect HTTP → HTTPS
+# Redirect HTTP to HTTPS
 server {
     listen 80;
     server_name vpn.example.com;
@@ -516,14 +465,14 @@ vpn.example.com {
     reverse_proxy /api/v1/login   127.0.0.1:58880
     reverse_proxy /api/v1/logout  127.0.0.1:58880
     reverse_proxy /api/v1/redeem  127.0.0.1:58880
-    reverse_proxy /api/v1/request 127.0.0.1:58880
-    reverse_proxy /connect        127.0.0.1:58880
     reverse_proxy /bootstrap      127.0.0.1:58880
+    reverse_proxy /connect        127.0.0.1:58880
 
     # Block admin routes
-    respond /api/v1/requests  403
-    respond /api/v1/peers     403
-    respond /api/v1/status    403
+    respond /api/v1/peers   403
+    respond /api/v1/invites 403
+    respond /api/v1/users   403
+    respond /api/v1/status  403
 }
 ```
 
@@ -535,17 +484,38 @@ With the reverse proxy in place, the canonical bootstrap URL is:
 https://vpn.example.com/bootstrap?token=INVITE_TOKEN&name=MYDEVICE
 ```
 
-Users pipe this directly into bash. The script is served as plain text — users can (and should) inspect it before running:
+Users pipe this directly into bash. The script is served as plain text. Users should inspect it before running:
 
 ```bash
 # Inspect
 curl -sSf https://vpn.example.com/bootstrap?token=TOKEN&name=my-device
 
-# Run
+# Run (only after inspecting)
 curl -sSf "https://vpn.example.com/bootstrap?token=TOKEN&name=my-device" | sudo bash
 ```
 
-The bootstrap script contains **no global API key** — the invite token is the sole credential, and it is consumed on first use (one-time redeem).
+The bootstrap script contains no global API key. The invite token is the sole credential and is consumed on first use.
+
+---
+
+## Building
+
+### Go Daemon + Legacy TUI
+
+```bash
+make build      # Daemon -> bin/wg-mgmt-daemon
+make build-tui  # Legacy TUI -> bin/wg-tui-legacy
+make build-all  # Both
+make vet        # go vet ./...
+```
+
+### Enhanced TUI (Rust)
+
+```bash
+cd wg-tui
+cargo build --release    # -> target/release/wg-tui(.exe)
+bash build-linux.sh      # Cross-compile for Linux (musl static binary)
+```
 
 ---
 
@@ -559,28 +529,47 @@ sudo bash server/setup-server.sh   # Y to reuse config, auto-rebuilds if source 
 cd wg-tui && bash install.sh
 ```
 
-Existing WireGuard connections are **not interrupted** during updates.
+Existing WireGuard connections are not interrupted during updates.
 
 ---
 
-## Building
+## Deprecation Notice
 
-### Go Daemon + Legacy TUI
+### Removed Endpoints
 
-```bash
-make build      # Daemon → bin/wg-mgmt-daemon
-make build-tui  # Legacy TUI → bin/wg-tui-legacy
-make build-all  # Both
-make vet        # go vet
-```
+The following endpoints are deprecated and return HTTP 410 (Gone). They are retained only to signal migration to clients:
 
-### Enhanced TUI (Rust)
+| Old Endpoint | Status | Replacement |
+|---|---|---|
+| `POST /api/v1/register` | 410 Gone | `POST /api/v1/redeem` with an invite token |
+| `POST /api/v1/request` | 410 Gone | `POST /api/v1/redeem` |
+| `GET /api/v1/request/{id}` | 410 Gone | None (no polling needed) |
+| `GET /api/v1/requests` | 410 Gone | `GET /api/v1/invites` |
+| `POST /api/v1/requests/{id}/approve` | 410 Gone | `POST /api/v1/invites` to create invite instead |
+| `DELETE /api/v1/requests/{id}` | 410 Gone | `DELETE /api/v1/invites/{token}` |
 
-```bash
-cd wg-tui
-cargo build --release    # → target/release/wg-tui(.exe)
-bash build-linux.sh      # Cross-compile for Linux (musl static binary)
-```
+### Removed Config Options
+
+| Config Key | Reason |
+|---|---|
+| `CLEAN_PEERS_ON_EXIT` | No longer supported. Peers persist across restarts. |
+
+### Removed Query Parameters
+
+| Parameter | Details |
+|---|---|
+| `?mode=direct` | Removed. All onboarding is invite-based. |
+| `?mode=approval` | Removed. Approval flow is replaced by invites. |
+
+### Migration Path for Existing Deployments
+
+If you are upgrading from a version that used the approval flow:
+
+1. The daemon automatically expires any pending approval requests on startup.
+2. Create invites for your existing users via `POST /api/v1/invites`.
+3. Share the invite URLs with users. They can join by redeeming their invite.
+4. Old peers on the server continue to work. No action needed for existing WireGuard connections.
+5. Remove any scripts or documentation that reference the old endpoints.
 
 ---
 
@@ -595,10 +584,10 @@ bash build-linux.sh      # Cross-compile for Linux (musl static binary)
 | "Binary is up to date" but changes missing | `sudo rm -f /usr/local/bin/wg-mgmt-daemon` then re-run setup-server.sh |
 | Daemon fails to start | `journalctl -u wg-mgmt -n 20` |
 | WG interface missing | `modprobe wireguard && ip link add wg0 type wireguard` |
-| `?name=` not working | Daemon binary may be stale — run `sudo bash server/setup-server.sh` |
-| Audit log empty | Logrotate rotated the file — run `sudo systemctl kill -s HUP wg-mgmt` |
+| Invite token invalid | Tokens are one-time use. Check if already redeemed via `curl http://127.0.0.1:58880/api/v1/invites -H "Authorization: Bearer $KEY"` |
+| Audit log empty | Logrotate rotated the file. Run `sudo systemctl kill -s HUP wg-mgmt` |
 | Rust not found (wg-tui) | Install Rust: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
-| `wg-tui` command not found | Both TUI variants share `/usr/local/bin/wg-tui` launcher — re-run setup |
+| `wg-tui` command not found | Both TUI variants share `/usr/local/bin/wg-tui` launcher. Re-run setup. |
 
 ---
 

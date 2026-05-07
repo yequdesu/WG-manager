@@ -29,20 +29,25 @@ pub struct PeerListResponse {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct RequestInfo {
+pub struct InviteInfo {
     pub id: String,
-    pub hostname: String,
-    pub address: String,
-    pub dns: Option<String>,
-    pub source_ip: Option<String>,
+    pub status: String,
     pub created_at: Option<String>,
     pub expires_at: Option<String>,
+    pub issued_by: Option<String>,
+    pub display_name_hint: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct RequestListResponse {
-    pub requests: Vec<RequestInfo>,
-    pub pending_count: Option<i64>,
+pub struct InviteListResponse {
+    pub invites: Vec<InviteInfo>,
+    pub invite_count: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CreateInviteRequest {
+    pub name_hint: String,
+    pub ttl_hours: u32,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -86,14 +91,14 @@ impl ApiClient {
             .map_err(|e| e.to_string())
     }
 
-    pub async fn get_requests(&self) -> Result<RequestListResponse, String> {
-        let url = format!("{}/api/v1/requests", self.base_url);
+    pub async fn get_invites(&self) -> Result<InviteListResponse, String> {
+        let url = format!("{}/api/v1/invites", self.base_url);
         let mut req = self.client.get(&url);
         if !self.api_key.is_empty() {
             req = req.header("Authorization", format!("Bearer {}", self.api_key));
         }
         let resp = req.send().await.map_err(|e| e.to_string())?;
-        resp.json::<RequestListResponse>()
+        resp.json::<InviteListResponse>()
             .await
             .map_err(|e| e.to_string())
     }
@@ -110,22 +115,24 @@ impl ApiClient {
             .map_err(|e| e.to_string())
     }
 
-    pub async fn approve_request(&self, request_id: &str) -> Result<bool, String> {
-        let url = format!(
-            "{}/api/v1/requests/{}/approve",
-            self.base_url, request_id
-        );
-        let mut req = self.client.post(&url);
+    pub async fn create_invite(&self, name_hint: &str, ttl_hours: u32) -> Result<serde_json::Value, String> {
+        let url = format!("{}/api/v1/invites", self.base_url);
+        let body = CreateInviteRequest {
+            name_hint: name_hint.to_string(),
+            ttl_hours,
+        };
+        let mut req = self.client.post(&url).json(&body);
         if !self.api_key.is_empty() {
             req = req.header("Authorization", format!("Bearer {}", self.api_key));
         }
         let resp = req.send().await.map_err(|e| e.to_string())?;
-        let body: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-        Ok(body.get("success").and_then(|v| v.as_bool()).unwrap_or(false))
+        resp.json::<serde_json::Value>()
+            .await
+            .map_err(|e| e.to_string())
     }
 
-    pub async fn deny_request(&self, request_id: &str) -> Result<bool, String> {
-        let url = format!("{}/api/v1/requests/{}", self.base_url, request_id);
+    pub async fn revoke_invite(&self, invite_id: &str) -> Result<bool, String> {
+        let url = format!("{}/api/v1/invites/{}", self.base_url, invite_id);
         let mut req = self.client.delete(&url);
         if !self.api_key.is_empty() {
             req = req.header("Authorization", format!("Bearer {}", self.api_key));

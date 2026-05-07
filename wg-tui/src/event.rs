@@ -20,10 +20,10 @@ pub enum Event {
 #[derive(Debug)]
 pub enum DataEvent {
     PeersFetched(Result<api::PeerListResponse, String>),
-    RequestsFetched(Result<api::RequestListResponse, String>),
+    InvitesFetched(Result<api::InviteListResponse, String>),
     StatusFetched(Result<api::ServerStatus, String>),
-    RequestApproved(Result<bool, String>),
-    RequestDenied(Result<bool, String>),
+    InviteCreated(Result<serde_json::Value, String>),
+    InviteRevoked(Result<bool, String>),
     PeerDeleted(Result<bool, String>),
 }
 

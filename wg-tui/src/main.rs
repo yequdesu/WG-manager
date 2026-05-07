@@ -162,9 +162,9 @@ fn run(
                                 app.confirm_delete = true;
                                 app.confirm_timer = 0;
                             }
-                        } else if app.tab == Tab::Requests && !app.requests.is_empty() {
-                            let id = app.requests[app.request_selected].id.clone();
-                            app.deny_request(&id);
+                        } else if app.tab == Tab::Invites && !app.invites.is_empty() {
+                            let id = app.invites[app.invite_selected].id.clone();
+                            app.revoke_invite(&id);
                         }
                     }
                     KeyCode::Char('y') | KeyCode::Char('Y') => {
@@ -183,14 +183,13 @@ fn run(
                         }
                     }
                     KeyCode::Char('a') | KeyCode::Char('A') => {
-                        if app.tab == Tab::Requests && !app.requests.is_empty() {
-                            let id = app.requests[app.request_selected].id.clone();
-                            app.approve_request(&id);
+                        if app.tab == Tab::Invites {
+                            app.create_invite();
                         }
                     }
                     KeyCode::Char('1') => app.tab = Tab::Dashboard,
                     KeyCode::Char('2') => app.tab = Tab::Peers,
-                    KeyCode::Char('3') => app.tab = Tab::Requests,
+                    KeyCode::Char('3') => app.tab = Tab::Invites,
                     KeyCode::Char('4') => app.tab = Tab::Logs,
                     _ => {
                         if app.confirm_delete { app.confirm_delete = false; app.confirm_timer = 0; }

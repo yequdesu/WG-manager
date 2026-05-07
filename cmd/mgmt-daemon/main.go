@@ -283,6 +283,18 @@ func main() {
 	}
 	defer audit.Close()
 
+	// Migration: expire old pending approval requests on startup.
+	// The approval flow has been replaced by invite-based onboarding.
+	// Any leftover pending requests from previous versions are expired here.
+	if pending := state.PendingRequests(); len(pending) > 0 {
+		log.Printf("WARNING: Found %d legacy pending request(s) from deprecated approval flow — expiring all", len(pending))
+		expired := state.ExpireRequests()
+		log.Printf("Expired %d legacy request(s)", len(expired))
+		if err := state.Save(); err != nil {
+			log.Printf("WARNING: Failed to save after request expiry: %v", err)
+		}
+	}
+
 	// Bootstrap owner on first run if password is set and no users exist.
 	if !state.HasUsers() && appCfg.BootstrapOwnerPassword != "" {
 		ownerHash, err := store.HashPassword(appCfg.BootstrapOwnerPassword)
