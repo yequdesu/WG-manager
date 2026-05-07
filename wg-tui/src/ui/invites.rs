@@ -131,10 +131,11 @@ pub fn render_invite_detail(frame: &mut Frame, area: Rect, inv: &InviteInfo) {
 
 fn status_icon(status: &str) -> String {
     match status {
-        "pending" => "◌".to_string(),
-        "used" => "✓".to_string(),
+        "created" => "◌".to_string(),
+        "redeemed" => "✓".to_string(),
         "revoked" => "✗".to_string(),
         "expired" => "⏏".to_string(),
+        "deleted" => "🗑".to_string(),
         _ => "◌".to_string(),
     }
 }

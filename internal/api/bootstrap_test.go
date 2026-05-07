@@ -57,7 +57,7 @@ func TestBootstrapPreflightDependencyCheck(t *testing.T) {
 	script := getBootstrapScript(t, h)
 
 	// Locate the redeem curl call.
-	redeemIdx := strings.Index(script, `"https://$SERVER_HOST/api/v1/redeem"`)
+	redeemIdx := strings.Index(script, `$SERVER_URL/api/v1/redeem`)
 	if redeemIdx < 0 {
 		t.Fatal("could not find redeem curl call in bootstrap script")
 	}
@@ -191,7 +191,7 @@ func TestBootstrapConsumedTokenRecoveryMessage(t *testing.T) {
 	// Locate the section where the script parses the redeem response and
 	// validates SUCCESS.  We are looking for any recovery/guidance logic
 	// that handles the "redeem-OK but config-parse-fails" scenario.
-	redeemIdx := strings.Index(script, `"https://$SERVER_HOST/api/v1/redeem"`)
+	redeemIdx := strings.Index(script, `$SERVER_URL/api/v1/redeem`)
 	if redeemIdx < 0 {
 		t.Fatal("could not find redeem curl call in bootstrap script")
 	}

@@ -1223,6 +1223,10 @@ fi
 
 # ── OS detection ──
 detect_os() {
+    if grep -qi microsoft /proc/version 2>/dev/null || [ -f /proc/sys/fs/binfmt_misc/WSLInterop ]; then
+        echo "wsl"
+        return
+    fi
     case "$(uname -s)" in
         Linux*)  echo "linux" ;;
         Darwin*) echo "macos" ;;
@@ -1230,6 +1234,14 @@ detect_os() {
     esac
 }
 OS=$(detect_os)
+
+# ── WSL warning ──
+if [ "$OS" = "wsl" ]; then
+    warn "WSL detected. WireGuard should be installed on the Windows host, not inside WSL."
+    warn "The WireGuard kernel module is not available inside WSL."
+    warn "After installing WireGuard on Windows, re-run this script from the host."
+    warn "Continuing anyway — config file will be saved but the tunnel may not work."
+fi
 
 # ── Install WireGuard ──
 install_wg() {
@@ -1268,6 +1280,12 @@ install_wg() {
     esac
     log "WireGuard installed successfully"
 }
+
+# ── Preflight: JSON parser required ──
+if ! command -v jq &>/dev/null && ! command -v python3 &>/dev/null; then
+    err "Need jq or python3 to parse JSON. Install one and re-run."
+    exit 1
+fi
 
 # ── JSON parsing without jq ──
 json_get() {
@@ -1316,14 +1334,34 @@ fi
 install_wg
 
 log "Redeeming invite token..."
-RESP=$(curl -sSf -X POST "$SERVER_URL/api/v1/redeem" \
+HTTP_CODE=$(curl -sS -w "%%{http_code}" -o /tmp/wg-bootstrap-resp.json \
+    -X POST "$SERVER_URL/api/v1/redeem" \
     -H "Content-Type: application/json" \
     -d "{\"token\":\"$INVITE_TOKEN\",\"name\":\"$PEER_NAME\",\"dns\":\"$DEFAULT_DNS\"}")
+RESP=$(cat /tmp/wg-bootstrap-resp.json 2>/dev/null || echo "{}")
+rm -f /tmp/wg-bootstrap-resp.json
 
+if [ "$HTTP_CODE" != "200" ]; then
+    ERR_MSG=$(json_get "$RESP" "error" "unknown error")
+    err "Failed to redeem invite (HTTP $HTTP_CODE): $ERR_MSG"
+    exit 1
+fi
+
+# HTTP 200 — server accepted, token IS consumed.
 SUCCESS=$(json_get "$RESP" "success" "")
 if [ "$SUCCESS" != "true" ]; then
-    ERR_MSG=$(json_get "$RESP" "error" "unknown error")
-    err "Failed to redeem invite: $ERR_MSG"
+    err "Redeem succeeded (HTTP 200) but JSON parsing failed."
+    err ""
+    err "The invite token WAS CONSUMED and is now a one-time used token."
+    err "It cannot be reused — you need a NEW invite from your admin."
+    err ""
+    err "Recovery options:"
+    err "  1. Install jq/python3 and re-run with a fresh token"
+    err "  2. Contact your administrator to re-issue an invite"
+    err "  3. Show the raw response below to your admin for manual recovery"
+    err ""
+    err "Raw response from server:"
+    echo "$RESP"
     exit 1
 fi
 
