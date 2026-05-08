@@ -307,8 +307,7 @@ fn run(
                         if app.tab == Tab::Invites && !app.invites.is_empty() {
                             let device_name = app.invites[app.invite_selected].device_name.clone();
                             let id = app.invites[app.invite_selected].id.clone();
-                            let name = device_name.as_deref().unwrap_or("DEVICE_NAME");
-                            app.fetch_invite_link(&id, name);
+                            app.fetch_invite_link(&id, device_name.as_deref());
                         }
                     }
                     KeyCode::Char('F') => {

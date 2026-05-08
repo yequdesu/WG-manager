@@ -388,16 +388,16 @@ impl App {
         });
     }
 
-    pub fn fetch_invite_link(&mut self, id: &str, device_name: &str) {
+    pub fn fetch_invite_link(&mut self, id: &str, device_name: Option<&str>) {
         self.invite_link_active = true;
         self.invite_link_result = None;
         let api = self.api.clone();
         let invite_id = id.to_string();
-        let name = device_name.to_string();
+        let name = device_name.map(|name| name.to_string());
         let rt = self.rt.clone();
         let tx = self.data_tx.clone();
         rt.spawn(async move {
-            let result = api.get_invite_link(&invite_id, &name).await;
+            let result = api.get_invite_link(&invite_id, name.as_deref()).await;
             let _ = tx.send(DataEvent::InviteLinkFetched(result));
         });
     }

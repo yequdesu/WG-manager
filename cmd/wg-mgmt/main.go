@@ -559,7 +559,7 @@ type inviteLinkResponse struct {
 func cmdInviteLink(c *cli.Client, args []string) error {
 	fs := flag.NewFlagSet("link", flag.ExitOnError)
 	id := fs.String("id", "", "invite ID or raw token")
-	name := fs.String("name", "my-device", "device name for the bootstrap URL")
+	name := fs.String("name", "", "device name for the bootstrap URL")
 	format := fs.String("format", "human", "output format (human|json)")
 
 	if err := fs.Parse(args); err != nil {
@@ -580,7 +580,10 @@ func cmdInviteLink(c *cli.Client, args []string) error {
 		return err
 	}
 
-	path := fmt.Sprintf("/api/v1/invites/%s/link?name=%s", url.PathEscape(resolvedID), url.QueryEscape(*name))
+	path := fmt.Sprintf("/api/v1/invites/%s/link", url.PathEscape(resolvedID))
+	if strings.TrimSpace(*name) != "" {
+		path += "?name=" + url.QueryEscape(strings.TrimSpace(*name))
+	}
 	var resp inviteLinkResponse
 	if err := c.GetJSON(path, &resp); err != nil {
 		return fmt.Errorf("get invite link: %w", err)
@@ -723,7 +726,7 @@ func resolveInviteRef(c *cli.Client, ref string) (string, error) {
 func cmdInviteQRCode(c *cli.Client, args []string) error {
 	fs := flag.NewFlagSet("qrcode", flag.ExitOnError)
 	id := fs.String("id", "", "invite token (raw token from invite create)")
-	name := fs.String("name", "mobile", "device name for the QR bootstrap URL")
+	name := fs.String("name", "", "device name for the QR bootstrap URL")
 	output := fs.String("output", "", "output SVG file path (required)")
 
 	if err := fs.Parse(args); err != nil {
@@ -737,7 +740,10 @@ func cmdInviteQRCode(c *cli.Client, args []string) error {
 		return fmt.Errorf("--output is required for QR code generation")
 	}
 
-	path := fmt.Sprintf("/api/v1/invites/qrcode?token=%s&name=%s", *id, *name)
+	path := "/api/v1/invites/qrcode?token=" + url.QueryEscape(*id)
+	if strings.TrimSpace(*name) != "" {
+		path += "&name=" + url.QueryEscape(strings.TrimSpace(*name))
+	}
 	svgBytes, err := c.GetRaw(path)
 	if err != nil {
 		return fmt.Errorf("fetch QR code: %w", err)

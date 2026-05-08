@@ -163,14 +163,17 @@ impl ApiClient {
     pub async fn get_invite_link(
         &self,
         invite_id: &str,
-        device_name: &str,
+        device_name: Option<&str>,
     ) -> Result<serde_json::Value, String> {
-        let url = format!(
-            "{}/api/v1/invites/{}/link?name={}",
+        let mut url = format!(
+            "{}/api/v1/invites/{}/link",
             self.base_url,
             urlencoding::encode(invite_id),
-            urlencoding::encode(device_name),
         );
+        if let Some(name) = device_name.filter(|name| !name.trim().is_empty()) {
+            url.push_str("?name=");
+            url.push_str(&urlencoding::encode(name));
+        }
         let mut req = self.client.get(&url);
         if !self.api_key.is_empty() {
             req = req.header("Authorization", format!("Bearer {}", self.api_key));
