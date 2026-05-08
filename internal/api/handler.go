@@ -167,14 +167,14 @@ ol{font-size:13px;color:#c9d1d9;line-height:2;padding-left:16px;margin-top:4px}
   <p>Pipe the bootstrap script directly into bash. Always inspect first:</p>
   <pre class="cmd" id="inspect-cmd">curl -sSf ` + publicURL + `/bootstrap</pre>
   <p class="hint">Replace TOKEN below and run:</p>
-  <pre class="cmd" id="run-cmd">curl -sSf "` + publicURL + `/bootstrap?token=TOKEN&name=my-device" | sudo bash</pre>
+  <pre class="cmd" id="run-cmd">curl -sSf "` + publicURL + `/bootstrap?token=TOKEN" | sudo bash</pre>
 </div>
 <div class="box">
   <h3>Manual Redemption (All Platforms)</h3>
   <p>Redeem via the API and save the config manually:</p>
   <pre>curl -sSf -X POST ` + publicURL + `/api/v1/redeem \
   -H "Content-Type: application/json" \
-  -d '{"token":"YOUR_TOKEN","name":"my-device"}'</pre>
+  -d '{"token":"YOUR_TOKEN","name":"MYPC"}'</pre>
   <p class="hint">Windows PowerShell: <code>Invoke-RestMethod -Uri ` + publicURL + `/api/v1/redeem -Method Post -Body (@{token="TOKEN";name="MYPC"} | ConvertTo-Json) -ContentType "application/json"</code></p>
 </div>
 <div class="box">
@@ -192,7 +192,7 @@ ol{font-size:13px;color:#c9d1d9;line-height:2;padding-left:16px;margin-top:4px}
 <script>
 function generateBootstrap() {
   var token = document.getElementById('token').value.trim();
-  var name = document.getElementById('peer-name').value.trim() || 'my-device';
+  var name = document.getElementById('peer-name').value.trim();
   var result = document.getElementById('result');
   result.classList.remove('error');
   if (!token) {
@@ -201,7 +201,8 @@ function generateBootstrap() {
     result.classList.remove('hidden');
     return;
   }
-  var url = '` + publicURL + `/bootstrap?token=' + encodeURIComponent(token) + '&name=' + encodeURIComponent(name);
+  var url = '` + publicURL + `/bootstrap?token=' + encodeURIComponent(token);
+  if (name) { url += '&name=' + encodeURIComponent(name); }
   result.className = '';
   result.innerHTML = '<div class="title">Bootstrap Command</div><pre style="margin-top:4px;word-break:break-all">curl -sSf "' + url + '" | sudo bash</pre><div class="hint">Tip: run <code>curl -sSf "' + url + '"</code> first to inspect the script before piping to bash.</div>';
   result.classList.remove('hidden');
@@ -217,20 +218,11 @@ function generateBootstrap() {
 // Access: LocalOnly + RequireRole(admin, owner).
 // Query params: ?token=RAW_TOKEN&name=DEVICE_NAME.
 // The raw token is verified by hashing it and checking against the invite store.
-// The QR encodes: PUBLIC_URL/bootstrap?token=RAW_TOKEN&name=DEVICE_NAME
+// The QR encodes: PUBLIC_URL/bootstrap?token=RAW_TOKEN[&name=DEVICE_NAME]
 func (h *Handler) ServeInviteQR(w http.ResponseWriter, r *http.Request) {
 	token := strings.TrimSpace(r.URL.Query().Get("token"))
 	if token == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "token query parameter is required"})
-		return
-	}
-
-	name := strings.TrimSpace(r.URL.Query().Get("name"))
-	if name == "" {
-		name = "mobile"
-	}
-	if err := validatePeerName(name); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 
@@ -260,9 +252,19 @@ func (h *Handler) ServeInviteQR(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	name := strings.TrimSpace(r.URL.Query().Get("name"))
+	if name == "" {
+		name = inv.DeviceName
+	}
+	if name != "" {
+		if err := validatePeerName(name); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+
 	// Build the bootstrap URL using the canonical public URL helper.
-	publicURL := h.cfg().PublicURL()
-	bootstrapURL := fmt.Sprintf("%s/bootstrap?token=%s&name=%s", publicURL, token, name)
+	bootstrapURL := bootstrapURLWithName(h.cfg().PublicURL(), token, name)
 
 	svg := generateQR(bootstrapURL)
 	w.Header().Set("Content-Type", "image/svg+xml")
@@ -640,12 +642,13 @@ func (h *Handler) CreateInvite(w http.ResponseWriter, r *http.Request) {
 
 	audit.Log("invite_created", auditFields("invite_id", inv.ID, "issued_by", issuedBy))
 
+	bootstrapURL := bootstrapURLWithName(h.cfg().PublicURL(), rawToken, inv.DeviceName)
 	writeJSON(w, http.StatusCreated, map[string]interface{}{
 		"invite_id":     inv.ID,
 		"token":         rawToken,
 		"expires_at":    inv.ExpiresAt,
-		"bootstrap_url": fmt.Sprintf("%s/bootstrap?token=%s", h.cfg().PublicURL(), rawToken),
-		"command":       fmt.Sprintf("curl -sSf \"%s/bootstrap?token=%s&name=DEVICE_NAME\" | sudo bash", h.cfg().PublicURL(), rawToken),
+		"bootstrap_url": bootstrapURL,
+		"command":       fmt.Sprintf("curl -sSf \"%s\" | sudo bash", bootstrapURL),
 		"message":       "Share this token with the client. It will only be shown once.",
 	})
 }
@@ -813,13 +816,6 @@ func (h *Handler) InviteLink(w http.ResponseWriter, r *http.Request) {
 	}
 
 	name := strings.TrimSpace(r.URL.Query().Get("name"))
-	if name == "" {
-		name = "my-device"
-	}
-	if err := validatePeerName(name); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
 
 	// Try ID first, then token hash lookup.
 	inv, ok := h.store.GetInviteByID(id)
@@ -835,9 +831,15 @@ func (h *Handler) InviteLink(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Build bootstrap URL using the server's public URL.
-	publicURL := h.cfg().PublicURL()
-	escapedName := url.QueryEscape(name)
+	if name == "" {
+		name = inv.DeviceName
+	}
+	if name != "" {
+		if err := validatePeerName(name); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+	}
 
 	if foundByID {
 		if inv.RawToken == "" {
@@ -849,7 +851,7 @@ func (h *Handler) InviteLink(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		bootstrapURL := fmt.Sprintf("%s/bootstrap?token=%s&name=%s", publicURL, url.QueryEscape(inv.RawToken), escapedName)
+		bootstrapURL := bootstrapURLWithName(h.cfg().PublicURL(), inv.RawToken, name)
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"invite_id":     inv.ID,
 			"status":        string(inv.Status),
@@ -861,7 +863,7 @@ func (h *Handler) InviteLink(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Found by raw token — reconstruct the bootstrap URL.
-	bootstrapURL := fmt.Sprintf("%s/bootstrap?token=%s&name=%s", publicURL, url.QueryEscape(id), escapedName)
+	bootstrapURL := bootstrapURLWithName(h.cfg().PublicURL(), id, name)
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"invite_id":     inv.ID,
 		"status":        string(inv.Status),
@@ -1645,6 +1647,14 @@ log "Done!"
 
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
+func bootstrapURLWithName(publicURL, token, name string) string {
+	bootstrapURL := fmt.Sprintf("%s/bootstrap?token=%s", publicURL, url.QueryEscape(token))
+	if name != "" {
+		bootstrapURL += "&name=" + url.QueryEscape(name)
+	}
+	return bootstrapURL
 }
 
 func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
