@@ -196,7 +196,7 @@ curl -s -X POST http://127.0.0.1:58880/api/v1/invites \
 将下方的 `BOOTSTRAP_URL` 替换为创建邀请时获得的实际 URL。
 
 ```bash
-curl -sSf "BOOTSTRAP_URL&name=my-device" | sudo bash
+curl -sSf "BOOTSTRAP_URL" | sudo bash
 ```
 
 脚本会检测系统、安装 WireGuard（如需要）、兑换邀请、写入配置、启动隧道并验证连通性。
@@ -429,16 +429,19 @@ wg-mgmt invite delete <id_prefix_or_name_hint>
 
 再次查看已发出邀请的完整 bootstrap URL 和可复制入网指令。新邀请可通过 invite ID 查询；旧版本创建、未保存 raw token 的邀请需要使用原始 token，或重新创建邀请。
 
+如果创建邀请时指定了 `--device-name`，生成链接会自动复用该设备名；否则链接不包含 `name`，bootstrap 脚本会使用客户端 hostname。显式传入 `--name` 时会覆盖已保存的设备名。
+
 ```bash
-wg-mgmt invite link --id <invite_id_or_token> --name <device_name>
 # 也支持使用 invite list 里显示的短 ID 或唯一名称：
 wg-mgmt invite link <id_prefix_or_name_hint>
+# 如需覆盖 peer 名称：
+wg-mgmt invite link <id_prefix_or_name_hint> --name <device_name>
 ```
 
 | 参数 | 必需 | 说明 |
 |------|------|------|
 | `--id` | 否 | 邀请 ID 或原始 token；也可作为位置参数传入 |
-| `--name` | 否 | 写入 bootstrap URL 的设备名 |
+| `--name` | 否 | 覆盖写入 bootstrap URL 的设备名 |
 | `--format` | 否 | 输出格式（`human` 或 `json`） |
 
 ### invite force-delete
@@ -462,7 +465,7 @@ wg-mgmt invite qrcode --id <token> --name <device_name> --output <file.svg>
 | 参数 | 必需 | 说明 |
 |------|------|------|
 | `--id` | 是 | 邀请 token（来自 create 输出） |
-| `--name` | 否 | QR URL 中的设备名称（默认：`mobile`） |
+| `--name` | 否 | QR URL 中的设备名称；默认省略，由 bootstrap 使用客户端 hostname |
 | `--output` | 是 | 输出 SVG 文件路径 |
 
 ---
@@ -701,17 +704,18 @@ YOUR_DOMAIN {
 
 | 场景 | Bootstrap URL 格式 |
 |------|-------------------|
-| 域名 + HTTPS | `https://YOUR_DOMAIN/bootstrap?token=TOKEN&name=DEVICE` |
-| 仅 IP + HTTP | `http://YOUR_SERVER_IP/bootstrap?token=TOKEN&name=DEVICE` |
+| 域名 + HTTPS | `https://YOUR_DOMAIN/bootstrap?token=TOKEN` |
+| 仅 IP + HTTP | `http://YOUR_SERVER_IP/bootstrap?token=TOKEN` |
+| 显式设备名 | `https://YOUR_DOMAIN/bootstrap?token=TOKEN&name=DEVICE` |
 
 用户可通过管道直接传给 bash。建议先检查脚本内容：
 
 ```bash
 # 检查
-curl -sSf "https://YOUR_DOMAIN/bootstrap?token=TOKEN&name=my-device"
+curl -sSf "https://YOUR_DOMAIN/bootstrap?token=TOKEN"
 
 # 执行（确认后）
-curl -sSf "https://YOUR_DOMAIN/bootstrap?token=TOKEN&name=my-device" | sudo bash
+curl -sSf "https://YOUR_DOMAIN/bootstrap?token=TOKEN" | sudo bash
 ```
 
 bootstrap 脚本不包含全局 API 密钥，邀请 token 是唯一凭证，且一次性使用。

@@ -202,7 +202,7 @@ Share the bootstrap URL with the user. The token is one-time use and consumed on
 Replace `BOOTSTRAP_URL` below with the URL from the invite creation step.
 
 ```bash
-curl -sSf "BOOTSTRAP_URL&name=my-device" | sudo bash
+curl -sSf "BOOTSTRAP_URL" | sudo bash
 ```
 
 The script automatically:
@@ -463,16 +463,19 @@ wg-mgmt invite delete <id_prefix_or_name_hint>
 
 Shows the full bootstrap URL and copy-paste onboarding command for an issued invite. New invites can be looked up by invite ID because the server retains the raw token locally; legacy invites created before this change may require the original raw token.
 
+If the invite was created with `--device-name`, that name is reused in the generated URL. Otherwise the URL omits `name`, and the bootstrap script uses the client's hostname. Passing `--name` explicitly overrides the stored device name.
+
 ```bash
-wg-mgmt invite link --id <invite_id_or_token> --name <device_name>
 # Docker-style shorthand also works with the short ID shown by invite list:
 wg-mgmt invite link <id_prefix_or_name_hint>
+# Override the peer name explicitly if needed:
+wg-mgmt invite link <id_prefix_or_name_hint> --name <device_name>
 ```
 
 | Flag | Required | Description |
 |------|----------|-------------|
 | `--id` | No | Invite ID or raw token; can also be passed as a positional argument |
-| `--name` | No | Device name embedded in the bootstrap URL |
+| `--name` | No | Override device name embedded in the bootstrap URL |
 | `--format` | No | Output format (`human` or `json`) |
 
 ### invite force-delete
@@ -496,7 +499,7 @@ wg-mgmt invite qrcode --id <token> --name <device_name> --output <file.svg>
 | Flag | Required | Description |
 |------|----------|-------------|
 | `--id` | Yes | Invite token (raw token from invite create output) |
-| `--name` | No | Device name embedded in the QR URL (default: `mobile`) |
+| `--name` | No | Device name embedded in the QR URL; omitted by default so bootstrap uses the client hostname |
 | `--output` | Yes | Output SVG file path |
 
 ---
@@ -860,17 +863,18 @@ With the reverse proxy in place, the bootstrap URL uses your domain or server IP
 
 | Scenario | Bootstrap URL format |
 |----------|---------------------|
-| Domain + HTTPS | `https://YOUR_DOMAIN/bootstrap?token=TOKEN&name=DEVICE` |
-| IP-only + HTTP | `http://YOUR_SERVER_IP/bootstrap?token=TOKEN&name=DEVICE` |
+| Domain + HTTPS | `https://YOUR_DOMAIN/bootstrap?token=TOKEN` |
+| IP-only + HTTP | `http://YOUR_SERVER_IP/bootstrap?token=TOKEN` |
+| Explicit device name | `https://YOUR_DOMAIN/bootstrap?token=TOKEN&name=DEVICE` |
 
 Users pipe this directly into bash. The script is served as plain text. Users should inspect it before running:
 
 ```bash
 # Inspect
-curl -sSf "https://YOUR_DOMAIN/bootstrap?token=TOKEN&name=my-device"
+curl -sSf "https://YOUR_DOMAIN/bootstrap?token=TOKEN"
 
 # Run (only after inspecting)
-curl -sSf "https://YOUR_DOMAIN/bootstrap?token=TOKEN&name=my-device" | sudo bash
+curl -sSf "https://YOUR_DOMAIN/bootstrap?token=TOKEN" | sudo bash
 ```
 
 The bootstrap script contains no global API key. The invite token is the sole credential and is consumed on first use.
