@@ -411,6 +411,8 @@ inv_def456   redeemed  phone1      admin       -                   2026-05-08T10
 
 ```bash
 wg-mgmt invite revoke --id <invite_id>
+# 也支持类似 Docker 的简写：
+wg-mgmt invite revoke <id_prefix_or_name_hint>
 ```
 
 ### invite delete
@@ -419,6 +421,8 @@ wg-mgmt invite revoke --id <invite_id>
 
 ```bash
 wg-mgmt invite delete --id <invite_id>
+# 也支持类似 Docker 的简写：
+wg-mgmt invite delete <id_prefix_or_name_hint>
 ```
 
 ### invite link
@@ -427,11 +431,13 @@ wg-mgmt invite delete --id <invite_id>
 
 ```bash
 wg-mgmt invite link --id <invite_id_or_token> --name <device_name>
+# 也支持使用 invite list 里显示的短 ID 或唯一名称：
+wg-mgmt invite link <id_prefix_or_name_hint>
 ```
 
 | 参数 | 必需 | 说明 |
 |------|------|------|
-| `--id` | 是 | 邀请 ID 或原始 token |
+| `--id` | 否 | 邀请 ID 或原始 token；也可作为位置参数传入 |
 | `--name` | 否 | 写入 bootstrap URL 的设备名 |
 | `--format` | 否 | 输出格式（`human` 或 `json`） |
 
@@ -441,6 +447,8 @@ wg-mgmt invite link --id <invite_id_or_token> --name <device_name>
 
 ```bash
 wg-mgmt invite force-delete --id <invite_id> --confirm <invite_id>
+# 前缀/名称会像 Docker 一样解析，但仍必须二次确认：
+wg-mgmt invite force-delete <id_prefix_or_name_hint> --confirm <same_prefix_or_full_id>
 ```
 
 ### invite qrcode

@@ -445,6 +445,8 @@ Revokes an invite by its ID. Redeemed invites cannot be revoked.
 
 ```bash
 wg-mgmt invite revoke --id <invite_id>
+# Docker-style shorthand also works:
+wg-mgmt invite revoke <id_prefix_or_name_hint>
 ```
 
 ### invite delete
@@ -453,6 +455,8 @@ Soft-deletes an invite (marks as deleted but preserves history).
 
 ```bash
 wg-mgmt invite delete --id <invite_id>
+# Docker-style shorthand also works:
+wg-mgmt invite delete <id_prefix_or_name_hint>
 ```
 
 ### invite link
@@ -461,11 +465,13 @@ Shows the full bootstrap URL and copy-paste onboarding command for an issued inv
 
 ```bash
 wg-mgmt invite link --id <invite_id_or_token> --name <device_name>
+# Docker-style shorthand also works with the short ID shown by invite list:
+wg-mgmt invite link <id_prefix_or_name_hint>
 ```
 
 | Flag | Required | Description |
 |------|----------|-------------|
-| `--id` | Yes | Invite ID or raw token |
+| `--id` | No | Invite ID or raw token; can also be passed as a positional argument |
 | `--name` | No | Device name embedded in the bootstrap URL |
 | `--format` | No | Output format (`human` or `json`) |
 
@@ -475,6 +481,8 @@ Permanently removes an invite in any state. This is irreversible and requires a 
 
 ```bash
 wg-mgmt invite force-delete --id <invite_id> --confirm <invite_id>
+# Prefixes/name hints are resolved like Docker, but confirmation is still required:
+wg-mgmt invite force-delete <id_prefix_or_name_hint> --confirm <same_prefix_or_full_id>
 ```
 
 ### invite qrcode

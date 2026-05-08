@@ -497,11 +497,16 @@ func cmdInviteRevoke(c *cli.Client, args []string) error {
 		return err
 	}
 
-	if *id == "" {
-		return fmt.Errorf("--id is required for invite revocation")
+	inviteID := firstNonEmpty(*id, firstArg(fs.Args()))
+	if inviteID == "" {
+		return fmt.Errorf("invite ID is required: wg-mgmt invite revoke <id>")
+	}
+	resolvedID, err := resolveInviteRef(c, inviteID)
+	if err != nil {
+		return err
 	}
 
-	path := fmt.Sprintf("/api/v1/invites/%s", *id)
+	path := fmt.Sprintf("/api/v1/invites/%s", url.PathEscape(resolvedID))
 	var resp inviteActionResponse
 	if err := c.DeleteJSON(path, &resp); err != nil {
 		return fmt.Errorf("revoke invite: %w", err)
@@ -521,11 +526,16 @@ func cmdInviteDelete(c *cli.Client, args []string) error {
 		return err
 	}
 
-	if *id == "" {
-		return fmt.Errorf("--id is required for invite deletion")
+	inviteID := firstNonEmpty(*id, firstArg(fs.Args()))
+	if inviteID == "" {
+		return fmt.Errorf("invite ID is required: wg-mgmt invite delete <id>")
+	}
+	resolvedID, err := resolveInviteRef(c, inviteID)
+	if err != nil {
+		return err
 	}
 
-	path := fmt.Sprintf("/api/v1/invites/%s?action=delete", *id)
+	path := fmt.Sprintf("/api/v1/invites/%s?action=delete", url.PathEscape(resolvedID))
 	var resp inviteActionResponse
 	if err := c.DeleteJSON(path, &resp); err != nil {
 		return fmt.Errorf("delete invite: %w", err)
@@ -556,15 +566,21 @@ func cmdInviteLink(c *cli.Client, args []string) error {
 		return err
 	}
 
-	if *id == "" {
-		return fmt.Errorf("--id (invite ID or raw token) is required")
+	inviteID := firstNonEmpty(*id, firstArg(fs.Args()))
+	if inviteID == "" {
+		return fmt.Errorf("invite ID, name hint, or raw token is required: wg-mgmt invite link <id|name|token>")
 	}
 
 	if *format != "human" && *format != "json" {
 		return fmt.Errorf("unsupported format %q", *format)
 	}
 
-	path := fmt.Sprintf("/api/v1/invites/%s/link?name=%s", url.PathEscape(*id), url.QueryEscape(*name))
+	resolvedID, err := resolveInviteRef(c, inviteID)
+	if err != nil {
+		return err
+	}
+
+	path := fmt.Sprintf("/api/v1/invites/%s/link?name=%s", url.PathEscape(resolvedID), url.QueryEscape(*name))
 	var resp inviteLinkResponse
 	if err := c.GetJSON(path, &resp); err != nil {
 		return fmt.Errorf("get invite link: %w", err)
@@ -612,19 +628,24 @@ func cmdInviteForceDelete(c *cli.Client, args []string) error {
 		return err
 	}
 
-	if *id == "" {
+	inviteID := firstNonEmpty(*id, firstArg(fs.Args()))
+	if inviteID == "" {
 		return fmt.Errorf("--id is required for force-delete")
+	}
+	resolvedID, err := resolveInviteRef(c, inviteID)
+	if err != nil {
+		return err
 	}
 
 	if *confirm == "" {
-		return fmt.Errorf("--confirm is required for force-delete: use --confirm <same-id> to confirm permanent deletion")
+		return fmt.Errorf("--confirm is required for force-delete: use --confirm %s to confirm permanent deletion", inviteID)
 	}
 
-	if *confirm != *id {
-		return fmt.Errorf("confirmation mismatch: --confirm value %q does not match --id %q", *confirm, *id)
+	if *confirm != inviteID && *confirm != resolvedID {
+		return fmt.Errorf("confirmation mismatch: --confirm value %q must match %q or resolved ID %q", *confirm, inviteID, resolvedID)
 	}
 
-	path := fmt.Sprintf("/api/v1/invites/%s?action=force-delete", url.PathEscape(*id))
+	path := fmt.Sprintf("/api/v1/invites/%s?action=force-delete", url.PathEscape(resolvedID))
 	var resp inviteActionResponse
 	if err := c.DeleteJSON(path, &resp); err != nil {
 		return fmt.Errorf("force-delete invite: %w", err)
@@ -632,6 +653,69 @@ func cmdInviteForceDelete(c *cli.Client, args []string) error {
 
 	fmt.Fprintln(os.Stdout, resp.Message)
 	return nil
+}
+
+func firstArg(args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(args[0])
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func resolveInviteRef(c *cli.Client, ref string) (string, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return "", fmt.Errorf("invite reference is required")
+	}
+
+	var resp inviteListResponse
+	if err := c.GetJSON("/api/v1/invites?show_deleted=true", &resp); err != nil {
+		return ref, nil
+	}
+
+	for _, invite := range resp.Invites {
+		if invite.ID == ref {
+			return invite.ID, nil
+		}
+	}
+
+	var idMatches []inviteInfo
+	for _, invite := range resp.Invites {
+		if strings.HasPrefix(invite.ID, ref) {
+			idMatches = append(idMatches, invite)
+		}
+	}
+	if len(idMatches) == 1 {
+		return idMatches[0].ID, nil
+	}
+	if len(idMatches) > 1 {
+		return "", fmt.Errorf("invite reference %q is ambiguous; use a longer ID prefix", ref)
+	}
+
+	var nameMatches []inviteInfo
+	for _, invite := range resp.Invites {
+		if invite.DisplayNameHint == ref || invite.DeviceName == ref {
+			nameMatches = append(nameMatches, invite)
+		}
+	}
+	if len(nameMatches) == 1 {
+		return nameMatches[0].ID, nil
+	}
+	if len(nameMatches) > 1 {
+		return "", fmt.Errorf("invite name %q is ambiguous; use the ID prefix instead", ref)
+	}
+
+	return ref, nil
 }
 
 // ── invite qrcode ──────────────────────────────────────────────────────
