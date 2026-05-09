@@ -229,6 +229,8 @@ func cmdPeerAlias(c *cli.Client, args []string) error {
 	var aliasStr string
 	if len(posArgs) >= 2 {
 		aliasStr = posArgs[1]
+	} else if len(posArgs) == 1 && *id != "" {
+		aliasStr = posArgs[0]
 	} else if *alias != "" {
 		aliasStr = *alias
 		if firstArg(posArgs) == "" {
@@ -240,7 +242,7 @@ func cmdPeerAlias(c *cli.Client, args []string) error {
 		return fmt.Errorf("alias is required")
 	}
 
-	resolvedPubkey, err := resolvePeerPubkey(c, pubkeyStr)
+	resolvedPubkey, err := resolvePeerPubkey(c, pubkeyStr, true)
 	if err != nil {
 		return err
 	}
@@ -320,7 +322,7 @@ func cmdPeerDelete(c *cli.Client, args []string) error {
 		fmt.Fprintln(os.Stderr, "Note: --id is deprecated. Use: wg-mgmt peer delete <pubkey>")
 	}
 
-	resolvedPubkey, err := resolvePeerPubkey(c, pubkeyStr)
+	resolvedPubkey, err := resolvePeerPubkey(c, pubkeyStr, false)
 	if err != nil {
 		return err
 	}
@@ -854,7 +856,7 @@ func resolveInviteRef(c *cli.Client, ref string) (string, error) {
 	return ref, nil
 }
 
-func resolvePeerPubkey(c *cli.Client, ref string) (string, error) {
+func resolvePeerPubkey(c *cli.Client, ref string, allowAlias bool) (string, error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
 		return "", fmt.Errorf("peer public key reference is required")
@@ -895,17 +897,19 @@ func resolvePeerPubkey(c *cli.Client, ref string) (string, error) {
 		return "", fmt.Errorf("public key prefix %q is ambiguous:\n%s", ref, strings.Join(candidates, "\n"))
 	}
 
-	var aliasMatches []peerListItem
-	for _, p := range resp.Peers {
-		if p.Alias != "" && p.Alias == ref {
-			aliasMatches = append(aliasMatches, p)
+	if allowAlias {
+		var aliasMatches []peerListItem
+		for _, p := range resp.Peers {
+			if p.Alias != "" && p.Alias == ref {
+				aliasMatches = append(aliasMatches, p)
+			}
 		}
-	}
-	if len(aliasMatches) == 1 {
-		return aliasMatches[0].PublicKey, nil
-	}
-	if len(aliasMatches) > 1 {
-		return "", fmt.Errorf("alias %q matches multiple peers; use the public key instead", ref)
+		if len(aliasMatches) == 1 {
+			return aliasMatches[0].PublicKey, nil
+		}
+		if len(aliasMatches) > 1 {
+			return "", fmt.Errorf("alias %q matches multiple peers; use the public key instead", ref)
+		}
 	}
 
 	return "", fmt.Errorf("no peer found for %q", ref)

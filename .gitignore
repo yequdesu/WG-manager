@@ -32,6 +32,13 @@ server/peers.json
 testdata/
 *.log
 
+# Build artifacts (root-level binaries only)
+/mgmt-daemon
+/wg-mgmt
+
+# Backup files
+*.bak
+
 # Rust / wg-tui
 wg-tui/target/
 

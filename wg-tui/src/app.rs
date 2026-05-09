@@ -396,8 +396,14 @@ impl App {
         let rt = self.rt.clone();
         let tx = self.data_tx.clone();
         rt.spawn(async move {
-            let _ = api.set_peer_alias(&pubkey, &alias).await;
-            let _ = tx.send(DataEvent::PeerDeleted(Ok(true)));
+            match api.set_peer_alias(&pubkey, &alias).await {
+                Ok(_) => {
+                    let _ = tx.send(DataEvent::PeerDeleted(Ok(true)));
+                }
+                Err(e) => {
+                    let _ = tx.send(DataEvent::PeersFetched(Err(e)));
+                }
+            }
         });
     }
 
