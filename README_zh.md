@@ -1,6 +1,6 @@
 # WG-Manager
 
-WG-Manager 是面向星形 WireGuard 拓扑的服务器端管理层。Go 守护进程负责 peer 生命周期、身份系统、邀请入网和 HTTPS bootstrap 分发；Rust Ratatui TUI 提供本地管理界面。此外还提供本地 CLI（`wg-mgmt`）用于服务器管理。
+WG-Manager 是面向星形 WireGuard 拓扑的服务器端管理层。Go 守护进程负责 peer 生命周期、身份系统、邀请入网和 HTTP bootstrap 分发；Rust Ratatui TUI 提供本地管理界面。此外还提供本地 CLI（`wg-mgmt`）用于服务器管理。
 
 支持 **Linux / macOS / WSL / Windows / 移动端 QR**。当前版本只保留一种入网模型：**管理员创建一次性邀请，用户使用邀请 token 入网**。
 
@@ -65,10 +65,10 @@ owner/admin 创建邀请  ->  用户兑换邀请  ->  peer 原子创建并写入
 
 ```
 ┌─ Server ───────────────────────────────────────┐
-│  nginx/caddy :443 (TLS 终止)                   │
-│       │ proxy_pass localhost:58880              │
+│  nginx/caddy :8080                             │
+│       │ proxy_pass 127.0.0.1:58880             │
 │  ┌────┴─────────────────────────────────────┐  │
-│  │ wg-mgmt-daemon 127.0.0.1:58880           │  │
+│  │ wg-mgmt-daemon 127.0.0.1:58880          │  │
 │  │ POST /api/v1/login     ← session auth    │  │
 │  │ POST /api/v1/redeem    ← 兑换邀请        │  │
 │  │ GET  /bootstrap        ← 加入脚本         │  │
@@ -77,7 +77,7 @@ owner/admin 创建邀请  ->  用户兑换邀请  ->  peer 原子创建并写入
 │  │ WireGuard wg0  10.0.0.1/24               │  │
 │  └──────────────────────────────────────────┘  │
 └────────┬──────────────┬─────────────────────────┘
-         │ WG 隧道      │ HTTPS
+         │ WG 隧道      │ HTTP :8080
       ┌──┴────┐    ┌────┴──────┐
       │ Linux │    │  Windows   │
       │ macOS │    │  PS / CMD  │
@@ -91,7 +91,7 @@ owner/admin 创建邀请  ->  用户兑换邀请  ->  peer 原子创建并写入
 
 ### 1. 服务端初始化
 
-前置条件：Ubuntu/Debian 服务器，已安装 Git。域名可选，但推荐配置（可以自动启用 HTTPS）。
+前置条件：Ubuntu/Debian 服务器，已安装 Git。
 
 ```bash
 git clone git@github.com:yequdesu/WG-manager.git ~/WG-manager
@@ -120,7 +120,7 @@ sudo bash server/setup-server.sh
 
 | 配置项 | 说明 |
 |--------|------|
-| `MGMT_LISTEN=127.0.0.1:58880` | 守护进程默认只监听本机，生产环境通过反向代理暴露 HTTPS。 |
+| `MGMT_LISTEN=127.0.0.1:8080` | 守护进程默认只监听本机，生产环境通过反向代理暴露 HTTP。 |
 | `MGMT_API_KEY` | break-glass 管理后路，不应分发给用户。 |
 | `BOOTSTRAP_OWNER_PASSWORD` | 首次启动时创建 `admin` owner 账户的密码。 |
 
@@ -137,7 +137,7 @@ POOL_SERVERS=10.0.0.101-10.0.0.200
 
 ```bash
 API_KEY=$(grep MGMT_API_KEY ~/WG-manager/config.env | cut -d= -f2)
-curl -s -X POST http://127.0.0.1:58880/api/v1/invites \
+curl -s -X POST http://127.0.0.1:8080/api/v1/invites \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"pool_name": "CLIENTS"}'
@@ -170,7 +170,7 @@ wg-tui
 ```bash
 API_KEY=$(grep MGMT_API_KEY ~/WG-manager/config.env | cut -d= -f2)
 
-curl -s -X POST http://127.0.0.1:58880/api/v1/invites \
+curl -s -X POST http://127.0.0.1:8080/api/v1/invites \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"max_uses": 1}'
@@ -181,11 +181,11 @@ curl -s -X POST http://127.0.0.1:58880/api/v1/invites \
 ```json
 {
   "token": "inv_abc123...",
-  "url": "https://YOUR_DOMAIN/bootstrap?token=inv_abc123..."
+  "url": "http://YOUR_DOMAIN:8080/bootstrap?token=inv_abc123..."
 }
 ```
 
-配置了域名时 URL 使用 `https://YOUR_DOMAIN/`，未配置域名时降级为 `http://YOUR_SERVER_IP/`。
+配置了域名时 URL 使用 `http://YOUR_DOMAIN:8080/`，未配置域名时使用 `http://YOUR_SERVER_IP:8080/`。
 
 ---
 
@@ -225,12 +225,26 @@ curl -o wg0.conf "BOOTSTRAP_URL&name=MYPC"
 ```bash
 API_KEY=$(grep MGMT_API_KEY ~/WG-manager/config.env | cut -d= -f2)
 
-curl -s "http://127.0.0.1:58880/api/v1/invites/qrcode?token=inv_abc123&name=phone1" \
+curl -s "http://127.0.0.1:8080/api/v1/invites/qrcode?token=inv_abc123&name=phone1" \
   -H "Authorization: Bearer $API_KEY" \
   -o phone1.svg
 ```
 
 将 `phone1.svg` 发给用户，用户用 WireGuard 移动端扫码导入。
+
+### 多平台入网
+
+bootstrap 脚本可在以下平台运行：
+
+| 平台 | 入网方式 |
+|------|----------|
+| Ubuntu / Debian | `curl -sSf "BOOTSTRAP_URL" \| sudo bash` |
+| Alpine Linux | `curl -sSf "BOOTSTRAP_URL" \| sudo sh` |
+| macOS | `curl -sSf "BOOTSTRAP_URL" \| sudo bash` |
+| Windows PowerShell | `Invoke-WebRequest "BOOTSTRAP_URL&name=MYPC" -OutFile join.ps1; .\join.ps1` |
+| Windows CMD | `curl -o wg0.conf "BOOTSTRAP_URL&name=MYPC"`，然后在 WireGuard 客户端中导入 |
+
+所有 Linux 发行版脚本会自动检测包管理器（apt、apk）并安装 WireGuard。macOS 需要先安装 [WireGuard for macOS](https://www.wireguard.com/install/)。Windows 系统请使用 PowerShell 或 CMD 方式。
 
 ---
 
@@ -259,19 +273,19 @@ wg-tui
 
 ```bash
 # 列出邀请
-curl -s http://127.0.0.1:58880/api/v1/invites \
+curl -s http://127.0.0.1:8080/api/v1/invites \
   -H "Authorization: Bearer $API_KEY"
 
 # 撤销邀请
-curl -s -X DELETE http://127.0.0.1:58880/api/v1/invites/inv_abc123 \
+curl -s -X DELETE http://127.0.0.1:8080/api/v1/invites/inv_abc123 \
   -H "Authorization: Bearer $API_KEY"
 
 # 列出 peer
-curl -s http://127.0.0.1:58880/api/v1/peers \
+curl -s http://127.0.0.1:8080/api/v1/peers \
   -H "Authorization: Bearer $API_KEY"
 
 # 删除 peer（按名称）
-curl -s -X DELETE http://127.0.0.1:58880/api/v1/peers/<name> \
+curl -s -X DELETE http://127.0.0.1:8080/api/v1/peers/<name> \
   -H "Authorization: Bearer $API_KEY"
 ```
 
@@ -378,10 +392,10 @@ Token:       inv_abc123...
 Expires:     2026-05-10T15:00:00Z
 
 Bootstrap URL (share this with the client):
-  https://YOUR_DOMAIN/bootstrap?token=inv_abc123...
+  http://YOUR_DOMAIN:8080/bootstrap?token=inv_abc123...
 
 Copy-and-paste command:
-  curl -sSf "https://YOUR_DOMAIN/bootstrap?token=inv_abc123..." | sudo bash
+  curl -sSf "http://YOUR_DOMAIN:8080/bootstrap?token=inv_abc123..." | sudo bash
 ```
 
 ### invite list
@@ -575,16 +589,15 @@ created_at: 2026-05-03T15:00:00Z
 
 ## 生产部署
 
-守护进程默认绑定 `127.0.0.1:58880`。生产环境通过 nginx 或 Caddy 反向代理暴露 HTTPS，守护进程本身只监听本机。
+守护进程默认绑定 `127.0.0.1:58880`。生产环境通过 nginx 或 Caddy 反向代理暴露 HTTP，守护进程本身只监听本机。
 
 ```
                    ┌─────────────────────────────┐
-  Internet ── TLS ─→  nginx / caddy :443         │
+  Internet ── HTTP ─→  nginx / caddy :8080       │
                    │  ┌───────────────────────┐  │
-                   │  │ 终止 TLS             │  │
                    │  │ 分离公共/管理路由      │  │
                    │  └───────┬───────────────┘  │
-                   │          │ localhost:58880   │
+                   │          │ 127.0.0.1:58880  │
                    │  ┌───────┴───────────────┐  │
                    │  │ wg-mgmt-daemon        │  │
                    │  │ 127.0.0.1:58880       │  │
@@ -606,23 +619,14 @@ sudo bash server/deploy-proxy.sh --caddy
 
 `deploy-proxy.sh` 脚本自动处理：
 
-- **配置了域名**：自动配置 nginx 或 Caddy 并获取 Let's Encrypt TLS 证书，生成 HTTPS 配置，验证后重新加载。
-- **未配置域名**：生成纯 HTTP 配置，并提示 HTTPS 不可用。bootstrap URL 使用 `http://SERVER_IP/`。
+- **配置了域名**：自动配置 nginx 或 Caddy，生成 HTTP 配置，验证后重新加载。
+- **未配置域名**：生成 HTTP 配置，bootstrap URL 使用 `http://SERVER_IP:8080/`。
 - **安全措施**：备份现有配置，验证生成的配置（`nginx -t` 或 `caddy validate`），验证失败自动回滚。
 - **路由隔离**：在代理层面拦截管理路由（返回 403），只暴露公共路由。
 
-### TLS 策略
-
-守护进程本身使用纯 HTTP 与本机通信。TLS 由反向代理处理。
-
-| 场景 | 行为 |
-|------|------|
-| 配置了域名且 DNS 可解析 | 自动通过 Let's Encrypt 获取证书（nginx：certbot standalone；Caddy：自动 ACME） |
-| 未配置域名或 DNS 未解析 | 纯 HTTP 降级，显示明确警告。Bootstrap URL 使用 `http://` 加公网 IP |
-
 ### 路由隔离
 
-公共路由（可通过 HTTPS 安全暴露）：
+公共路由（可安全暴露）：
 
 | 路由 | 说明 |
 |------|------|
@@ -654,11 +658,8 @@ sudo bash server/deploy-proxy.sh --caddy
 
 ```nginx
 server {
-    listen 443 ssl http2;
+    listen 8080;
     server_name YOUR_DOMAIN;
-
-    ssl_certificate     /etc/letsencrypt/live/YOUR_DOMAIN/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/YOUR_DOMAIN/privkey.pem;
 
     location /api/v1/health { proxy_pass http://127.0.0.1:58880; }
     location /api/v1/login  { proxy_pass http://127.0.0.1:58880; }
@@ -674,14 +675,10 @@ server {
 }
 ```
 
-未配置域名时，脚本生成纯 HTTP 配置（无 TLS，无重定向）。
-
 ### Caddy 示例（由 deploy-proxy.sh --caddy 生成）
 
-配置域名时（Caddy 自动申请 TLS）：
-
 ```
-YOUR_DOMAIN {
+:8080 {
     reverse_proxy /api/v1/health  127.0.0.1:58880
     reverse_proxy /api/v1/login   127.0.0.1:58880
     reverse_proxy /api/v1/logout  127.0.0.1:58880
@@ -696,26 +693,24 @@ YOUR_DOMAIN {
 }
 ```
 
-未配置域名时，脚本生成 `:80` 配置块（纯 HTTP）。
-
 ### Bootstrap URL
 
 配置反向代理后，bootstrap URL 使用你的域名或服务器 IP：
 
 | 场景 | Bootstrap URL 格式 |
 |------|-------------------|
-| 域名 + HTTPS | `https://YOUR_DOMAIN/bootstrap?token=TOKEN` |
-| 仅 IP + HTTP | `http://YOUR_SERVER_IP/bootstrap?token=TOKEN` |
-| 显式设备名 | `https://YOUR_DOMAIN/bootstrap?token=TOKEN&name=DEVICE` |
+| 域名 | `http://YOUR_DOMAIN:8080/bootstrap?token=TOKEN` |
+| 仅 IP | `http://YOUR_SERVER_IP:8080/bootstrap?token=TOKEN` |
+| 显式设备名 | `http://YOUR_DOMAIN:8080/bootstrap?token=TOKEN&name=DEVICE` |
 
 用户可通过管道直接传给 bash。建议先检查脚本内容：
 
 ```bash
 # 检查
-curl -sSf "https://YOUR_DOMAIN/bootstrap?token=TOKEN"
+curl -sSf "http://YOUR_DOMAIN:8080/bootstrap?token=TOKEN"
 
 # 执行（确认后）
-curl -sSf "https://YOUR_DOMAIN/bootstrap?token=TOKEN" | sudo bash
+curl -sSf "http://YOUR_DOMAIN:8080/bootstrap?token=TOKEN" | sudo bash
 ```
 
 bootstrap 脚本不包含全局 API 密钥，邀请 token 是唯一凭证，且一次性使用。
@@ -804,7 +799,7 @@ sudo systemctl kill -s HUP wg-mgmt
 2. 已有的 peer 连接不会中断，无需操作。
 3. 旧的审批请求数据不再使用，需要通过创建邀请重新入网。
 4. 通过 API 或 TUI 为现有用户创建邀请。
-5. 配置 HTTPS 反向代理指向 `http://127.0.0.1:58880`。
+5. 配置 HTTP 反向代理指向 `http://127.0.0.1:58880`。
 6. 删除旧脚本中对旧端点的调用。
 
 ---
@@ -836,7 +831,7 @@ sudo systemctl kill -s HUP wg-mgmt
 
 | 问题 | 处理 |
 |------|------|
-| API 访问失败 | 检查 nginx/Caddy 与安全组是否允许 `443/tcp` |
+| API 访问失败 | 检查 nginx/Caddy 与安全组是否允许 `8080/tcp` |
 | 无 WireGuard handshake | 检查安全组是否允许 `51820/udp` |
 | peer 名称重复 | 删除旧 peer 后重新使用邀请入网 |
 | 邀请 token 无效 | token 一次性使用，检查是否已兑换或撤销 |

@@ -1,6 +1,6 @@
 # WG-Manager
 
-WireGuard management layer for star-topology VPNs with invite-based onboarding. A single Go daemon handles peer lifecycle, identity, and HTTPS distribution. Users join by redeeming an invite token, no API key required. Includes an optional enhanced TUI dashboard (Rust + Ratatui).
+WireGuard management layer for star-topology VPNs with invite-based onboarding. A single Go daemon handles peer lifecycle, identity, and HTTP distribution. Users join by redeeming an invite token, no API key required. Includes an optional enhanced TUI dashboard (Rust + Ratatui).
 
 Supports **Linux / macOS / WSL / Windows / Mobile (QR)**.
 
@@ -71,7 +71,7 @@ Three fixed roles: owner, admin, user. No custom roles.
 
 ```
 ┌─ Server ───────────────────────────────────────┐
-│  nginx/caddy :443 (TLS termination)            │
+│  nginx / caddy :80                             │
 │       │ proxy_pass localhost:58880              │
 │  ┌────┴─────────────────────────────────────┐  │
 │  │ wg-mgmt-daemon 127.0.0.1:58880           │  │
@@ -83,7 +83,7 @@ Three fixed roles: owner, admin, user. No custom roles.
 │  │ WireGuard wg0  10.0.0.1/24               │  │
 │  └──────────────────────────────────────────┘  │
 └────────┬──────────────┬─────────────────────────┘
-         │ WG tunnel     │ HTTPS
+         │ WG tunnel     │ HTTP
       ┌──┴────┐    ┌────┴──────┐
       │ Linux │    │  Windows   │
       │ macOS │    │  PS / CMD  │
@@ -97,7 +97,7 @@ Three fixed roles: owner, admin, user. No custom roles.
 
 ### 1. Server Setup
 
-**Prerequisites:** Ubuntu/Debian Linux server with Git installed. A domain name is optional but recommended (enables automatic HTTPS).
+**Prerequisites:** Ubuntu/Debian Linux server with Git installed.
 
 ```bash
 git clone git@github.com:yequdesu/WG-manager.git ~/WG-manager
@@ -115,7 +115,7 @@ The script prompts for:
 | Prompt | Description | Example |
 |--------|-------------|---------|
 | `Server Public IP` | Auto-detected, press Enter to confirm | `118.178.171.166` |
-| `Server Domain (optional)` | Domain for HTTPS; press Enter to skip (uses IP + HTTP) | `vpn.example.com` |
+| `Server Domain (optional)` | Domain name; press Enter to skip (uses IP) | `vpn.example.com` |
 | `WireGuard Port` | WG listen port | `51820` (Enter for default) |
 | `VPN Subnet` | VPN internal subnet | `10.0.0.0/24` (Enter for default) |
 | `Management API Port` | Daemon HTTP port | `58880` (Enter for default) |
@@ -177,16 +177,14 @@ curl -s -X POST http://127.0.0.1:58880/api/v1/invites \
   -d '{}'
 ```
 
-Response includes the invite token and a ready-to-use bootstrap URL (scheme and host depend on your server configuration):
+Response includes the invite token and a ready-to-use bootstrap URL:
 
 ```json
 {
   "token": "inv_abc123...",
-  "url": "https://YOUR_DOMAIN/bootstrap?token=inv_abc123..."
+  "url": "http://YOUR_SERVER_IP:8080/bootstrap?token=inv_abc123..."
 }
 ```
-
-If you configured a domain, the URL uses `https://YOUR_DOMAIN/`. Without a domain, it falls back to `http://YOUR_SERVER_IP/`.
 
 **Via TUI:**
 Open the TUI dashboard, navigate to the Invites tab, and create a new invite.
@@ -250,6 +248,33 @@ curl -s "http://localhost:58880/api/v1/invites/qrcode?token=inv_abc123&name=phon
 ```
 
 Share `phone1.svg` with the user. They scan it with the WireGuard mobile app and connect.
+
+#### Platform Prerequisites
+
+The bootstrap script can install WireGuard automatically on common Linux distributions. For platforms where automatic install is not supported, or if you want to prepare in advance, use the commands below.
+
+**Ubuntu / Debian:**
+```bash
+sudo apt update && sudo apt install -y wireguard curl
+```
+
+**Alpine Linux:**
+```bash
+sudo apk add wireguard-tools curl
+```
+
+**macOS:**
+```bash
+brew install wireguard-tools curl
+```
+
+**Windows (PowerShell):**
+```powershell
+# Install WireGuard via winget
+winget install WireGuard.WireGuard
+```
+
+After the prerequisite is installed, run the bootstrap URL as shown in the sections above.
 
 ---
 
@@ -412,10 +437,10 @@ Token:       inv_abc123...
 Expires:     2026-05-10T15:00:00Z
 
 Bootstrap URL (share this with the client):
-  https://YOUR_DOMAIN/bootstrap?token=inv_abc123...
+  http://YOUR_SERVER_IP:8080/bootstrap?token=inv_abc123...
 
 Copy-and-paste command:
-  curl -sSf "https://YOUR_DOMAIN/bootstrap?token=inv_abc123..." | sudo bash
+  curl -sSf "http://YOUR_SERVER_IP:8080/bootstrap?token=inv_abc123..." | sudo bash
 ```
 
 ### invite list
@@ -683,11 +708,11 @@ tail -f /var/log/wg-mgmt/wg-mgmt.log
 
 ## API Reference
 
-Base URL: `https://YOUR_DOMAIN` (reverse proxy, HTTPS) or `http://SERVER_IP:58880` (direct, local network only).
+Base URL: `http://SERVER_IP:8080` (HTTP reverse proxy) or `http://127.0.0.1:58880` (direct, local network only).
 
 ### Public Routes
 
-Accessible over HTTPS with no authentication (except login/redeem which handle auth internally).
+Accessible over HTTP with no authentication (except login/redeem which handle auth internally).
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
@@ -727,13 +752,12 @@ Auth explained:
 
 ### Architecture
 
-The daemon binds to `127.0.0.1:58880` by default. For production, place a reverse proxy (nginx or Caddy) in front that terminates TLS and forwards to the daemon on localhost.
+The daemon binds to `127.0.0.1:58880` by default. For production, place a reverse proxy (nginx or Caddy) in front that forwards to the daemon on localhost.
 
 ```
                    ┌─────────────────────────────┐
-  Internet ── TLS ─→  nginx / caddy :443         │
+  Internet ── HTTP ─→  nginx / caddy :80         │
                    │  ┌───────────────────────┐  │
-                   │  │ Terminates TLS        │  │
                    │  │ Splits public/admin   │  │
                    │  └───────┬───────────────┘  │
                    │          │ localhost:58880   │
@@ -748,7 +772,7 @@ The daemon binds to `127.0.0.1:58880` by default. For production, place a revers
 
 The daemon enforces two access tiers via middleware. The reverse proxy must expose only public routes to the internet.
 
-**Public routes** (safe for HTTPS exposure):
+**Public routes** (safe for external exposure):
 | Route | Description |
 |-------|-------------|
 | `/api/v1/health` | Health check |
@@ -780,101 +804,29 @@ sudo bash server/deploy-proxy.sh --caddy
 
 The `deploy-proxy.sh` script handles everything:
 
-- **With a domain**: Sets up nginx or Caddy with TLS (Let's Encrypt), generates HTTPS config, and validates before reloading.
-- **Without a domain**: Generates an HTTP-only config and warns that HTTPS is unavailable. Bootstrap URLs use `http://SERVER_IP/`.
+- Generates nginx or Caddy reverse proxy configuration for the daemon.
+- **With a domain**: Sets up nginx or Caddy with your domain in the config.
+- **Without a domain**: Generates an IP-based config. Bootstrap URLs use `http://SERVER_IP:8080/`.
 - **Safety**: Backs up existing configs, validates generated config (`nginx -t` or `caddy validate`), and rolls back on failure.
 - **Admin routes**: Blocks `/api/v1/peers`, `/api/v1/invites`, `/api/v1/users`, `/api/v1/status` at the proxy level (returns 403).
 
-### TLS Strategy
-
-The daemon itself speaks plain HTTP on localhost. TLS is handled by the reverse proxy.
-
-| Scenario | Behavior |
-|----------|----------|
-| Domain configured + DNS resolves | Automatic HTTPS via Let's Encrypt (nginx: certbot standalone; Caddy: auto-ACME) |
-| No domain or DNS not resolved | HTTP-only fallback with clear warning. Bootstrap URLs use `http://` over the public IP. |
-
-### Example: nginx (generated by deploy-proxy.sh --nginx)
-
-```nginx
-server {
-    listen 443 ssl http2;
-    server_name YOUR_DOMAIN;
-
-    ssl_certificate     /etc/letsencrypt/live/YOUR_DOMAIN/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/YOUR_DOMAIN/privkey.pem;
-
-    # Public routes (forward to daemon)
-    location /api/v1/health      { proxy_pass http://127.0.0.1:58880; }
-    location /api/v1/login       { proxy_pass http://127.0.0.1:58880; }
-    location /api/v1/logout      { proxy_pass http://127.0.0.1:58880; }
-    location /api/v1/redeem      { proxy_pass http://127.0.0.1:58880; }
-    location /bootstrap          { proxy_pass http://127.0.0.1:58880; }
-    location /connect            { proxy_pass http://127.0.0.1:58880; }
-
-    # Block admin routes at the proxy level
-    location /api/v1/peers       { return 403; }
-    location /api/v1/invites     { return 403; }
-    location /api/v1/users       { return 403; }
-    location /api/v1/status      { return 403; }
-
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-}
-
-# Redirect HTTP to HTTPS
-server {
-    listen 80;
-    server_name YOUR_DOMAIN;
-    return 301 https://$host$request_uri;
-}
-```
-
-Without a domain, the script generates an HTTP-only config (no TLS, no redirect).
-
-### Example: Caddy (generated by deploy-proxy.sh --caddy)
-
-With domain (Caddy auto-provisions TLS):
-
-```
-YOUR_DOMAIN {
-    reverse_proxy /api/v1/health  127.0.0.1:58880
-    reverse_proxy /api/v1/login   127.0.0.1:58880
-    reverse_proxy /api/v1/logout  127.0.0.1:58880
-    reverse_proxy /api/v1/redeem  127.0.0.1:58880
-    reverse_proxy /bootstrap      127.0.0.1:58880
-    reverse_proxy /connect        127.0.0.1:58880
-
-    # Block admin routes
-    respond /api/v1/peers   403
-    respond /api/v1/invites 403
-    respond /api/v1/users   403
-    respond /api/v1/status  403
-}
-```
-
-Without a domain, the script generates an `:80` config block (HTTP-only).
-
 ### Bootstrap URL
 
-With the reverse proxy in place, the bootstrap URL uses your domain or server IP:
+The bootstrap URL uses your server IP and port:
 
 | Scenario | Bootstrap URL format |
 |----------|---------------------|
-| Domain + HTTPS | `https://YOUR_DOMAIN/bootstrap?token=TOKEN` |
-| IP-only + HTTP | `http://YOUR_SERVER_IP/bootstrap?token=TOKEN` |
-| Explicit device name | `https://YOUR_DOMAIN/bootstrap?token=TOKEN&name=DEVICE` |
+| Default | `http://YOUR_SERVER_IP:8080/bootstrap?token=TOKEN` |
+| Explicit device name | `http://YOUR_SERVER_IP:8080/bootstrap?token=TOKEN&name=DEVICE` |
 
 Users pipe this directly into bash. The script is served as plain text. Users should inspect it before running:
 
 ```bash
 # Inspect
-curl -sSf "https://YOUR_DOMAIN/bootstrap?token=TOKEN"
+curl -sSf "http://YOUR_SERVER_IP:8080/bootstrap?token=TOKEN"
 
 # Run (only after inspecting)
-curl -sSf "https://YOUR_DOMAIN/bootstrap?token=TOKEN" | sudo bash
+curl -sSf "http://YOUR_SERVER_IP:8080/bootstrap?token=TOKEN" | sudo bash
 ```
 
 The bootstrap script contains no global API key. The invite token is the sole credential and is consumed on first use.
@@ -967,7 +919,7 @@ If you are upgrading from a version that used the old approval or direct registr
 2. Active peers on the server continue to work. No action needed for existing connections.
 3. Legacy pending approval requests are ignored. Recreate access through invites.
 4. Create invites for your existing users via `POST /api/v1/invites` or the TUI.
-5. Configure HTTPS reverse proxying to `http://127.0.0.1:58880`.
+5. Configure a reverse proxy to forward to `http://127.0.0.1:58880`.
 6. Replace any old scripts that call old endpoints with the invite-based flow.
 
 ---
@@ -1017,7 +969,7 @@ If you are upgrading from a version that used the approval flow:
 | Symptom | Solution |
 |---------|----------|
 | Windows can't ping | `New-NetFirewallRule -DisplayName "WG ICMP" -Direction Inbound -Protocol ICMPv4 -IcmpType 8 -Action Allow` |
-| API unreachable | Check reverse proxy is running and cloud security group allows TCP 443 |
+| API unreachable | Check reverse proxy is running and cloud security group allows TCP 8080 (or your configured proxy port) |
 | No handshake | Check cloud security group allows UDP 51820 |
 | Duplicate name (409) | Delete the old peer first, then rejoin |
 | "Binary is up to date" but changes missing | `sudo rm -f /usr/local/bin/wg-mgmt-daemon` then re-run setup-server.sh |
