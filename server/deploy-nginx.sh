@@ -114,7 +114,7 @@ update_config_value() {
   local key="$2"
   local new_value="$3"
   local existing_line current_line current_value
-  local temp_file line line_status had_content=0 last_was_newline=0 updated=0
+  local temp_file line line_has_newline had_content=0 last_was_newline=0 updated=0
 
   [[ -f "$config_file" ]] || return 1
 
@@ -138,19 +138,9 @@ update_config_value() {
 
   temp_file="$(mktemp /tmp/wg-manager-config.XXXXXX)" || return 1
 
-  while true; do
-    IFS= read -r line
-    line_status=$?
-    if [[ $line_status -ne 0 && -z $line ]]; then
-      break
-    fi
-
+  while IFS= read -r line && line_has_newline=1 || { line_has_newline=0; [[ -n $line ]]; }; do
     had_content=1
-    if [[ $line_status -eq 0 ]]; then
-      last_was_newline=1
-    else
-      last_was_newline=0
-    fi
+    last_was_newline=$line_has_newline
 
     if [[ $line =~ ^(${key})([[:space:]]*)=([[:space:]]*)(.*)$ ]]; then
       printf '%s%s=%s%s' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" "$new_value" >> "$temp_file"
@@ -163,7 +153,6 @@ update_config_value() {
       printf '\n' >> "$temp_file"
     fi
 
-    [[ $line_status -eq 0 ]] || break
   done < "$config_file"
 
   if [[ $updated -eq 0 ]]; then

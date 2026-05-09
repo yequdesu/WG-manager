@@ -43,7 +43,7 @@ func TestPublicURL(t *testing.T) {
 		ServerHost:     "vpn.example.com",
 		ServerPublicIP: "203.0.113.10",
 	}
-	if got := cfg.PublicURL(); got != "https://vpn.example.com" {
+	if got := cfg.ResolvedPublicURL(); got != "https://vpn.example.com" {
 		t.Errorf("PublicURL() with domain = %q, want %q", got, "https://vpn.example.com")
 	}
 
@@ -52,7 +52,7 @@ func TestPublicURL(t *testing.T) {
 		ServerHost:     "",
 		ServerPublicIP: "203.0.113.10",
 	}
-	if got := cfg2.PublicURL(); got != "http://203.0.113.10" {
+	if got := cfg2.ResolvedPublicURL(); got != "http://203.0.113.10" {
 		t.Errorf("PublicURL() without domain = %q, want %q", got, "http://203.0.113.10")
 	}
 
@@ -61,7 +61,7 @@ func TestPublicURL(t *testing.T) {
 		ServerHost:     "",
 		ServerPublicIP: "",
 	}
-	if got := cfg3.PublicURL(); got != "" {
+	if got := cfg3.ResolvedPublicURL(); got != "" {
 		t.Errorf("PublicURL() with both empty = %q, want empty", got)
 	}
 }

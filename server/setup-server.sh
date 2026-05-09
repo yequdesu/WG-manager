@@ -210,6 +210,7 @@ collect_info() {
     if [[ -f "$CONFIG_FILE" ]]; then
         existing_ip=$(grep SERVER_PUBLIC_IP "$CONFIG_FILE" 2>/dev/null | cut -d= -f2 || echo "")
         existing_host=$(grep SERVER_HOST "$CONFIG_FILE" 2>/dev/null | cut -d= -f2 || echo "")
+        existing_public_url=$(grep PUBLIC_URL "$CONFIG_FILE" 2>/dev/null | cut -d= -f2 || echo "")
         existing_wg_port=$(grep WG_PORT "$CONFIG_FILE" 2>/dev/null | cut -d= -f2 || echo "51820")
         existing_subnet=$(grep WG_SUBNET "$CONFIG_FILE" 2>/dev/null | cut -d= -f2 || echo "10.0.0.0/24")
         existing_mgmt_port=$(grep MGMT_LISTEN "$CONFIG_FILE" 2>/dev/null | sed 's/.*://' || echo "58880")
@@ -230,6 +231,7 @@ collect_info() {
             if [[ ! "$USE_EXISTING" =~ ^[Nn] ]]; then
                 SERVER_PUBLIC_IP="$existing_ip"
                 SERVER_HOST="$existing_host"
+                PUBLIC_URL="$existing_public_url"
                 WG_PORT="$existing_wg_port"
                 WG_SUBNET="$existing_subnet"
                 MGMT_PORT="$existing_mgmt_port"
@@ -457,6 +459,7 @@ WG_SUBNET=$WG_SUBNET
 WG_SERVER_IP=$server_address
 SERVER_PUBLIC_IP=$SERVER_PUBLIC_IP
 SERVER_HOST=$SERVER_HOST
+PUBLIC_URL=$PUBLIC_URL
 MGMT_LISTEN=$mgmt_listen
 MGMT_API_KEY=$api_key
 BOOTSTRAP_OWNER_PASSWORD=$owner_pw

@@ -19,6 +19,7 @@ impl Config {
         let path = Self::config_path();
         let mut api_url = String::from("http://127.0.0.1:58880");
         let mut api_key = String::new();
+        let mut public_url = String::new();
         let mut server_host = String::new();
         let mut server_public_ip = String::new();
 
@@ -41,6 +42,9 @@ impl Config {
                         "SERVER_HOST" => {
                             server_host = val.to_string();
                         }
+                        "PUBLIC_URL" => {
+                            public_url = val.to_string();
+                        }
                         "SERVER_PUBLIC_IP" => {
                             server_public_ip = val.to_string();
                         }
@@ -50,7 +54,7 @@ impl Config {
             }
         }
 
-        let public_url = Self::build_public_url(&server_host, &server_public_ip);
+        let public_url = Self::build_public_url(&public_url, &server_host, &server_public_ip);
 
         Self {
             api_url,
@@ -60,10 +64,14 @@ impl Config {
     }
 
     /// Mirror the daemon's PublicURL() logic:
+    /// - Prefer PUBLIC_URL when set
     /// - Prefer SERVER_HOST (domain name) → https://server_host
     /// - Fall back to SERVER_PUBLIC_IP (raw IP) → http://ip
     /// - Empty if neither is set
-    fn build_public_url(host: &str, ip: &str) -> String {
+    fn build_public_url(public_url: &str, host: &str, ip: &str) -> String {
+        if !public_url.is_empty() {
+            return public_url.to_string();
+        }
         let candidate = if !host.is_empty() { host } else { ip };
         if candidate.is_empty() {
             return String::new();

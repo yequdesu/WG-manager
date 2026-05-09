@@ -29,10 +29,15 @@ type Config struct {
 	APIKey         string
 	ServerPublicIP string
 	ServerHost     string
+	publicURLConfig
 	DefaultDNS     string
 	PeerKeepalive  int
 	PeersDBPath    string
 	WGConfPath     string
+}
+
+type publicURLConfig struct {
+	PublicURL string
 }
 
 func (c *Config) ServerEndpoint() string {
@@ -46,7 +51,10 @@ func (c *Config) PublicHost() string {
 	return c.ServerPublicIP
 }
 
-func (c *Config) PublicURL() string {
+func (c *Config) ResolvedPublicURL() string {
+	if c.publicURLConfig.PublicURL != "" {
+		return c.publicURLConfig.PublicURL
+	}
 	host := c.PublicHost()
 	if host == "" {
 		return ""
@@ -119,7 +127,7 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) serveBootstrapHTML(w http.ResponseWriter, r *http.Request) {
-	publicURL := h.cfg().PublicURL()
+	publicURL := h.cfg().ResolvedPublicURL()
 	publicHost := h.cfg().PublicHost()
 	wgSubnet := h.cfg().WGSubnet
 	html := `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WG-Manager - Join</title>
@@ -264,7 +272,7 @@ func (h *Handler) ServeInviteQR(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build the bootstrap URL using the canonical public URL helper.
-	bootstrapURL := bootstrapURLWithName(h.cfg().PublicURL(), token, name)
+	bootstrapURL := bootstrapURLWithName(h.cfg().ResolvedPublicURL(), token, name)
 
 	svg := generateQR(bootstrapURL)
 	w.Header().Set("Content-Type", "image/svg+xml")
@@ -642,7 +650,7 @@ func (h *Handler) CreateInvite(w http.ResponseWriter, r *http.Request) {
 
 	audit.Log("invite_created", auditFields("invite_id", inv.ID, "issued_by", issuedBy))
 
-	bootstrapURL := bootstrapURLWithName(h.cfg().PublicURL(), rawToken, inv.DeviceName)
+	bootstrapURL := bootstrapURLWithName(h.cfg().ResolvedPublicURL(), rawToken, inv.DeviceName)
 	writeJSON(w, http.StatusCreated, map[string]interface{}{
 		"invite_id":     inv.ID,
 		"token":         rawToken,
@@ -851,7 +859,7 @@ func (h *Handler) InviteLink(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		bootstrapURL := bootstrapURLWithName(h.cfg().PublicURL(), inv.RawToken, name)
+	bootstrapURL := bootstrapURLWithName(h.cfg().ResolvedPublicURL(), inv.RawToken, name)
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"invite_id":     inv.ID,
 			"status":        string(inv.Status),
@@ -863,7 +871,7 @@ func (h *Handler) InviteLink(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Found by raw token — reconstruct the bootstrap URL.
-	bootstrapURL := bootstrapURLWithName(h.cfg().PublicURL(), id, name)
+	bootstrapURL := bootstrapURLWithName(h.cfg().ResolvedPublicURL(), id, name)
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"invite_id":     inv.ID,
 		"status":        string(inv.Status),
@@ -1303,7 +1311,7 @@ func (h *Handler) Bootstrap(w http.ResponseWriter, r *http.Request) {
 	name := r.URL.Query().Get("name")
 
 	publicHost := h.cfg().PublicHost()
-	publicURL := h.cfg().PublicURL()
+	publicURL := h.cfg().ResolvedPublicURL()
 
 	script := fmt.Sprintf(`#!/bin/bash
 set -euo pipefail

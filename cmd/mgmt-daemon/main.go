@@ -29,6 +29,7 @@ type AppConfig struct {
 	MgmtListen             string
 	APIKey                 string
 	ServerPublicIP         string
+	PublicURL              string
 	ServerHost             string
 	DefaultDNS             string
 	PeerKeepalive          int
@@ -92,6 +93,8 @@ func loadConfig(path string) (*AppConfig, error) {
 			cfg.APIKey = val
 		case "SERVER_PUBLIC_IP":
 			cfg.ServerPublicIP = val
+		case "PUBLIC_URL":
+			cfg.PublicURL = val
 		case "SERVER_HOST":
 			cfg.ServerHost = val
 		case "DEFAULT_DNS":
@@ -199,6 +202,7 @@ func reloadConfig(path string, appCfg *AppConfig, handler *api.Handler, state *s
 		PeersDBPath:    appCfg.PeersDBPath,
 		WGConfPath:     appCfg.WGConfPath,
 	}
+	newApiCfg.PublicURL = appCfg.PublicURL
 	handler.ReloadConfig(newApiCfg)
 
 	var crypto *store.Crypto
@@ -401,6 +405,7 @@ func main() {
 		PeersDBPath:    appCfg.PeersDBPath,
 		WGConfPath:     appCfg.WGConfPath,
 	}
+	apiCfg.PublicURL = appCfg.PublicURL
 
 	srv, handler := api.NewServer(ctx, apiCfg, state, wgMgr)
 
