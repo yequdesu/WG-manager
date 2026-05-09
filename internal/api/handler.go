@@ -1456,12 +1456,20 @@ detect_os() {
 }
 OS=$(detect_os)
 
-# ── WSL warning ──
+# ── WSL kernel module check ──
 if [ "$OS" = "wsl" ]; then
-    warn "WSL detected. WireGuard should be installed on the Windows host, not inside WSL."
-    warn "The WireGuard kernel module is not available inside WSL."
-    warn "After installing WireGuard on Windows, re-run this script from the host."
-    warn "Continuing anyway — config file will be saved but the tunnel may not work."
+    log "WSL detected. Trying to load WireGuard kernel module..."
+    if sudo modprobe wireguard 2>/dev/null; then
+        log "WireGuard kernel module loaded in WSL."
+    else
+        err "WSL lacks WireGuard kernel module."
+        err "Use the Windows host instead. Run this in PowerShell:"
+        echo ""
+        echo "  Invoke-WebRequest \"$SERVER_URL/bootstrap?token=$INVITE_TOKEN&name=$PEER_NAME&os=windows\" -OutFile join.ps1"
+        echo "  .\join.ps1"
+        echo ""
+        exit 0
+    fi
 fi
 
 # ── TTY / confirmation helpers ──
@@ -1575,17 +1583,61 @@ parsers_suggest_install() {
 
 if command -v jq &>/dev/null; then
     PARSER_MODE="jq"
-    PARSER_OK=1
 elif command -v python3 &>/dev/null; then
     PARSER_MODE="python3"
-    PARSER_OK=1
 elif command -v grep &>/dev/null && command -v sed &>/dev/null; then
     PARSER_MODE="fallback"
-    PARSER_OK=1
     warn "jq and python3 not found — using basic grep/sed JSON parser."
     warn "Install jq (sudo apt install jq) for more robust output."
-else
-    parsers_suggest_install "no JSON parser (jq, python3, or grep+sed) found"
+fi
+
+# ── Tool readiness check ──
+WG_INSTALLED=false
+CURL_INSTALLED=false
+PARSER_OK=false
+
+if command -v wg >/dev/null 2>&1; then WG_INSTALLED=true; fi
+if command -v curl >/dev/null 2>&1; then CURL_INSTALLED=true; fi
+if [ "$PARSER_MODE" = "jq" ] || [ "$PARSER_MODE" = "python3" ]; then PARSER_OK=true; fi
+
+# ── Install missing tools (TTY only) ──
+if [ "$WG_INSTALLED" = "false" ]; then
+    case "$OS" in
+        linux)
+            if command -v apt-get &>/dev/null; then
+                INSTALL_CMD="sudo apt-get update && sudo apt-get install -y wireguard-tools"
+            elif command -v apk &>/dev/null; then
+                INSTALL_CMD="sudo apk add wireguard-tools"
+            elif command -v yum &>/dev/null; then
+                INSTALL_CMD="sudo yum install -y wireguard-tools"
+            elif command -v dnf &>/dev/null; then
+                INSTALL_CMD="sudo dnf install -y wireguard-tools"
+            else
+                INSTALL_CMD="(install wireguard-tools with your package manager)"
+            fi
+            ;;
+        macos)
+            INSTALL_CMD="brew install wireguard-tools"
+            ;;
+        *)
+            INSTALL_CMD="(install wireguard-tools for your OS)"
+            ;;
+    esac
+    if confirm_or_skip "Install WireGuard?" "$INSTALL_CMD"; then
+        install_wg
+        if command -v wg >/dev/null 2>&1; then
+            WG_INSTALLED=true
+            log "WireGuard installed."
+        fi
+    fi
+fi
+
+if [ "$PARSER_OK" = "false" ]; then
+    if [ "$(is_tty)" = "yes" ]; then
+        parsers_suggest_install "JSON parsing"
+        # parsers_suggest_install exits on failure; if we reach here, jq is installed
+        if command -v jq >/dev/null 2>&1; then PARSER_MODE="jq"; PARSER_OK=true; fi
+    fi
 fi
 
 # ── JSON parsing (jq → python3 → grep/sed fallback) ──
@@ -1668,31 +1720,22 @@ if [ "${PEER_NAME}" = "" ]; then
     log "No peer name provided, using hostname: $PEER_NAME"
 fi
 
-# ── Determine install command for confirmation prompt ──
-case "$OS" in
-    linux)
-        if command -v apt-get &>/dev/null; then
-            INSTALL_CMD="sudo apt-get update && sudo apt-get install -y wireguard-tools"
-        elif command -v apk &>/dev/null; then
-            INSTALL_CMD="sudo apk add wireguard-tools"
-        elif command -v yum &>/dev/null; then
-            INSTALL_CMD="sudo yum install -y wireguard-tools"
-        elif command -v dnf &>/dev/null; then
-            INSTALL_CMD="sudo dnf install -y wireguard-tools"
-        else
-            INSTALL_CMD="(install wireguard-tools with your package manager)"
-        fi
-        ;;
-    macos)
-        INSTALL_CMD="brew install wireguard-tools"
-        ;;
-    *)
-        INSTALL_CMD="(install wireguard-tools for your OS)"
-        ;;
-esac
+# ── Readiness ──
+ALL_TOOLS_OK=false
+if [ "$WG_INSTALLED" = "true" ] && [ "$CURL_INSTALLED" = "true" ] && [ "$PARSER_OK" = "true" ]; then
+    ALL_TOOLS_OK=true
+fi
+READY="$ALL_TOOLS_OK"
 
-if confirm_or_skip "Install WireGuard?" "$INSTALL_CMD"; then
-    install_wg
+# ── Pre-redeem confirmation (TTY only) ──
+if [ "$(is_tty)" = "yes" ]; then
+    echo ""
+    printf "About to consume a one-time invite token. Continue? [Y/n]: "
+    read -r reply </dev/tty
+    case "$reply" in
+        [Yy]*|"") ;;
+        *) log "Aborted by user."; exit 0 ;;
+    esac
 fi
 
 log "Redeeming invite token..."
@@ -1712,8 +1755,8 @@ fi
 # HTTP 200 — server accepted, token IS consumed.
 SUCCESS=$(json_get "$RESP" "success" "")
 if [ "$SUCCESS" != "true" ]; then
-    if [ "$PARSER_MODE" = "fallback" ]; then
-        err "Redeem succeeded (HTTP 200) but the grep/sed fallback could not parse the response."
+    if [ "$PARSER_MODE" = "fallback" ] || [ "$PARSER_MODE" = "" ]; then
+        err "Redeem succeeded (HTTP 200) but the JSON parser could not parse the response."
     else
         err "Redeem succeeded (HTTP 200) but JSON parsing failed."
     fi
@@ -1726,7 +1769,7 @@ if [ "$SUCCESS" != "true" ]; then
     err "  2. Contact your administrator to re-issue an invite"
     err "  3. Share the raw response below with your admin for manual config recovery"
     err ""
-    if [ "$PARSER_MODE" = "fallback" ]; then
+    if [ "$(is_tty)" = "yes" ]; then
         pkg=""
         for mgr in apt-get yum dnf apk brew; do
             if command -v "$mgr" &>/dev/null; then pkg="$mgr"; break; fi
@@ -1772,10 +1815,12 @@ DNS=$(json_get_nested "$RESP" "peer" "dns" "$DEFAULT_DNS")
 KEEPALIVE=$(json_get_nested "$RESP" "peer" "keepalive" "25")
 
 # ── Write WireGuard config ──
-if confirm_or_skip "Write WireGuard config to $WG_CONF?" "sudo mkdir -p $(dirname "$WG_CONF") && sudo tee $WG_CONF (paste config from server response)"; then
-    log "Writing WireGuard config to $WG_CONF..."
-    auto_sudo mkdir -p "$(dirname "$WG_CONF")"
-    auto_sudo bash -c "cat > $WG_CONF" << WGCONF
+if [ "$READY" = "true" ]; then
+    if [ "$(is_tty)" = "yes" ]; then
+        if confirm_or_skip "Write WireGuard config to $WG_CONF?" "sudo mkdir -p $(dirname "$WG_CONF") && sudo tee $WG_CONF (paste config from server response)"; then
+            log "Writing WireGuard config to $WG_CONF..."
+            auto_sudo mkdir -p "$(dirname "$WG_CONF")"
+            auto_sudo bash -c "cat > $WG_CONF" << WGCONF
 [Interface]
 Address = $ADDRESS
 PrivateKey = $PRIVATE_KEY
@@ -1787,38 +1832,108 @@ Endpoint = $SERVER_ENDPOINT
 AllowedIPs = 0.0.0.0/0
 PersistentKeepalive = $KEEPALIVE
 WGCONF
-    auto_sudo chmod 600 "$WG_CONF"
-fi
+            auto_sudo chmod 600 "$WG_CONF"
+        fi
 
-# ── Start WireGuard ──
-if confirm_or_skip "Start WireGuard tunnel (wg-quick up wg0)?" "wg-quick up $WG_CONF"; then
-    log "Starting WireGuard..."
-    if command -v systemctl &>/dev/null && auto_sudo systemctl is-active --quiet wg-quick@wg0 2>/dev/null; then
-        auto_sudo wg-quick down wg0 2>/dev/null || true
-    fi
-    auto_sudo wg-quick up wg0
-
-    # ── Verify ──
-    sleep 2
-    if auto_sudo wg show wg0 &>/dev/null; then
-        PEER_IP=$(echo "$ADDRESS" | cut -d/ -f1)
-        log "WireGuard is active — your VPN IP: $PEER_IP"
-        log "Try: ping %s"
+        if confirm_or_skip "Start WireGuard tunnel (wg-quick up wg0)?" "wg-quick up $WG_CONF"; then
+            log "Starting WireGuard..."
+            if command -v systemctl &>/dev/null && auto_sudo systemctl is-active --quiet wg-quick@wg0 2>/dev/null; then
+                auto_sudo wg-quick down wg0 2>/dev/null || true
+            fi
+            auto_sudo wg-quick up wg0
+            sleep 2
+            if auto_sudo wg show wg0 &>/dev/null; then
+                PEER_IP=$(echo "$ADDRESS" | cut -d/ -f1)
+                log "WireGuard is active — your VPN IP: $PEER_IP"
+                log "Try: ping %s"
+            else
+                warn "WireGuard may not have started correctly. Check: sudo wg show"
+            fi
+        fi
     else
-        warn "WireGuard may not have started correctly. Check: sudo wg show"
-    fi
-fi
+        # Auto mode (non-TTY, all tools present)
+        if [ -f "$WG_CONF" ]; then
+            warn "Config file $WG_CONF already exists."
+            warn "Cannot auto-overwrite. Manual setup required:"
+            echo ""
+            log "WireGuard config content:"
+            echo ""
+            cat << WGCONF_PRINT
+[Interface]
+Address = $ADDRESS
+PrivateKey = $PRIVATE_KEY
+DNS = $DNS
 
-if [ "$(is_tty)" = "no" ]; then
+[Peer]
+PublicKey = $SERVER_PUBKEY
+Endpoint = $SERVER_ENDPOINT
+AllowedIPs = 0.0.0.0/0
+PersistentKeepalive = $KEEPALIVE
+WGCONF_PRINT
+            echo ""
+            warn "After resolving the config file, run: wg-quick up $WG_CONF"
+        else
+            log "Auto-writing WireGuard config to $WG_CONF..."
+            auto_sudo mkdir -p "$(dirname "$WG_CONF")"
+            auto_sudo bash -c "cat > $WG_CONF" << WGCONF
+[Interface]
+Address = $ADDRESS
+PrivateKey = $PRIVATE_KEY
+DNS = $DNS
+
+[Peer]
+PublicKey = $SERVER_PUBKEY
+Endpoint = $SERVER_ENDPOINT
+AllowedIPs = 0.0.0.0/0
+PersistentKeepalive = $KEEPALIVE
+WGCONF
+            auto_sudo chmod 600 "$WG_CONF"
+            log "Auto-starting WireGuard..."
+            if command -v systemctl &>/dev/null && auto_sudo systemctl is-active --quiet wg-quick@wg0 2>/dev/null; then
+                auto_sudo wg-quick down wg0 2>/dev/null || true
+            fi
+            auto_sudo wg-quick up wg0
+            sleep 2
+            if auto_sudo wg show wg0 &>/dev/null; then
+                PEER_IP=$(echo "$ADDRESS" | cut -d/ -f1)
+                log "WireGuard is active — your VPN IP: $PEER_IP"
+                log "Try: ping %s"
+            else
+                warn "WireGuard may not have started correctly. Check: sudo wg show"
+            fi
+        fi
+    fi
+else
+    # Not ready: print config + manual instructions
     echo ""
-    warn "After completing the above steps manually, run:"
-    echo "  wg-quick up $WG_CONF"
+    warn "Not all tools are available for automatic setup."
+    echo ""
+    [ "$WG_INSTALLED" = "false" ] && echo "  - Install WireGuard (wireguard-tools)"
+    [ "$CURL_INSTALLED" = "false" ] && echo "  - Install curl"
+    [ "$PARSER_OK" = "false" ] && echo "  - Install jq or python3"
+    echo ""
+    log "WireGuard config for $WG_CONF:"
+    echo ""
+    cat << WGCONF_PRINT
+[Interface]
+Address = $ADDRESS
+PrivateKey = $PRIVATE_KEY
+DNS = $DNS
+
+[Peer]
+PublicKey = $SERVER_PUBKEY
+Endpoint = $SERVER_ENDPOINT
+AllowedIPs = 0.0.0.0/0
+PersistentKeepalive = $KEEPALIVE
+WGCONF_PRINT
+    echo ""
+    warn "After manual steps, run: wg-quick up $WG_CONF"
 fi
 
 log "Done!"
 `, publicURL, publicURL,
 		shellQuote(publicURL), shellQuote(publicHost), shellQuote(token), shellQuote(name),
-		shellQuote(h.cfg().DefaultDNS), h.cfg().WGServerIP)
+		shellQuote(h.cfg().DefaultDNS), h.cfg().WGServerIP, h.cfg().WGServerIP)
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
