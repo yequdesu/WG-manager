@@ -171,11 +171,15 @@ ol{font-size:13px;color:#c9d1d9;line-height:2;padding-left:16px;margin-top:4px}
   <div id="result" class="hidden"></div>
 </div>
 <div class="box">
-  <h3>Auto-Install (Linux / macOS / WSL)</h3>
+  <h3>Auto-Install</h3>
+  <p><strong>Linux / macOS / WSL</strong></p>
   <p>Pipe the bootstrap script directly into bash. Always inspect first:</p>
   <pre class="cmd" id="inspect-cmd">curl -sSf ` + publicURL + `/bootstrap</pre>
   <p class="hint">Replace TOKEN below and run:</p>
   <pre class="cmd" id="run-cmd">curl -sSf "` + publicURL + `/bootstrap?token=TOKEN" | sudo bash</pre>
+  <h3>Windows (PowerShell)</h3>
+  <p>Run the following in PowerShell:</p>
+  <pre class="cmd">Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass; irm ` + publicURL + `/bootstrap?token=TOKEN&os=windows | iex</pre>
 </div>
 <div class="box">
   <h3>Manual Redemption (All Platforms)</h3>
@@ -1307,24 +1311,109 @@ func (h *Handler) Status(w http.ResponseWriter, r *http.Request) {
 // invite via POST /api/v1/redeem, saves the returned config, and starts WireGuard.
 // It contains NO global API key — the invite token is the sole credential.
 func (h *Handler) Bootstrap(w http.ResponseWriter, r *http.Request) {
+	token := r.URL.Query().Get("token")
+	name := r.URL.Query().Get("name")
 	osParam := strings.ToLower(r.URL.Query().Get("os"))
 	userAgent := r.Header.Get("User-Agent")
+	publicHost := h.cfg().PublicHost()
+	publicURL := h.cfg().ResolvedPublicURL()
 	servePowerShell := osParam == "windows" || (osParam == "" && strings.Contains(userAgent, "PowerShell"))
 	if servePowerShell {
-		script := `# PowerShell bootstrap placeholder
-	Write-Host "PowerShell bootstrap script placeholder. Full Windows support coming soon."
-`
+		psEsc := func(s string) string {
+			return strings.ReplaceAll(s, "'", "''")
+		}
+		script := fmt.Sprintf(`# PowerShell bootstrap for WG-Manager
+# Served by /bootstrap?os=windows
+# Usage:
+#   Invoke-WebRequest "%s/bootstrap?token=TOKEN&name=MYPC&os=windows" -OutFile join.ps1
+#   .\join.ps1
+
+Write-Host "WG-Manager Invite Bootstrap (Windows)"
+
+$ServerUrl = '%s'
+$Token = '%s'
+$PeerName = '%s'
+$DefaultDns = '%s'
+
+Write-Host "If execution policy blocks this script, run:"
+Write-Host "  Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass"
+Write-Host ""
+
+$NonInteractive = ([Environment]::GetCommandLineArgs() -contains '-NonInteractive') -or (-not [Environment]::UserInteractive)
+
+if ($NonInteractive) {
+    Write-Host "Non-interactive mode detected. Manual setup:"
+    Write-Host "1. Install WireGuard: https://www.wireguard.com/install/"
+    Write-Host ("2. Redeem token: " + $Token)
+    Write-Host ("   POST " + $ServerUrl + "/api/v1/redeem")
+    Write-Host ("   JSON body: {token: '" + $Token + "', name: '" + $PeerName + "', dns: '" + $DefaultDns + "'}")
+    Write-Host "3. Build wg0.conf from response.peer fields:"
+    Write-Host "   [Interface]"
+    Write-Host "   Address = <peer.address>"
+    Write-Host "   PrivateKey = <peer.private_key>"
+    Write-Host "   DNS = <peer.dns>"
+    Write-Host "   [Peer]"
+    Write-Host "   PublicKey = <peer.server_public_key>"
+    Write-Host "   Endpoint = <peer.server_endpoint>"
+    Write-Host "   AllowedIPs = 0.0.0.0/0"
+    Write-Host "   PersistentKeepalive = <peer.keepalive>"
+    Write-Host ("4. Save to " + "$env:USERPROFILE\Downloads\wg0.conf")
+    Write-Host "5. Import in WireGuard client"
+    exit 0
+}
+
+if ($PeerName -eq "") {
+    $PeerName = $env:COMPUTERNAME
+    Write-Host ("No peer name provided, using: " + $PeerName)
+}
+
+if (-not (Get-Command wg -ErrorAction SilentlyContinue)) {
+    Write-Host "WireGuard not found. Install from https://www.wireguard.com/install/"
+    Write-Host "After installation, re-run this script."
+    exit 1
+}
+
+Write-Host "Redeeming invite..."
+$body = @{token=$Token; name=$PeerName; dns=$DefaultDns} | ConvertTo-Json
+try {
+    $response = Invoke-RestMethod -Uri "$ServerUrl/api/v1/redeem" -Method Post -Body $body -ContentType "application/json"
+} catch {
+    Write-Host ("Failed to redeem invite: " + $_.Exception.Message)
+    exit 1
+}
+
+if (-not $response.success) {
+    $errMsg = if ($response.error) { $response.error } else { "unknown error" }
+    Write-Host ("Redeem failed: " + $errMsg)
+    exit 1
+}
+
+$config = @"
+[Interface]
+Address = $($response.peer.address)
+PrivateKey = $($response.peer.private_key)
+DNS = $($response.peer.dns)
+
+[Peer]
+PublicKey = $($response.peer.server_public_key)
+Endpoint = $($response.peer.server_endpoint)
+AllowedIPs = 0.0.0.0/0
+PersistentKeepalive = $($response.peer.keepalive)
+"@
+
+$configPath = "$env:USERPROFILE\Downloads\wg0.conf"
+Write-Host ("Saving config to " + $configPath)
+$config | Out-File $configPath -Encoding ascii
+
+Write-Host "Config saved. Open WireGuard client and import:"
+Write-Host ("  " + $configPath)
+Write-Host "After importing, activate the tunnel in WireGuard client."
+`, publicURL, psEsc(publicURL), psEsc(token), psEsc(name), psEsc(h.cfg().DefaultDNS))
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(script))
 		return
 	}
-
-	token := r.URL.Query().Get("token")
-	name := r.URL.Query().Get("name")
-
-	publicHost := h.cfg().PublicHost()
-	publicURL := h.cfg().ResolvedPublicURL()
 
 	script := fmt.Sprintf(`#!/bin/bash
 set -euo pipefail
@@ -1369,6 +1458,35 @@ if [ "$OS" = "wsl" ]; then
     warn "After installing WireGuard on Windows, re-run this script from the host."
     warn "Continuing anyway — config file will be saved but the tunnel may not work."
 fi
+
+# ── TTY / confirmation helpers ──
+is_tty() {
+    if [ -t 0 ]; then echo "yes"; else echo "no"; fi
+}
+
+confirm_or_skip() {
+    local msg="$1"
+    local manual_cmd="$2"
+    if [ -t 0 ]; then
+        printf "%%s [Y/n]: " "$msg"
+        read -r reply </dev/tty
+        case "$reply" in
+            [Yy]*|"") return 0 ;;
+            *) return 1 ;;
+        esac
+    else
+        echo ""
+        warn "No TTY detected. Run this manually:"
+        echo "  $manual_cmd"
+        return 1
+    fi
+}
+
+# ── Config path (platform-specific) ──
+case "$OS" in
+    macos) WG_CONF="/usr/local/etc/wireguard/wg0.conf" ;;
+    *)     WG_CONF="/etc/wireguard/wg0.conf" ;;
+esac
 
 # ── Install WireGuard ──
 install_wg() {
@@ -1522,14 +1640,16 @@ json_get_nested() {
     fi
 }
 
-# ── Auto-sudo ──
+# ── Auto-sudo / doas ──
 auto_sudo() {
     if [ "$(id -u)" -eq 0 ]; then
         "$@"
     elif command -v sudo &>/dev/null; then
         sudo "$@"
+    elif command -v doas &>/dev/null; then
+        doas "$@"
     else
-        err "This script needs root privileges. Please run with sudo."
+        err "This script needs root privileges. Please run with sudo or doas."
         exit 1
     fi
 }
@@ -1543,7 +1663,32 @@ if [ "${PEER_NAME}" = "" ]; then
     log "No peer name provided, using hostname: $PEER_NAME"
 fi
 
-install_wg
+# ── Determine install command for confirmation prompt ──
+case "$OS" in
+    linux)
+        if command -v apt-get &>/dev/null; then
+            INSTALL_CMD="sudo apt-get update && sudo apt-get install -y wireguard-tools"
+        elif command -v apk &>/dev/null; then
+            INSTALL_CMD="sudo apk add wireguard-tools"
+        elif command -v yum &>/dev/null; then
+            INSTALL_CMD="sudo yum install -y wireguard-tools"
+        elif command -v dnf &>/dev/null; then
+            INSTALL_CMD="sudo dnf install -y wireguard-tools"
+        else
+            INSTALL_CMD="(install wireguard-tools with your package manager)"
+        fi
+        ;;
+    macos)
+        INSTALL_CMD="brew install wireguard-tools"
+        ;;
+    *)
+        INSTALL_CMD="(install wireguard-tools for your OS)"
+        ;;
+esac
+
+if confirm_or_skip "Install WireGuard?" "$INSTALL_CMD"; then
+    install_wg
+fi
 
 log "Redeeming invite token..."
 HTTP_CODE=$(curl -sS -w "%%{http_code}" -o /tmp/wg-bootstrap-resp.json \
@@ -1622,10 +1767,10 @@ DNS=$(json_get_nested "$RESP" "peer" "dns" "$DEFAULT_DNS")
 KEEPALIVE=$(json_get_nested "$RESP" "peer" "keepalive" "25")
 
 # ── Write WireGuard config ──
-WG_CONF="/etc/wireguard/wg0.conf"
-log "Writing WireGuard config to $WG_CONF..."
-auto_sudo mkdir -p /etc/wireguard
-auto_sudo bash -c "cat > $WG_CONF" << WGCONF
+if confirm_or_skip "Write WireGuard config to $WG_CONF?" "sudo mkdir -p $(dirname "$WG_CONF") && sudo tee $WG_CONF (paste config from server response)"; then
+    log "Writing WireGuard config to $WG_CONF..."
+    auto_sudo mkdir -p "$(dirname "$WG_CONF")"
+    auto_sudo bash -c "cat > $WG_CONF" << WGCONF
 [Interface]
 Address = $ADDRESS
 PrivateKey = $PRIVATE_KEY
@@ -1637,23 +1782,32 @@ Endpoint = $SERVER_ENDPOINT
 AllowedIPs = 0.0.0.0/0
 PersistentKeepalive = $KEEPALIVE
 WGCONF
-auto_sudo chmod 600 "$WG_CONF"
+    auto_sudo chmod 600 "$WG_CONF"
+fi
 
 # ── Start WireGuard ──
-log "Starting WireGuard..."
-if command -v systemctl &>/dev/null && auto_sudo systemctl is-active --quiet wg-quick@wg0 2>/dev/null; then
-    auto_sudo wg-quick down wg0 2>/dev/null || true
-fi
-auto_sudo wg-quick up wg0
+if confirm_or_skip "Start WireGuard tunnel (wg-quick up wg0)?" "wg-quick up $WG_CONF"; then
+    log "Starting WireGuard..."
+    if command -v systemctl &>/dev/null && auto_sudo systemctl is-active --quiet wg-quick@wg0 2>/dev/null; then
+        auto_sudo wg-quick down wg0 2>/dev/null || true
+    fi
+    auto_sudo wg-quick up wg0
 
-# ── Verify ──
-sleep 2
-if auto_sudo wg show wg0 &>/dev/null; then
-    PEER_IP=$(echo "$ADDRESS" | cut -d/ -f1)
-    log "WireGuard is active — your VPN IP: $PEER_IP"
-    log "Try: ping %s"
-else
-    warn "WireGuard may not have started correctly. Check: sudo wg show"
+    # ── Verify ──
+    sleep 2
+    if auto_sudo wg show wg0 &>/dev/null; then
+        PEER_IP=$(echo "$ADDRESS" | cut -d/ -f1)
+        log "WireGuard is active — your VPN IP: $PEER_IP"
+        log "Try: ping %s"
+    else
+        warn "WireGuard may not have started correctly. Check: sudo wg show"
+    fi
+fi
+
+if [ "$(is_tty)" = "no" ]; then
+    echo ""
+    warn "After completing the above steps manually, run:"
+    echo "  wg-quick up $WG_CONF"
 fi
 
 log "Done!"

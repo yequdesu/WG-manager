@@ -257,14 +257,14 @@ collect_info() {
         exit 1
     fi
 
-    # ── Optional domain (HTTPS / reverse proxy) ──
+    # ── Optional domain (reverse proxy) ──
     echo ""
     read -p "$(echo -e "${BOLD}Server Domain (optional)${NC} [skip]: ")" SERVER_HOST
     if [[ -n "$SERVER_HOST" ]]; then
-        info "Using domain $SERVER_HOST for public-facing URLs (HTTPS if reverse proxy configured)"
+        info "Using domain $SERVER_HOST for public-facing URLs (HTTP-only on port 8080)"
         info "  WireGuard endpoint: $SERVER_PUBLIC_IP:$WG_PORT (unchanged)"
     else
-        info "No domain — public-facing URLs will use $SERVER_PUBLIC_IP (HTTP fallback)"
+        info "No domain — public-facing URLs will use $SERVER_PUBLIC_IP (HTTP on port 8080)"
     fi
 
     read -p "$(echo -e "${BOLD}WireGuard Port${NC} [51820]: ")" WG_PORT
@@ -609,7 +609,7 @@ print_summary() {
     echo -e "  ${BOLD}Server Info${NC}"
     echo -e "    Server IP:        ${BOLD}${SERVER_PUBLIC_IP}${NC}"
     if [[ -n "$SERVER_HOST" ]]; then
-        echo -e "    Server Domain:    ${BOLD}${SERVER_HOST}${NC} (HTTPS-capable)"
+        echo -e "    Server Domain:    ${BOLD}${SERVER_HOST}${NC} (HTTP-only on port 8080)"
     fi
     echo -e "    WG Port:          ${BOLD}${WG_PORT}${NC} (UDP)"
     echo -e "    MGMT Port:        ${BOLD}${mgmt_port}${NC} (TCP)"
@@ -619,7 +619,7 @@ print_summary() {
     echo -e "  ${BOLD}${YELLOW}Owner Password (save this!)${NC}"
     echo -e "    ${BOLD}${owner_pw}${NC}"
     echo -e "    Use this on the server with wg-tui or localhost API calls."
-    echo -e "    For browser onboarding, publish HTTPS via nginx/Caddy to 127.0.0.1:${mgmt_port}."
+    echo -e "    For browser onboarding, publish HTTP on port 8080 via nginx/Caddy to 127.0.0.1:${mgmt_port}."
     echo ""
 
     echo -e "  ${BOLD}${CYAN}Next Steps: Create an Invite${NC}"
@@ -635,21 +635,21 @@ print_summary() {
     echo -e "  ${BOLD}${CYAN}User Onboarding${NC} ${YELLOW}-- share the invite bootstrap URL${NC}"
     echo ""
     if [ -n "$SERVER_HOST" ]; then
-        echo -e "    ${BOLD}Bootstrap URL${NC}: https://${SERVER_HOST}/bootstrap?token=TOKEN&name=DEVICE"
+        echo -e "    ${BOLD}Bootstrap URL${NC}: http://${SERVER_HOST}:8080/bootstrap?token=TOKEN&name=DEVICE"
     else
         echo -e "    ${BOLD}Bootstrap URL${NC}: http://${SERVER_PUBLIC_IP}/bootstrap?token=TOKEN&name=DEVICE"
     fi
     echo ""
     echo -e "    ${BOLD}Run:${NC}"
     if [ -n "$SERVER_HOST" ]; then
-        echo -e "      curl -sSf \"https://${SERVER_HOST}/bootstrap?token=TOKEN&name=DEVICE\" | sudo bash"
+        echo -e "      curl -sSf \"http://${SERVER_HOST}:8080/bootstrap?token=TOKEN&name=DEVICE\" | sudo bash"
     else
         echo -e "      curl -sSf \"http://${SERVER_PUBLIC_IP}/bootstrap?token=TOKEN&name=DEVICE\" | sudo bash"
     fi
     echo ""
     echo -e "    ${BOLD}Windows PowerShell${NC}:"
     if [ -n "$SERVER_HOST" ]; then
-        echo -e "      Invoke-WebRequest \"https://${SERVER_HOST}/bootstrap?token=TOKEN&name=MYPC\" -OutFile join.ps1"
+        echo -e "      Invoke-WebRequest \"http://${SERVER_HOST}:8080/bootstrap?token=TOKEN&name=MYPC\" -OutFile join.ps1"
     else
         echo -e "      Invoke-WebRequest \"http://${SERVER_PUBLIC_IP}/bootstrap?token=TOKEN&name=MYPC\" -OutFile join.ps1"
     fi
@@ -658,7 +658,7 @@ print_summary() {
 
     echo -e "    ${BOLD}Windows CMD${NC}"
     if [ -n "$SERVER_HOST" ]; then
-        echo -e "      curl -o wg0.conf \"https://${SERVER_HOST}/bootstrap?token=TOKEN&name=MYPC\""
+        echo -e "      curl -o wg0.conf \"http://${SERVER_HOST}:8080/bootstrap?token=TOKEN&name=MYPC\""
     else
         echo -e "      curl -o wg0.conf \"http://${SERVER_PUBLIC_IP}/bootstrap?token=TOKEN&name=MYPC\""
     fi
