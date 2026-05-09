@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -78,6 +79,7 @@ func main() {
 
 func commands() []command {
 	return []command{
+		{name: "create", description: "create an invite (alias for: invite create)", run: runInviteWithCreate},
 		{name: "peer", description: "peer operations", run: runPeer},
 		{name: "invite", description: "invite operations", run: runInvite},
 		{name: "user", description: "user operations", run: runUser},
@@ -85,6 +87,10 @@ func commands() []command {
 		{name: "auth", description: "auth operations", run: runAuth},
 		{name: "me", description: "current user operations", run: runMe},
 	}
+}
+
+func runInviteWithCreate(c *cli.Client, args []string) error {
+	return runInvite(c, append([]string{"create"}, args...))
 }
 
 func runPeer(c *cli.Client, args []string) error {
@@ -203,23 +209,45 @@ func cmdPeerList(c *cli.Client, args []string) error {
 
 func cmdPeerAlias(c *cli.Client, args []string) error {
 	fs := flag.NewFlagSet("alias", flag.ExitOnError)
-	id := fs.String("id", "", "peer public key (immutable ID)")
-	alias := fs.String("alias", "", "new alias for the peer")
+	id := fs.String("id", "", "peer public key (immutable ID) [deprecated: use positional arg]")
+	alias := fs.String("alias", "", "new alias for the peer [deprecated: use positional arg]")
 
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
-	if *id == "" {
-		return fmt.Errorf("--id (peer public key) is required")
+	posArgs := fs.Args()
+	pubkeyStr := firstNonEmpty(firstArg(posArgs), *id)
+	if pubkeyStr == "" {
+		return fmt.Errorf("Usage: wg-mgmt peer alias <public_key_prefix> <alias>\n  (use a unique public key prefix of 4+ characters)")
 	}
-	if *alias == "" {
-		return fmt.Errorf("--alias is required")
+
+	if *id != "" && firstArg(posArgs) == "" {
+		fmt.Fprintln(os.Stderr, "Note: --id is deprecated. Use: wg-mgmt peer alias <pubkey> <alias>")
+	}
+
+	var aliasStr string
+	if len(posArgs) >= 2 {
+		aliasStr = posArgs[1]
+	} else if *alias != "" {
+		aliasStr = *alias
+		if firstArg(posArgs) == "" {
+			fmt.Fprintln(os.Stderr, "Note: --alias is deprecated. Use: wg-mgmt peer alias <pubkey> <alias>")
+		}
+	}
+
+	if aliasStr == "" {
+		return fmt.Errorf("alias is required")
+	}
+
+	resolvedPubkey, err := resolvePeerPubkey(c, pubkeyStr)
+	if err != nil {
+		return err
 	}
 
 	body := map[string]string{
-		"pubkey": *id,
-		"alias":  *alias,
+		"pubkey": resolvedPubkey,
+		"alias":  aliasStr,
 	}
 	var resp struct {
 		Success  bool   `json:"success"`
@@ -228,7 +256,13 @@ func cmdPeerAlias(c *cli.Client, args []string) error {
 		OldAlias string `json:"old_alias"`
 		NewAlias string `json:"new_alias"`
 	}
-	if err := c.PutJSON("/api/v1/peers/alias", body, &resp); err != nil {
+	putJSONClient, ok := any(c).(interface {
+		PutJSON(string, any, any) error
+	})
+	if !ok {
+		return fmt.Errorf("update alias: client does not support PUT JSON")
+	}
+	if err := putJSONClient.PutJSON("/api/v1/peers/alias", body, &resp); err != nil {
 		return fmt.Errorf("update alias: %w", err)
 	}
 
@@ -238,21 +272,94 @@ func cmdPeerAlias(c *cli.Client, args []string) error {
 
 func cmdPeerDelete(c *cli.Client, args []string) error {
 	fs := flag.NewFlagSet("delete", flag.ExitOnError)
-	id := fs.String("id", "", "peer public key (immutable ID)")
+	id := fs.String("id", "", "peer public key (immutable ID) [deprecated: use positional arg]")
+	force := fs.Bool("force", false, "skip confirmation prompt")
+	forceShort := fs.Bool("f", false, "skip confirmation prompt (shorthand)")
 
-	if err := fs.Parse(args); err != nil {
+	var posArgs []string
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "--id":
+			if i+1 >= len(args) {
+				return fmt.Errorf("missing value for --id")
+			}
+			if err := fs.Set("id", args[i+1]); err != nil {
+				return err
+			}
+			i++
+		case "--force":
+			if err := fs.Set("force", "true"); err != nil {
+				return err
+			}
+		case "-f":
+			if err := fs.Set("f", "true"); err != nil {
+				return err
+			}
+		case "--":
+			posArgs = append(posArgs, args[i+1:]...)
+			i = len(args)
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return fmt.Errorf("unknown flag %s", arg)
+			}
+			posArgs = append(posArgs, arg)
+		}
+	}
+
+	if err := fs.Parse(nil); err != nil {
 		return err
 	}
 
-	if *id == "" {
-		return fmt.Errorf("--id (peer public key) is required for deletion\nUse immutable public key ID — ambiguous alias-only delete is rejected")
+	pubkeyStr := firstNonEmpty(firstArg(posArgs), *id)
+	if pubkeyStr == "" {
+		return fmt.Errorf("Usage: wg-mgmt peer delete <public_key_prefix>\n  Use --force or -f to skip confirmation")
+	}
+
+	if *id != "" && firstArg(posArgs) == "" {
+		fmt.Fprintln(os.Stderr, "Note: --id is deprecated. Use: wg-mgmt peer delete <pubkey>")
+	}
+
+	resolvedPubkey, err := resolvePeerPubkey(c, pubkeyStr)
+	if err != nil {
+		return err
+	}
+
+	var listResp peerListResponse
+	if err := c.GetJSON("/api/v1/peers", &listResp); err == nil {
+		for _, p := range listResp.Peers {
+			if p.PublicKey == resolvedPubkey {
+				pk := p.PublicKey
+				if len(pk) > 16 {
+					pk = pk[:16] + "..."
+				}
+				fmt.Fprintf(os.Stdout, "Peer: %s (pubkey: %s)\n", p.Name, pk)
+				break
+			}
+		}
+	}
+
+	skipConfirm := *force || *forceShort
+	if !skipConfirm {
+		fmt.Fprint(os.Stdout, "Delete this peer? [y/N]: ")
+		reader := bufio.NewReader(os.Stdin)
+		reply, err := reader.ReadString('\n')
+		if err != nil {
+			fmt.Fprintln(os.Stdout, "Deletion cancelled.")
+			return nil
+		}
+		answer := strings.TrimSpace(strings.ToLower(reply))
+		if answer != "y" && answer != "yes" {
+			fmt.Fprintln(os.Stdout, "Deletion cancelled.")
+			return nil
+		}
 	}
 
 	var resp struct {
 		Success bool   `json:"success"`
 		Message string `json:"message"`
 	}
-	path := fmt.Sprintf("/api/v1/peers/by-pubkey/%s", url.PathEscape(*id))
+	path := fmt.Sprintf("/api/v1/peers/by-pubkey/%s", url.PathEscape(resolvedPubkey))
 	if err := c.DeleteJSON(path, &resp); err != nil {
 		return fmt.Errorf("delete peer: %w", err)
 	}
@@ -409,10 +516,23 @@ func cmdInviteCreate(c *cli.Client, args []string) error {
 	fmt.Println("Bootstrap URL (share this with the client):")
 	fmt.Printf("  %s\n", resp.BootstrapURL)
 	fmt.Println()
-	fmt.Println("Copy-and-paste command:")
-	if resp.Command != "" {
-		fmt.Printf("  %s\n", resp.Command)
+	if isTerminal() {
+		switch runtime.GOOS {
+		case "windows":
+			fmt.Println("PowerShell command:")
+			fmt.Printf("  irm \"%s\" | iex\n", resp.BootstrapURL)
+			fmt.Println()
+			fmt.Println("CMD command:")
+			fmt.Printf("  curl -o wg0.conf \"%s&os=windows\"\n", resp.BootstrapURL)
+		default:
+			fmt.Println("Bash command (TTY):")
+			fmt.Printf("  curl -sSf \"%s\" | sudo bash\n", resp.BootstrapURL)
+			fmt.Println()
+			fmt.Println("Zsh command (TTY):")
+			fmt.Printf("  zsh -c \"$(curl -fsSL '%s')\"\n", resp.BootstrapURL)
+		}
 	} else {
+		fmt.Println("Pipe-to-bash command:")
 		fmt.Printf("  curl -sSf \"%s\" | sudo bash\n", resp.BootstrapURL)
 	}
 	fmt.Println()
@@ -603,10 +723,23 @@ func cmdInviteLink(c *cli.Client, args []string) error {
 		fmt.Println("Bootstrap URL:")
 		fmt.Printf("  %s\n", resp.BootstrapURL)
 		fmt.Println()
-		fmt.Println("Copy-and-paste command:")
-		if resp.Command != "" {
-			fmt.Printf("  %s\n", resp.Command)
+		if isTerminal() {
+			switch runtime.GOOS {
+			case "windows":
+				fmt.Println("PowerShell command:")
+				fmt.Printf("  irm \"%s\" | iex\n", resp.BootstrapURL)
+				fmt.Println()
+				fmt.Println("CMD command:")
+				fmt.Printf("  curl -o wg0.conf \"%s&os=windows\"\n", resp.BootstrapURL)
+			default:
+				fmt.Println("Bash command (TTY):")
+				fmt.Printf("  curl -sSf \"%s\" | sudo bash\n", resp.BootstrapURL)
+				fmt.Println()
+				fmt.Println("Zsh command (TTY):")
+				fmt.Printf("  zsh -c \"$(curl -fsSL '%s')\"\n", resp.BootstrapURL)
+			}
 		} else {
+			fmt.Println("Pipe-to-bash command:")
 			fmt.Printf("  curl -sSf \"%s\" | sudo bash\n", resp.BootstrapURL)
 		}
 	}
@@ -1147,6 +1280,15 @@ func formatCLIError(err error) error {
 		return fmt.Errorf("me requires a session token; log in first or pass --session-token: %w", err)
 	}
 	return err
+}
+
+func isTerminal() bool {
+	term := os.Getenv("TERM")
+	if term == "" || term == "dumb" {
+		return false
+	}
+	stat, _ := os.Stdout.Stat()
+	return (stat.Mode() & os.ModeCharDevice) != 0
 }
 
 func isDaemonUnreachable(err error) bool {
