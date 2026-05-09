@@ -256,6 +256,8 @@ bootstrap 脚本可在以下平台运行：
 wg-tui
 ```
 
+TUI 包含 Peers、Invites、Users、Status 和 Log 标签页。在 Peers 标签页中按 `e` 可以直接编辑 peer 别名。
+
 常用快捷键：
 
 | 键 | 动作 |
@@ -263,6 +265,7 @@ wg-tui
 | `Tab` / `←→` | 切换标签页 |
 | `↑↓` / `j` `k` | 选择条目 |
 | `d` / `y` | 删除 peer / 撤销邀请 |
+| `e` | 编辑 peer 别名 |
 | `v` | 查看所选邀请的完整链接和入网指令 |
 | `F` | 二次确认后强制删除所选邀请 |
 | `r` | 刷新 |
@@ -312,6 +315,7 @@ wg-mgmt --help
 |------|------|
 | `peer` | 列出、别名、删除 peer |
 | `invite` | 创建、列出、撤销、删除邀请，生成 QR 码 |
+| `create` | 创建邀请（`invite create` 的别名） |
 | `user` | 列出、创建、删除用户 |
 | `status` | 守护进程和 WireGuard 状态 |
 | `auth` | 登录和登出（会话管理） |
@@ -341,26 +345,37 @@ wg-mgmt peer list --format json
 
 ### peer alias
 
-为 peer 设置友好别名，通过不可变的公钥标识。
+为 peer 设置友好别名，通过公钥标识。支持前缀匹配（至少 4 个字符）。
 
 ```bash
-wg-mgmt peer alias --id <public_key> --alias <new_name>
+wg-mgmt peer alias <public_key_prefix> <alias>
 ```
 
 示例：
 
 ```bash
-wg-mgmt peer alias --id RoJ7SRMQC7Zu... --alias "John's Laptop"
+wg-mgmt peer alias RoJ7SRMQC7Zu "John's Laptop"
+# Alias updated: "" -> "John's Laptop" (peer: my-lap)
+
+# 或使用前缀匹配（4 个字符以上）：
+wg-mgmt peer alias RoJ7 "John's Laptop"
 # Alias updated: "" -> "John's Laptop" (peer: my-lap)
 ```
 
+公钥支持前缀匹配，需输入至少 4 个字符。当前缀不唯一时，会显示错误及候选列表。
+
 ### peer delete
 
-通过公钥删除 peer。仅依赖别名的删除会被拒绝。
+通过公钥或前缀删除 peer。默认需要确认，使用 `--force`/`-f` 可跳过确认。
 
 ```bash
-wg-mgmt peer delete --id RoJ7SRMQC7Zu...
+wg-mgmt peer delete <public_key_prefix>
+# wg-mgmt peer delete <public_key_prefix> --force
 ```
+
+| 参数 | 说明 |
+|------|------|
+| `--force`, `-f` | 跳过确认提示 |
 
 ---
 

@@ -288,7 +288,7 @@ All management is done on the server or via the management API.
 wg-tui                 # Rust Ratatui dashboard, if installed
 ```
 
-The TUI shows tabs for Peers, Invites, Users, Status, and Log.
+The TUI shows tabs for Peers, Invites, Users, Status, and Log. Press `e` in the Peers tab to edit a peer's alias via an inline prompt.
 
 #### 5.2 Create an Invite (CLI)
 
@@ -357,6 +357,7 @@ wg-mgmt --help
 |---------|-------------|
 | `peer` | List, alias, delete peers |
 | `invite` | Create, list, view links, revoke, delete, force-delete invites and generate QR codes |
+| `create` | Create an invite (alias for `invite create`) |
 | `user` | List, create, delete users |
 | `status` | Daemon and WireGuard status |
 | `auth` | Login and logout (session management) |
@@ -386,26 +387,37 @@ Example table output:
 
 ### peer alias
 
-Sets a friendly alias for a peer, identified by its immutable public key.
+Sets a friendly alias for a peer, identified by its public key. Supports prefix matching (4+ characters).
 
 ```bash
-wg-mgmt peer alias --id <public_key> --alias <new_name>
+wg-mgmt peer alias <public_key_prefix> <alias>
 ```
 
 Example:
 
 ```bash
-wg-mgmt peer alias --id RoJ7SRMQC7Zu... --alias "John's Laptop"
+wg-mgmt peer alias RoJ7SRMQC7Zu "John's Laptop"
+# Alias updated: "" -> "John's Laptop" (peer: my-lap)
+
+# Or with prefix matching (4+ characters):
+wg-mgmt peer alias RoJ7 "John's Laptop"
 # Alias updated: "" -> "John's Laptop" (peer: my-lap)
 ```
 
+Public key supports prefix matching with 4+ characters. On ambiguous prefix, shows an error with a candidate list.
+
 ### peer delete
 
-Deletes a peer by its public key. Ambiguous alias-only delete is rejected.
+Deletes a peer by its public key or prefix. Requires confirmation unless `--force`/`-f` is passed.
 
 ```bash
-wg-mgmt peer delete --id RoJ7SRMQC7Zu...
+wg-mgmt peer delete <public_key_prefix>
+# wg-mgmt peer delete <public_key_prefix> --force
 ```
+
+| Flag | Description |
+|------|-------------|
+| `--force`, `-f` | Skip confirmation prompt |
 
 ---
 
@@ -652,6 +664,7 @@ bash install.sh                  # Default
 | `↑↓` / `j` `k` | Navigate lists |
 | `/` | Search peers |
 | `d` / `y` | Delete peer / Revoke invite |
+| `e` | Edit peer alias |
 | `v` | View selected invite URL and onboarding command |
 | `F` | Force-delete selected invite after confirmation |
 | `r` | Refresh data |
