@@ -622,7 +622,7 @@ sudo bash server/deploy-proxy.sh --caddy
 
 ### 手动安装证书（阿里云 SSL）
 
-如果你从阿里云下载了证书文件，请把它们放进同一个文件夹。推荐命名为 `<domain>.pem` 和 `<domain>.key`（例如 `wg.yequdesu.top.pem`、`wg.yequdesu.top.key`）；如果没有精确匹配的文件名，脚本也可以自动识别唯一的一份证书文件（`*.pem`、`*.crt` 或 `*.cer`）和唯一的一份 `*.key` 文件。然后一条命令完成安装、校验和回滚：
+如果你从阿里云下载了证书文件，请把证书和私钥文件直接放进同一个文件夹，不需要再建一个域名同名子文件夹。推荐命名为 `<domain>.pem` 和 `<domain>.key`（例如 `wg.yequdesu.top.pem`、`wg.yequdesu.top.key`）；如果没有精确匹配的文件名，脚本也可以自动识别唯一的一份证书文件（`*.pem`、`*.crt` 或 `*.cer`）和唯一的一份 `*.key` 文件。然后一条命令完成安装、校验和回滚：
 
 ```bash
 sudo bash server/install-cert.sh /path/to/certs wg.yequdesu.top

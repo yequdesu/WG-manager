@@ -796,7 +796,7 @@ The daemon itself speaks plain HTTP on localhost. TLS is handled by the reverse 
 
 ### Manual Certificate Install (Aliyun SSL)
 
-If you download Aliyun SSL files manually, place them in one folder. The preferred names are `<domain>.pem` and `<domain>.key` (for example `wg.yequdesu.top.pem` and `wg.yequdesu.top.key`); if those exact names are not present, the script can still auto-detect one unambiguous cert file (`*.pem`, `*.crt`, or `*.cer`) and one `*.key` file. Then install them with validation and rollback:
+If you download Aliyun SSL files manually, place the cert/key files directly in one folder; no nested domain-named folder is required. The preferred names are `<domain>.pem` and `<domain>.key` (for example `wg.yequdesu.top.pem` and `wg.yequdesu.top.key`); if those exact names are not present, the script can still auto-detect one unambiguous cert file (`*.pem`, `*.crt`, or `*.cer`) and one `*.key` file. Then install them with validation and rollback:
 
 ```bash
 sudo bash server/install-cert.sh /path/to/certs wg.yequdesu.top
