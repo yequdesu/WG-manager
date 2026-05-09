@@ -637,21 +637,21 @@ print_summary() {
     if [ -n "$SERVER_HOST" ]; then
         echo -e "    ${BOLD}Bootstrap URL${NC}: http://${SERVER_HOST}:8080/bootstrap?token=TOKEN&name=DEVICE"
     else
-        echo -e "    ${BOLD}Bootstrap URL${NC}: http://${SERVER_PUBLIC_IP}/bootstrap?token=TOKEN&name=DEVICE"
+        echo -e "    ${BOLD}Bootstrap URL${NC}: http://${SERVER_PUBLIC_IP}:8080/bootstrap?token=TOKEN&name=DEVICE"
     fi
     echo ""
     echo -e "    ${BOLD}Run:${NC}"
     if [ -n "$SERVER_HOST" ]; then
         echo -e "      curl -sSf \"http://${SERVER_HOST}:8080/bootstrap?token=TOKEN&name=DEVICE\" | sudo bash"
     else
-        echo -e "      curl -sSf \"http://${SERVER_PUBLIC_IP}/bootstrap?token=TOKEN&name=DEVICE\" | sudo bash"
+        echo -e "      curl -sSf \"http://${SERVER_PUBLIC_IP}:8080/bootstrap?token=TOKEN&name=DEVICE\" | sudo bash"
     fi
     echo ""
     echo -e "    ${BOLD}Windows PowerShell${NC}:"
     if [ -n "$SERVER_HOST" ]; then
         echo -e "      Invoke-WebRequest \"http://${SERVER_HOST}:8080/bootstrap?token=TOKEN&name=MYPC\" -OutFile join.ps1"
     else
-        echo -e "      Invoke-WebRequest \"http://${SERVER_PUBLIC_IP}/bootstrap?token=TOKEN&name=MYPC\" -OutFile join.ps1"
+        echo -e "      Invoke-WebRequest \"http://${SERVER_PUBLIC_IP}:8080/bootstrap?token=TOKEN&name=MYPC\" -OutFile join.ps1"
     fi
     echo -e "      .\\join.ps1"
     echo ""
@@ -660,7 +660,7 @@ print_summary() {
     if [ -n "$SERVER_HOST" ]; then
         echo -e "      curl -o wg0.conf \"http://${SERVER_HOST}:8080/bootstrap?token=TOKEN&name=MYPC\""
     else
-        echo -e "      curl -o wg0.conf \"http://${SERVER_PUBLIC_IP}/bootstrap?token=TOKEN&name=MYPC\""
+        echo -e "      curl -o wg0.conf \"http://${SERVER_PUBLIC_IP}:8080/bootstrap?token=TOKEN&name=MYPC\""
     fi
     echo ""
 

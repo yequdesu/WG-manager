@@ -1402,6 +1402,11 @@ PersistentKeepalive = $($response.peer.keepalive)
 "@
 
 $configPath = "$env:USERPROFILE\Downloads\wg0.conf"
+$confirm = Read-Host "Write config to $configPath? [Y/n]"
+if ($confirm -and $confirm.ToLower() -notin @("", "y", "yes")) {
+    Write-Host "Skipped writing config."
+    exit 0
+}
 Write-Host ("Saving config to " + $configPath)
 $config | Out-File $configPath -Encoding ascii
 

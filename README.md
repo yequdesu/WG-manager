@@ -231,7 +231,7 @@ Invoke-WebRequest "BOOTSTRAP_URL&name=MYPC" -OutFile join.ps1
 #### Windows CMD
 
 ```cmd
-curl -o wg0.conf "BOOTSTRAP_URL&name=MYPC"
+curl -o wg0.conf "BOOTSTRAP_URL&os=windows&name=MYPC"
 ```
 
 Then import `wg0.conf` into the WireGuard client.
