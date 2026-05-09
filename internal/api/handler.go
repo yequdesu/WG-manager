@@ -1307,6 +1307,19 @@ func (h *Handler) Status(w http.ResponseWriter, r *http.Request) {
 // invite via POST /api/v1/redeem, saves the returned config, and starts WireGuard.
 // It contains NO global API key — the invite token is the sole credential.
 func (h *Handler) Bootstrap(w http.ResponseWriter, r *http.Request) {
+	osParam := strings.ToLower(r.URL.Query().Get("os"))
+	userAgent := r.Header.Get("User-Agent")
+	servePowerShell := osParam == "windows" || (osParam == "" && strings.Contains(userAgent, "PowerShell"))
+	if servePowerShell {
+		script := `# PowerShell bootstrap placeholder
+	Write-Host "PowerShell bootstrap script placeholder. Full Windows support coming soon."
+`
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(script))
+		return
+	}
+
 	token := r.URL.Query().Get("token")
 	name := r.URL.Query().Get("name")
 
