@@ -660,7 +660,7 @@ func (h *Handler) CreateInvite(w http.ResponseWriter, r *http.Request) {
 		"token":         rawToken,
 		"expires_at":    inv.ExpiresAt,
 		"bootstrap_url": bootstrapURL,
-		"command":       fmt.Sprintf("curl -sSf \"%s\" | sudo bash", bootstrapURL),
+		"command":       fmt.Sprintf("curl -sSf \"%s\" | sudo bash\n\nOr with zsh (interactive/TTY mode):\n  zsh -c \"$(curl -fsSL '%s')\"", bootstrapURL, bootstrapURL),
 		"message":       "Share this token with the client. It will only be shown once.",
 	})
 }
@@ -868,7 +868,7 @@ func (h *Handler) InviteLink(w http.ResponseWriter, r *http.Request) {
 			"invite_id":     inv.ID,
 			"status":        string(inv.Status),
 			"bootstrap_url": bootstrapURL,
-			"command":       fmt.Sprintf("curl -sSf \"%s\" | sudo bash", bootstrapURL),
+			"command":       fmt.Sprintf("curl -sSf \"%s\" | sudo bash\n\nOr with zsh (interactive/TTY mode):\n  zsh -c \"$(curl -fsSL '%s')\"", bootstrapURL, bootstrapURL),
 			"inspect":       fmt.Sprintf("curl -sSf \"%s\"", bootstrapURL),
 		})
 		return
@@ -880,7 +880,7 @@ func (h *Handler) InviteLink(w http.ResponseWriter, r *http.Request) {
 		"invite_id":     inv.ID,
 		"status":        string(inv.Status),
 		"bootstrap_url": bootstrapURL,
-		"command":       fmt.Sprintf("curl -sSf \"%s\" | sudo bash", bootstrapURL),
+		"command":       fmt.Sprintf("curl -sSf \"%s\" | sudo bash\n\nOr with zsh (interactive/TTY mode):\n  zsh -c \"$(curl -fsSL '%s')\"", bootstrapURL, bootstrapURL),
 		"inspect":       fmt.Sprintf("curl -sSf \"%s\"", bootstrapURL),
 	})
 }
