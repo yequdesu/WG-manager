@@ -191,22 +191,6 @@ sync_config_env() {
     log "Updated SERVER_HOST in config.env"
 }
 
-prepare_tls_paths() {
-    CERT_FULLCHAIN="/etc/letsencrypt/live/${SERVER_NAME}/fullchain.pem"
-    CERT_PRIVKEY="/etc/letsencrypt/live/${SERVER_NAME}/privkey.pem"
-
-    if [[ -f "$CERT_FULLCHAIN" && -f "$CERT_PRIVKEY" ]]; then
-        USE_TLS=true
-        info "Detected Let's Encrypt certificates for ${SERVER_NAME}"
-        if ! confirm "Use the detected TLS certificates" "Y"; then
-            USE_TLS=false
-        fi
-    else
-        USE_TLS=false
-        warn "No matching TLS certificates found; generating an HTTP-only proxy config"
-    fi
-}
-
 append_public_locations() {
     local backend="http://${MGMT_HOST}:${MGMT_PORT}"
 
@@ -238,42 +222,17 @@ EOF
 write_config() {
     TEMP_CONFIG="$(mktemp /tmp/wg-manager-nginx.XXXXXX)"
 
-    if $USE_TLS; then
-        cat > "$TEMP_CONFIG" <<EOF
+    cat > "$TEMP_CONFIG" <<EOF
 server {
-    listen 80;
-    server_name ${SERVER_NAME};
-    return 301 https://\$host\$request_uri;
-}
-
-server {
-    listen 443 ssl http2;
-    server_name ${SERVER_NAME};
-
-    ssl_certificate ${CERT_FULLCHAIN};
-    ssl_certificate_key ${CERT_PRIVKEY};
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_prefer_server_ciphers off;
-
-EOF
-        append_public_locations
-        append_blocked_locations
-        cat >> "$TEMP_CONFIG" <<'EOF'
-}
-EOF
-    else
-        cat > "$TEMP_CONFIG" <<EOF
-server {
-    listen 80;
+    listen 8080;
     server_name ${SERVER_NAME};
 
 EOF
-        append_public_locations
-        append_blocked_locations
-        cat >> "$TEMP_CONFIG" <<'EOF'
+    append_public_locations
+    append_blocked_locations
+    cat >> "$TEMP_CONFIG" <<'EOF'
 }
 EOF
-    fi
 }
 
 backup_existing_config() {
@@ -373,14 +332,13 @@ main() {
     load_config
     detect_server_name
     sync_config_env
-    prepare_tls_paths
 
     header "Deployment Summary"
     info "Site file:     $NGINX_SITE"
     info "Enabled site:  $NGINX_ENABLED"
     info "Backend:       http://${MGMT_HOST}:${MGMT_PORT}"
     info "Server name:   $SERVER_NAME"
-    info "Mode:          $([ "$USE_TLS" = true ] && echo "HTTPS" || echo "HTTP-only")"
+    info "Mode:          HTTP-only"
     info "Public routes:  /api/v1/health, /api/v1/login, /api/v1/logout, /api/v1/redeem, /bootstrap, /connect"
     info "Blocked routes: /api/v1/peers, /api/v1/invites, /api/v1/users, /api/v1/status"
     echo ""

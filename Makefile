@@ -1,4 +1,4 @@
-.PHONY: build build-all build-cli clean run dev help vet deploy-nginx install-cert
+.PHONY: build build-all build-cli clean run dev help vet deploy-nginx
 
 BINARY_NAME := wg-mgmt-daemon
 BINARY_CLI := wg-mgmt
@@ -60,7 +60,3 @@ vet:
 
 deploy-nginx:
 	@sudo bash server/deploy-nginx.sh
-
-install-cert:
-	@if [ -z "$(strip $(CERT_DIR))" ]; then echo "CERT_DIR is required. Example: make install-cert CERT_DIR=/path/to/certs DOMAIN=wg.yequdesu.top"; exit 1; fi
-	@sudo bash server/install-cert.sh "$(CERT_DIR)" "$(DOMAIN)"

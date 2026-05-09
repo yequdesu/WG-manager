@@ -10,7 +10,6 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 CONFIG_FILE="$PROJECT_DIR/config.env"
 
 PROXY_MODE="nginx"
-CERT_EMAIL=""
 
 CONFIG_PATH=""
 ENABLED_PATH=""
@@ -132,7 +131,7 @@ usage() {
     cat <<EOF
 Usage: $0 [--nginx | --caddy] [-h | --help]
 
-Deploy a reverse proxy for WG-Manager public HTTPS exposure.
+Deploy a reverse proxy for WG-Manager public HTTP exposure.
 
 Options:
   --nginx    Use nginx as the reverse proxy (default)
@@ -141,7 +140,7 @@ Options:
 
 Both modes:
   * Load config from config.env (MGMT_LISTEN, SERVER_HOST, SERVER_PUBLIC_IP, WG_SUBNET)
-  * Detect domain or IP; HTTPS if domain resolves, HTTP-only fallback otherwise
+  * Detect domain or IP and deploy HTTP-only
   * Block admin routes at the proxy level (403 for peers, invites, users, status)
   * Back up existing config before overwriting (timestamped)
   * Validate generated config before reloading
@@ -200,13 +199,6 @@ check_dependencies() {
             apt-get update -qq
             apt-get install -y nginx
             log "nginx installed"
-        fi
-
-        if ! command -v certbot &>/dev/null; then
-            info "Installing certbot"
-            apt-get update -qq
-            apt-get install -y certbot
-            log "certbot installed"
         fi
     fi
 
@@ -304,108 +296,11 @@ is_ip_address() {
     [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]
 }
 
-resolve_domain() {
-    local domain="$1"
-    local resolved=""
-
-    if command -v dig &>/dev/null; then
-        resolved=$(dig +short "$domain" 2>/dev/null | grep -m1 -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1 || true)
-    elif command -v host &>/dev/null; then
-        resolved=$(host "$domain" 2>/dev/null | grep -m1 'has address' | awk '{print $NF}' || true)
-    elif command -v nslookup &>/dev/null; then
-        resolved=$(nslookup "$domain" 2>/dev/null | grep -m1 'Address:' | tail -1 | awk '{print $2}' || true)
-    elif command -v getent &>/dev/null; then
-        resolved=$(getent ahosts "$domain" 2>/dev/null | grep -m1 RAW | awk '{print $1}' || true)
-    fi
-
-    if [[ -n "$resolved" ]]; then
-        log "Domain $domain resolves to $resolved"
-        return 0
-    fi
-    return 1
-}
-
 detect_proxy_mode() {
-    USE_TLS=false
-
     if is_ip_address "$SERVER_NAME"; then
-        warn "Detected an IP address — HTTPS requires a domain name"
-        echo ""
-        echo -e "  ${BOLD}No domain detected — HTTPS unavailable; bootstrap URLs will use HTTP${NC}"
-        echo ""
-        return
-    fi
-
-    info "Checking if $SERVER_NAME resolves via DNS..."
-    if resolve_domain "$SERVER_NAME"; then
-        USE_TLS=true
-        log "Domain resolves — HTTPS will be available"
+        warn "Detected an IP address — using HTTP-only reverse proxy"
     else
-        warn "$SERVER_NAME does not resolve in DNS"
-        if ! confirm "Continue with HTTP-only fallback" "N"; then
-            error "Aborted by user"
-            exit 1
-        fi
-        echo ""
-        echo -e "  ${BOLD}No domain detected — HTTPS unavailable; bootstrap URLs will use HTTP${NC}"
-        echo ""
-    fi
-}
-
-obtain_certs() {
-    if [[ ! $USE_TLS ]]; then
-        return 0
-    fi
-
-    if [[ "$PROXY_MODE" == "caddy" ]]; then
-        info "Caddy handles TLS certificates automatically via Let's Encrypt"
-        return 0
-    fi
-
-    local cert_fullchain="/etc/letsencrypt/live/${SERVER_NAME}/fullchain.pem"
-    local cert_privkey="/etc/letsencrypt/live/${SERVER_NAME}/privkey.pem"
-
-    if [[ -f "$cert_fullchain" && -f "$cert_privkey" ]]; then
-        info "Existing Let's Encrypt certificates found for ${SERVER_NAME}"
-        if confirm "Use the existing certificates" "Y"; then
-            log "Using existing certificates"
-            return 0
-        fi
-    fi
-
-    if [[ -z "$CERT_EMAIL" ]]; then
-        read -r -p "$(echo -e "${BOLD}Email for Let's Encrypt notifications${NC}: ")" CERT_EMAIL
-        if [[ -z "$CERT_EMAIL" ]]; then
-            warn "No email provided — using admin@${SERVER_NAME}"
-            CERT_EMAIL="admin@${SERVER_NAME}"
-        fi
-    fi
-
-    header "Obtaining Let's Encrypt certificate"
-
-    local was_nginx_running=false
-    if systemctl is-active --quiet nginx 2>/dev/null; then
-        was_nginx_running=true
-        info "Stopping nginx temporarily for standalone HTTP challenge"
-        systemctl stop nginx
-    fi
-
-    if certbot certonly --standalone --preferred-challenges http \
-        -d "$SERVER_NAME" \
-        --non-interactive --agree-tos \
-        --email "$CERT_EMAIL" \
-        --quiet 2>&1 | tail -5; then
-        log "Certificate obtained for ${SERVER_NAME}"
-    else
-        error "certbot failed to obtain a certificate"
-        if $was_nginx_running; then
-            systemctl start nginx 2>/dev/null || true
-        fi
-        exit 1
-    fi
-
-    if $was_nginx_running; then
-        systemctl start nginx 2>/dev/null || true
+        info "Detected a domain name — using HTTP-only reverse proxy"
     fi
 }
 
@@ -415,44 +310,18 @@ generate_nginx_config() {
 
     local backend="http://${MGMT_HOST}:${MGMT_PORT}"
 
-    if $USE_TLS; then
-        cat > "$temp_config" <<EOF
+    cat > "$temp_config" <<EOF
 # WG-Manager reverse proxy (generated by deploy-proxy.sh)
 server {
-    listen 80;
-    server_name ${SERVER_NAME};
-    return 301 https://\$host\$request_uri;
-}
-
-server {
-    listen 443 ssl http2;
-    server_name ${SERVER_NAME};
-
-    ssl_certificate     /etc/letsencrypt/live/${SERVER_NAME}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/${SERVER_NAME}/privkey.pem;
-    ssl_protocols       TLSv1.2 TLSv1.3;
-    ssl_prefer_server_ciphers off;
-
-EOF
-        append_nginx_public_locations "$temp_config" "$backend"
-        append_nginx_blocked_locations "$temp_config"
-        cat >> "$temp_config" <<'EOF'
-}
-EOF
-    else
-        cat > "$temp_config" <<EOF
-# WG-Manager reverse proxy (generated by deploy-proxy.sh)
-server {
-    listen 80;
+    listen 8080;
     server_name ${SERVER_NAME};
 
 EOF
-        append_nginx_public_locations "$temp_config" "$backend"
-        append_nginx_blocked_locations "$temp_config"
-        cat >> "$temp_config" <<'EOF'
+    append_nginx_public_locations "$temp_config" "$backend"
+    append_nginx_blocked_locations "$temp_config"
+    cat >> "$temp_config" <<'EOF'
 }
 EOF
-    fi
 
     echo "$temp_config"
 }
@@ -494,17 +363,10 @@ generate_caddy_config() {
 
     local backend="${MGMT_HOST}:${MGMT_PORT}"
 
-    if $USE_TLS; then
-        cat > "$temp_config" <<EOF
+    cat > "$temp_config" <<EOF
 # WG-Manager reverse proxy (generated by deploy-proxy.sh)
-${SERVER_NAME} {
+:8080 {
 EOF
-    else
-        cat > "$temp_config" <<EOF
-# WG-Manager reverse proxy (generated by deploy-proxy.sh)
-:80 {
-EOF
-    fi
 
     for route in /api/v1/health /api/v1/login /api/v1/logout /api/v1/redeem /bootstrap /connect; do
         cat >> "$temp_config" <<EOF
@@ -640,15 +502,7 @@ main() {
     info "Config path:  $CONFIG_PATH"
     info "Backend:      http://${MGMT_HOST}:${MGMT_PORT}"
     info "Server name:  $SERVER_NAME"
-    info "Mode:         $([ "$USE_TLS" = true ] && echo "HTTPS" || echo "HTTP-only")"
-
-    if $USE_TLS; then
-        if [[ "$PROXY_MODE" == "nginx" ]]; then
-            info "Cert:         /etc/letsencrypt/live/${SERVER_NAME}/"
-        else
-            info "Cert:         Caddy auto-TLS (Let's Encrypt)"
-        fi
-    fi
+    info "Mode:         HTTP-only"
 
     info "Public routes:  /api/v1/health, /api/v1/login, /api/v1/logout, /api/v1/redeem, /bootstrap, /connect"
     info "Blocked routes: /api/v1/peers, /api/v1/invites, /api/v1/users, /api/v1/status"
@@ -658,8 +512,6 @@ main() {
         error "Aborted by user"
         exit 1
     fi
-
-    obtain_certs
 
     local temp_config
     if [[ "$PROXY_MODE" == "nginx" ]]; then
@@ -681,11 +533,7 @@ main() {
     rm -f "$temp_config"
 
     header "Deployment Complete"
-    if $USE_TLS; then
-        log "HTTPS proxy is active at https://${SERVER_NAME}"
-    else
-        log "HTTP proxy is active at http://${SERVER_NAME}"
-    fi
+    log "HTTP proxy is active at http://${SERVER_NAME}"
     log "Backend:  http://${MGMT_HOST}:${MGMT_PORT}"
     log "Config:   $CONFIG_PATH"
     [[ -n "$BACKUP_PATH" ]] && log "Backup:   $BACKUP_PATH"

@@ -620,17 +620,6 @@ sudo bash server/deploy-proxy.sh --caddy
 | 配置了域名且 DNS 可解析 | 自动通过 Let's Encrypt 获取证书（nginx：certbot standalone；Caddy：自动 ACME） |
 | 未配置域名或 DNS 未解析 | 纯 HTTP 降级，显示明确警告。Bootstrap URL 使用 `http://` 加公网 IP |
 
-### 手动安装证书（阿里云 SSL）
-
-如果你从阿里云下载了证书文件，请把证书和私钥文件直接放进同一个文件夹，不需要再建一个域名同名子文件夹。推荐命名为 `<domain>.pem` 和 `<domain>.key`（例如 `wg.yequdesu.top.pem`、`wg.yequdesu.top.key`）；如果没有精确匹配的文件名，脚本也可以自动识别唯一的一份证书文件（`*.pem`、`*.crt` 或 `*.cer`）和唯一的一份 `*.key` 文件。然后一条命令完成安装、校验和回滚：
-
-```bash
-sudo bash server/install-cert.sh /path/to/certs wg.yequdesu.top
-make install-cert CERT_DIR=/path/to/certs DOMAIN=wg.yequdesu.top
-```
-
-脚本会校验证书和私钥、检查公钥是否匹配、在证书缺失或候选文件不唯一时提示、在 subject/SAN 不一致时给出警告、改动前展示目标路径，覆盖前先备份 `/etc/letsencrypt/live/<domain>/` 现有文件，并在 `nginx -t` 或重载失败时自动回滚。
-
 ### 路由隔离
 
 公共路由（可通过 HTTPS 安全暴露）：
