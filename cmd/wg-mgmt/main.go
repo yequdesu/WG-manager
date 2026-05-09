@@ -252,7 +252,7 @@ func cmdPeerDelete(c *cli.Client, args []string) error {
 		Success bool   `json:"success"`
 		Message string `json:"message"`
 	}
-	path := fmt.Sprintf("/api/v1/peers/by-pubkey/%s", *id)
+	path := fmt.Sprintf("/api/v1/peers/by-pubkey/%s", url.PathEscape(*id))
 	if err := c.DeleteJSON(path, &resp); err != nil {
 		return fmt.Errorf("delete peer: %w", err)
 	}
@@ -719,6 +719,63 @@ func resolveInviteRef(c *cli.Client, ref string) (string, error) {
 	}
 
 	return ref, nil
+}
+
+func resolvePeerPubkey(c *cli.Client, ref string) (string, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return "", fmt.Errorf("peer public key reference is required")
+	}
+	if len(ref) < 4 {
+		return "", fmt.Errorf("public key prefix must be at least 4 characters")
+	}
+
+	var resp peerListResponse
+	if err := c.GetJSON("/api/v1/peers", &resp); err != nil {
+		return ref, nil
+	}
+
+	for _, p := range resp.Peers {
+		if p.PublicKey == ref {
+			return p.PublicKey, nil
+		}
+	}
+
+	var prefixMatches []peerListItem
+	for _, p := range resp.Peers {
+		if strings.HasPrefix(p.PublicKey, ref) {
+			prefixMatches = append(prefixMatches, p)
+		}
+	}
+	if len(prefixMatches) == 1 {
+		return prefixMatches[0].PublicKey, nil
+	}
+	if len(prefixMatches) > 1 {
+		var candidates []string
+		for _, p := range prefixMatches {
+			pk := p.PublicKey
+			if len(pk) > 12 {
+				pk = pk[:12] + "..."
+			}
+			candidates = append(candidates, fmt.Sprintf("  %s (%s)", pk, p.Name))
+		}
+		return "", fmt.Errorf("public key prefix %q is ambiguous:\n%s", ref, strings.Join(candidates, "\n"))
+	}
+
+	var aliasMatches []peerListItem
+	for _, p := range resp.Peers {
+		if p.Alias != "" && p.Alias == ref {
+			aliasMatches = append(aliasMatches, p)
+		}
+	}
+	if len(aliasMatches) == 1 {
+		return aliasMatches[0].PublicKey, nil
+	}
+	if len(aliasMatches) > 1 {
+		return "", fmt.Errorf("alias %q matches multiple peers; use the public key instead", ref)
+	}
+
+	return "", fmt.Errorf("no peer found for %q", ref)
 }
 
 // ── invite qrcode ──────────────────────────────────────────────────────

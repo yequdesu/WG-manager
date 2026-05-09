@@ -427,6 +427,67 @@ func TestCreateInvite(t *testing.T) {
 	}
 }
 
+func TestPeerByPublicKeyPrefix(t *testing.T) {
+	s := NewState("/tmp/test_peer_prefix.json", nil)
+	s.Peers = map[string]Peer{
+		"peer1": {Name: "peer1", PublicKey: "RoJ7SRMQC7ZuAbCDeFgHiJkLmNoPqRsT1234567890="},
+		"peer2": {Name: "peer2", PublicKey: "RoJ7aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789+/"},
+		"peer3": {Name: "peer3", PublicKey: "AAAAbBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789=="},
+	}
+
+	p, ok, err := s.PeerByPublicKeyPrefix("RoJ7SRMQC7ZuAbCDeFgHiJkLmNoPqRsT1234567890=")
+	if err != nil {
+		t.Fatalf("exact match returned error: %v", err)
+	}
+	if !ok {
+		t.Fatal("exact match should return ok")
+	}
+	if p.Name != "peer1" {
+		t.Fatalf("exact match name = %q, want %q", p.Name, "peer1")
+	}
+
+	p, ok, err = s.PeerByPublicKeyPrefix("AAAA")
+	if err != nil {
+		t.Fatalf("prefix match returned error: %v", err)
+	}
+	if !ok {
+		t.Fatal("prefix match should return ok")
+	}
+	if p.Name != "peer3" {
+		t.Fatalf("prefix match name = %q, want %q", p.Name, "peer3")
+	}
+
+	_, ok, err = s.PeerByPublicKeyPrefix("RoJ7")
+	if err == nil {
+		t.Fatal("ambiguous prefix should return error")
+	}
+	if ok {
+		t.Fatal("ambiguous prefix should not return ok")
+	}
+	if !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("ambiguous error = %q, want to contain %q", err.Error(), "ambiguous")
+	}
+
+	_, ok, err = s.PeerByPublicKeyPrefix("RoJ")
+	if err == nil {
+		t.Fatal("short prefix should return error")
+	}
+	if ok {
+		t.Fatal("short prefix should not return ok")
+	}
+	if !strings.Contains(err.Error(), "at least 4 characters") {
+		t.Fatalf("short prefix error = %q, want to contain %q", err.Error(), "at least 4 characters")
+	}
+
+	_, ok, err = s.PeerByPublicKeyPrefix("XXXX")
+	if err != nil {
+		t.Fatalf("no match should not return error: %v", err)
+	}
+	if ok {
+		t.Fatal("no match should not return ok")
+	}
+}
+
 func TestInviteStatusConstants(t *testing.T) {
 	if InviteCreated == "" {
 		t.Error("InviteCreated should be non-empty")

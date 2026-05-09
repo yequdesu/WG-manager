@@ -7,6 +7,7 @@ import (
 	"maps"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -224,6 +225,49 @@ func (s *State) PeerByPublicKey(pubKey string) (Peer, bool) {
 		}
 	}
 	return Peer{}, false
+}
+
+func truncatePubKey(pubKey string) string {
+	if len(pubKey) <= 12 {
+		return pubKey
+	}
+	return pubKey[:12] + "..."
+}
+
+func (s *State) PeerByPublicKeyPrefix(prefix string) (Peer, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	prefix = strings.TrimSpace(prefix)
+	if len(prefix) < 4 {
+		return Peer{}, false, fmt.Errorf("public key prefix must be at least 4 characters")
+	}
+
+	for _, p := range s.Peers {
+		if p.PublicKey == prefix {
+			return p, true, nil
+		}
+	}
+
+	var matches []Peer
+	for _, p := range s.Peers {
+		if strings.HasPrefix(p.PublicKey, prefix) {
+			matches = append(matches, p)
+		}
+	}
+
+	if len(matches) == 1 {
+		return matches[0], true, nil
+	}
+	if len(matches) > 1 {
+		names := make([]string, len(matches))
+		for i, match := range matches {
+			names[i] = fmt.Sprintf("%s (%s)", truncatePubKey(match.PublicKey), match.Name)
+		}
+		return Peer{}, false, fmt.Errorf("prefix %q is ambiguous:\n  %s", prefix, strings.Join(names, "\n  "))
+	}
+
+	return Peer{}, false, nil
 }
 
 func (s *State) ReconcileFromWG(wgPeers map[string]Peer) int {
@@ -458,8 +502,8 @@ unmarshal:
 		bakPath := path + ".bak"
 		bakData, bakErr := os.ReadFile(bakPath)
 		if bakErr != nil || len(bakData) == 0 {
-		fmt.Fprintf(os.Stderr, "WARNING: %s corrupted and no valid backup, starting with empty state\n", path)
-		return s, mi, nil
+			fmt.Fprintf(os.Stderr, "WARNING: %s corrupted and no valid backup, starting with empty state\n", path)
+			return s, mi, nil
 		}
 		if bytes.HasPrefix(bakData, []byte(encryptedPrefix)) {
 			if crypto == nil {

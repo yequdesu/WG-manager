@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -30,10 +31,10 @@ type Config struct {
 	ServerPublicIP string
 	ServerHost     string
 	publicURLConfig
-	DefaultDNS     string
-	PeerKeepalive  int
-	PeersDBPath    string
-	WGConfPath     string
+	DefaultDNS    string
+	PeerKeepalive int
+	PeersDBPath   string
+	WGConfPath    string
 }
 
 type publicURLConfig struct {
@@ -863,7 +864,7 @@ func (h *Handler) InviteLink(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-	bootstrapURL := bootstrapURLWithName(h.cfg().ResolvedPublicURL(), inv.RawToken, name)
+		bootstrapURL := bootstrapURLWithName(h.cfg().ResolvedPublicURL(), inv.RawToken, name)
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"invite_id":     inv.ID,
 			"status":        string(inv.Status),
@@ -1084,6 +1085,14 @@ func (h *Handler) ListPeers(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	sort.SliceStable(result, func(i, j int) bool {
+		ni, nj := strings.ToLower(result[i].Name), strings.ToLower(result[j].Name)
+		if ni != nj {
+			return ni < nj
+		}
+		return result[i].PublicKey < result[j].PublicKey
+	})
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"server_endpoint": h.cfg().ServerEndpoint(),
 		"peer_count":      len(result),
@@ -1221,7 +1230,7 @@ func (h *Handler) PeerDeleteByPubkey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pubkey := strings.TrimPrefix(r.URL.Path, "/api/v1/peers/by-pubkey/")
+	pubkey, _ := url.PathUnescape(strings.TrimPrefix(r.URL.Path, "/api/v1/peers/by-pubkey/"))
 	if pubkey == "" || pubkey == r.URL.Path {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "peer public key is required"})
 		return
