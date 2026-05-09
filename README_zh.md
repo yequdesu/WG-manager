@@ -242,7 +242,7 @@ bootstrap 脚本可在以下平台运行：
 | Alpine Linux | `curl -sSf "BOOTSTRAP_URL" \| sudo sh` |
 | macOS | `curl -sSf "BOOTSTRAP_URL" \| sudo bash` |
 | Windows PowerShell | `Invoke-WebRequest "BOOTSTRAP_URL&name=MYPC" -OutFile join.ps1; .\join.ps1` |
-| Windows CMD | `curl -o wg0.conf "BOOTSTRAP_URL&name=MYPC"`，然后在 WireGuard 客户端中导入 |
+| Windows CMD | `curl -o join.ps1 "BOOTSTRAP_URL&name=MYPC&os=windows"`，然后在 PowerShell 中执行 `.\join.ps1` |
 
 所有 Linux 发行版脚本会自动检测包管理器（apt、apk）并安装 WireGuard。macOS 需要先安装 [WireGuard for macOS](https://www.wireguard.com/install/)。Windows 系统请使用 PowerShell 或 CMD 方式。
 
