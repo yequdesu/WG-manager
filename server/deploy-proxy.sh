@@ -50,6 +50,95 @@ confirm() {
     [[ "$reply" =~ ^[Yy]$ ]]
 }
 
+update_config_value() {
+    local config_file="$1"
+    local key="$2"
+    local new_value="$3"
+    local existing_line current_line current_value
+    local temp_file line line_status had_content=0 last_was_newline=0 updated=0
+
+    [[ -f "$config_file" ]] || return 1
+
+    existing_line="$(grep -n "^${key}=" "$config_file" 2>/dev/null | { IFS= read -r first_line; printf '%s' "$first_line"; } || true)"
+    if [[ -z $existing_line ]]; then
+        existing_line="$(grep -n "^${key} =" "$config_file" 2>/dev/null | { IFS= read -r first_line; printf '%s' "$first_line"; } || true)"
+    fi
+    if [[ -z $existing_line ]]; then
+        existing_line="$(grep -n "^${key}[[:space:]]*=" "$config_file" 2>/dev/null | { IFS= read -r first_line; printf '%s' "$first_line"; } || true)"
+    fi
+
+    if [[ -n $existing_line ]]; then
+        current_line="${existing_line#*:}"
+        if [[ $current_line =~ ^(${key})([[:space:]]*)=([[:space:]]*)(.*)$ ]]; then
+            current_value="${BASH_REMATCH[4]}"
+            if [[ $current_value == "$new_value" ]]; then
+                return 0
+            fi
+        fi
+    fi
+
+    temp_file="$(mktemp /tmp/wg-manager-config.XXXXXX)" || return 1
+
+    while true; do
+        IFS= read -r line
+        line_status=$?
+        if [[ $line_status -ne 0 && -z $line ]]; then
+            break
+        fi
+
+        had_content=1
+        if [[ $line_status -eq 0 ]]; then
+            last_was_newline=1
+        else
+            last_was_newline=0
+        fi
+
+        if [[ $line =~ ^(${key})([[:space:]]*)=([[:space:]]*)(.*)$ ]]; then
+            printf '%s%s=%s%s' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" "$new_value" >> "$temp_file"
+            updated=1
+        else
+            printf '%s' "$line" >> "$temp_file"
+        fi
+
+        if [[ $last_was_newline -eq 1 ]]; then
+            printf '\n' >> "$temp_file"
+        fi
+
+        [[ $line_status -eq 0 ]] || break
+    done < "$config_file"
+
+    if [[ $updated -eq 0 ]]; then
+        if [[ $had_content -eq 1 && $last_was_newline -eq 0 ]]; then
+            printf '\n' >> "$temp_file"
+        fi
+        printf '%s=%s\n' "$key" "$new_value" >> "$temp_file"
+    fi
+
+    mv "$temp_file" "$config_file"
+}
+
+sync_config_env() {
+    local current new_value backup_target
+
+    backup_target="${CONFIG_FILE}.bak-$(date +%Y%m%d-%H%M%S)"
+    cp -a "$CONFIG_FILE" "$backup_target"
+
+    current=$(grep '^SERVER_HOST=' "$CONFIG_FILE" 2>/dev/null | cut -d= -f2-)
+
+    if is_ip_address "$SERVER_NAME"; then
+        new_value=""
+    else
+        new_value="$SERVER_NAME"
+    fi
+
+    if [[ "$current" == "$new_value" ]]; then
+        return 0
+    fi
+
+    update_config_value "$CONFIG_FILE" "SERVER_HOST" "$new_value"
+    log "Updated SERVER_HOST in config.env"
+}
+
 usage() {
     cat <<EOF
 Usage: $0 [--nginx | --caddy] [-h | --help]
@@ -554,6 +643,7 @@ main() {
     check_dependencies
     load_config
     detect_server_name
+    sync_config_env
     detect_proxy_mode
 
     header "Deployment Summary"
@@ -593,6 +683,11 @@ main() {
     install_config "$temp_config"
     validate_config
     reload_proxy
+
+    if systemctl is-active --quiet wg-mgmt 2>/dev/null; then
+        systemctl kill -s HUP wg-mgmt 2>/dev/null || true
+        log "Notified wg-mgmt daemon to reload configuration"
+    fi
 
     rm -f "$temp_config"
 

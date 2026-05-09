@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -17,7 +18,17 @@ func LoadConfig(path string) (mgmtAddr, apiKey string, err error) {
 
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return "", "", fmt.Errorf("read config file %s: %w", path, err)
+		origErr := err
+		if home, homeErr := os.UserHomeDir(); homeErr == nil && home != "" {
+			fallback := filepath.Join(home, "WG-manager", "config.env")
+			data, err = os.ReadFile(fallback)
+		}
+		if err != nil {
+			data, err = os.ReadFile("/opt/WG-manager/config.env")
+		}
+		if err != nil {
+			return "", "", fmt.Errorf("read config file %s: %w", path, origErr)
+		}
 	}
 
 	for line := range strings.SplitSeq(string(data), "\n") {
