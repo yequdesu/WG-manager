@@ -121,6 +121,26 @@ fn run(
                     continue;
                 }
 
+                // ── Alias editing modal ──────────────────────────
+                if app.alias_edit_active {
+                    match key.code {
+                        KeyCode::Esc => {
+                            app.cancel_alias_edit();
+                        }
+                        KeyCode::Enter => {
+                            app.submit_alias();
+                        }
+                        KeyCode::Backspace => {
+                            app.alias_edit_buffer.pop();
+                        }
+                        KeyCode::Char(c) => {
+                            app.alias_edit_buffer.push(c);
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+
                 // ── Invite creation form modal ──────────────────────────
                 if app.invite_form_active {
                     match key.code {
@@ -281,6 +301,15 @@ fn run(
                         } else if app.tab == Tab::Invites && !app.invites.is_empty() {
                             let id = app.invites[app.invite_selected].id.clone();
                             app.revoke_invite(&id);
+                        }
+                    }
+                    KeyCode::Char('e') | KeyCode::Char('E') => {
+                        if app.tab == Tab::Peers && !app.peers.is_empty() && !app.confirm_delete && !app.search_active {
+                            let (pubkey, name, alias) = {
+                                let peer = &app.peers[app.peer_selected];
+                                (peer.public_key.clone(), peer.name.clone(), peer.alias.clone())
+                            };
+                            app.start_alias_edit(&pubkey, &name, alias.as_deref());
                         }
                     }
                     KeyCode::Char('y') | KeyCode::Char('Y') => {

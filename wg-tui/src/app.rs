@@ -66,6 +66,12 @@ pub struct App {
     pub confirm_force_delete: bool,
     pub confirm_force_delete_timer: u16,
 
+    // Alias editing state
+    pub alias_edit_active: bool,
+    pub alias_edit_buffer: String,
+    pub alias_edit_pubkey: String,
+    pub alias_edit_peer_name: String,
+
     pub api: ApiClient,
     #[allow(dead_code)]
     pub config: Config,
@@ -139,6 +145,11 @@ impl App {
             confirm_force_delete: false,
             confirm_force_delete_timer: 0,
 
+            alias_edit_active: false,
+            alias_edit_buffer: String::new(),
+            alias_edit_pubkey: String::new(),
+            alias_edit_peer_name: String::new(),
+
             api,
             config,
             audit_log_path: audit_log,
@@ -149,6 +160,10 @@ impl App {
 
     pub fn on_tick(&mut self) {
         self.tick_count = self.tick_count.wrapping_add(1);
+
+        if self.alias_edit_active {
+            return;
+        }
 
         let now = chrono::Utc::now().timestamp();
         if now - self.last_refresh >= 5 {
@@ -364,6 +379,35 @@ impl App {
         self.invite_form_active = false;
     }
 
+    pub fn start_alias_edit(&mut self, peer_pubkey: &str, peer_name: &str, current_alias: Option<&str>) {
+        self.alias_edit_active = true;
+        self.alias_edit_pubkey = peer_pubkey.to_string();
+        self.alias_edit_peer_name = peer_name.to_string();
+        self.alias_edit_buffer = current_alias.unwrap_or("").to_string();
+    }
+
+    pub fn submit_alias(&mut self) {
+        let pubkey = self.alias_edit_pubkey.clone();
+        let alias = self.alias_edit_buffer.clone();
+        self.alias_edit_active = false;
+        self.alias_edit_buffer.clear();
+
+        let api = self.api.clone();
+        let rt = self.rt.clone();
+        let tx = self.data_tx.clone();
+        rt.spawn(async move {
+            let _ = api.set_peer_alias(&pubkey, &alias).await;
+            let _ = tx.send(DataEvent::PeerDeleted(Ok(true)));
+        });
+    }
+
+    pub fn cancel_alias_edit(&mut self) {
+        self.alias_edit_active = false;
+        self.alias_edit_buffer.clear();
+        self.alias_edit_pubkey.clear();
+        self.alias_edit_peer_name.clear();
+    }
+
     pub fn revoke_invite(&mut self, id: &str) {
         let selected = self.invite_selected;
         let api = self.api.clone();
@@ -414,11 +458,17 @@ impl App {
     }
 
     pub fn next_tab(&mut self) {
+        if self.alias_edit_active {
+            self.cancel_alias_edit();
+        }
         self.tab = self.tab.next();
         self.show_help = false;
     }
 
     pub fn prev_tab(&mut self) {
+        if self.alias_edit_active {
+            self.cancel_alias_edit();
+        }
         self.tab = self.tab.prev();
         self.show_help = false;
     }
@@ -736,6 +786,23 @@ fn render_logs(frame: &mut Frame, area: Rect, app: &App) {
 
 fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
     fill_area(frame, area, DARK_THEME.bg);
+
+    if app.alias_edit_active {
+        let display = if app.alias_edit_buffer.is_empty() {
+            format!(" Alias for {}: ▋", app.alias_edit_peer_name)
+        } else {
+            format!(
+                " Alias for {}: {}▋  [Enter] confirm  [Esc] cancel",
+                app.alias_edit_peer_name, app.alias_edit_buffer
+            )
+        };
+        let msg = Line::from(Span::styled(
+            display,
+            Style::default().fg(DARK_THEME.accent).bg(DARK_THEME.bg),
+        ));
+        frame.render_widget(Paragraph::new(msg), area);
+        return;
+    }
 
     if app.confirm_force_delete {
         let invite_name = app

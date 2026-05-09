@@ -29,7 +29,8 @@ pub fn render_peer_list(
             } else {
                 DARK_THEME.muted
             };
-            let name = truncate(&p.name, 22);
+            let display_name = p.alias.as_deref().filter(|a| !a.is_empty()).unwrap_or(&p.name);
+            let name = truncate(display_name, 22);
             let endpoint = p.endpoint.as_ref().map(|e| e.as_str()).unwrap_or("—");
             let hs = p
                 .latest_handshake
@@ -89,6 +90,10 @@ pub fn render_peer_detail(frame: &mut Frame, area: Rect, peer: &PeerInfo, _tick_
             Line::from(vec![
                 Span::styled("  PubKey:  ", DARK_THEME.muted),
                 Span::styled(truncate(&peer.public_key, 52), DARK_THEME.text),
+            ]),
+            Line::from(vec![
+                Span::styled("  Alias:    ", DARK_THEME.muted),
+                Span::styled(peer.alias.as_deref().unwrap_or("—"), DARK_THEME.text),
             ]),
             Line::from(vec![
                 Span::styled("  IP:      ", DARK_THEME.muted),

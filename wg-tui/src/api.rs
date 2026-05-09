@@ -201,7 +201,11 @@ impl ApiClient {
     }
 
     pub async fn delete_peer(&self, peer_name: &str) -> Result<bool, String> {
-        let url = format!("{}/api/v1/peers/{}", self.base_url, peer_name);
+        let url = format!(
+            "{}/api/v1/peers/{}",
+            self.base_url,
+            urlencoding::encode(peer_name)
+        );
         let mut req = self.client.delete(&url);
         if !self.api_key.is_empty() {
             req = req.header("Authorization", format!("Bearer {}", self.api_key));
@@ -212,6 +216,21 @@ impl ApiClient {
             .get("success")
             .and_then(|v| v.as_bool())
             .unwrap_or(false))
+    }
+
+    pub async fn set_peer_alias(&self, pubkey: &str, alias: &str) -> Result<bool, String> {
+        let url = format!("{}/api/v1/peers/alias", self.base_url);
+        let body = serde_json::json!({
+            "pubkey": pubkey,
+            "alias": alias,
+        });
+        let mut req = self.client.put(&url).json(&body);
+        if !self.api_key.is_empty() {
+            req = req.header("Authorization", format!("Bearer {}", self.api_key));
+        }
+        let resp = req.send().await.map_err(|e| e.to_string())?;
+        let val = json_response(resp).await?;
+        Ok(val.get("success").and_then(|v| v.as_bool()).unwrap_or(false))
     }
 }
 
