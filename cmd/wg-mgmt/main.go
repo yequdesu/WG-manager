@@ -228,7 +228,7 @@ func cmdPeerAlias(c *cli.Client, args []string) error {
 		OldAlias string `json:"old_alias"`
 		NewAlias string `json:"new_alias"`
 	}
-	if err := c.PostJSON("/api/v1/peers/alias", body, &resp); err != nil {
+	if err := c.PutJSON("/api/v1/peers/alias", body, &resp); err != nil {
 		return fmt.Errorf("update alias: %w", err)
 	}
 

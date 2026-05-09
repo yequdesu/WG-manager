@@ -44,6 +44,10 @@ func (c *Client) PostJSON(path string, in any, out any) error {
 	return c.doJSON(http.MethodPost, path, in, out)
 }
 
+func (c *Client) PutJSON(path string, in any, out any) error {
+	return c.doJSON(http.MethodPut, path, in, out)
+}
+
 func (c *Client) Delete(path string) error {
 	return c.doJSON(http.MethodDelete, path, nil, nil)
 }
